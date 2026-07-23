@@ -1,5 +1,7 @@
 # CortenDesk
 
+<img width="100%" alt="CortenDesk - A RustDesk Pro Web GUI Application and Native Web Client" src="https://github.com/user-attachments/assets/541c6d49-8d4f-4ada-a99f-ff96d7d354d7" />
+
 **A professional, self-hosted web console for RustDesk servers — with a fully native in-browser remote desktop client.**
 
 CortenDesk gives the free, open-source RustDesk server (`hbbs`/`hbbr`) the management console it deserves: device fleet management, users and scoped access, address books, audit logs, and a web client that can view, control, and transfer files to your devices straight from the browser — no installer, no Electron, no paid tier.
