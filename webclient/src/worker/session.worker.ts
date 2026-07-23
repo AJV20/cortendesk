@@ -1,0 +1,572 @@
+// Composition root: DedicatedWorker owning both WebSockets, the Session (and
+// its ordered StreamCipher), the OffscreenCanvas, VideoPipeline, AudioPipeline.
+// Bridges UiCommand/SessionEvent postMessage traffic <-> Session calls.
+// The module is Node-import-safe: worker-global wiring only happens when the
+// script actually runs inside a worker scope; tests drive WorkerHost directly.
+import type {
+  SessionConfig,
+  SessionEvent,
+  SessionState,
+  SessionStats,
+  Transport,
+  UiCommand,
+} from '../core/contracts';
+import {
+  FileTransferBlock,
+  FileTransferDigest,
+  FileTransferDone,
+  FileTransferError,
+  SupportedDecoding,
+  type Clipboard,
+  type CursorData,
+  type FileAction,
+  type FileResponse,
+  type VideoFrame,
+} from '../gen/message';
+import { sodiumReady } from '../core/crypto';
+import { Session, type SessionSinks } from '../core/session';
+import { fileResponseToEvents } from '../core/file-transfer';
+import { WsStream } from '../transport/ws-stream';
+import { AudioPipeline } from '../media/audio';
+import { VideoPipeline, probeSupportedDecoding, type EncodedCase } from '../media/video';
+import { cursorToDataUrl, decodeClipboardText, initZstd, zstdDecode } from '../input/clipboard-cursor';
+
+// Decoded audio is outside the frozen SessionEvent union: the main thread
+// feeds it to an AudioWorklet ring buffer and ignores unknown `t` otherwise.
+export type WorkerOutMessage =
+  | SessionEvent
+  | { t: 'audioPcm'; pcm: Float32Array; sampleRate: number; channels: number };
+
+export interface SessionLike {
+  readonly currentState: SessionState;
+  start(): void;
+  onSignalingBytes(b: Uint8Array): void;
+  onRelayBytes(b: Uint8Array): Promise<void>;
+  relayOpened(): void;
+  setSupportedDecoding(sd: SupportedDecoding): void;
+  sendMouse(mask: number, x: number, y: number, modifiers: number[]): void;
+  sendKey(
+    down: boolean,
+    press: boolean,
+    keyKind: 'chr' | 'control' | 'unicode',
+    value: number,
+    modifiers: number[],
+  ): void;
+  switchDisplay(index: number): void;
+  ctrlAltDel(): void;
+  refresh(): void;
+  setQuality(imageQuality: number): void;
+  sendClipboardText(text: string): void;
+  sendFileAction(union: NonNullable<FileAction['union']>): void;
+  sendFileResponse(union: NonNullable<FileResponse['union']>): void;
+  disconnect(): void;
+}
+
+export interface VideoPipelineLike {
+  onNeedReadvertise: ((disabled: EncodedCase) => void) | null;
+  disabledCodecs(): EncodedCase[];
+  pushFrame(vf: VideoFrame): void;
+  reset(): void;
+  close(): void;
+}
+
+export interface AudioPipelineLike {
+  onPcm: ((pcm: Float32Array, sampleRate: number, channels: number) => void) | null;
+  setFormat(sampleRate: number, channels: number): void;
+  pushFrame(data: Uint8Array): void;
+  close(): void;
+}
+
+export interface WorkerDeps {
+  post(msg: WorkerOutMessage, transfer?: Transferable[]): void;
+  openWs?(url: string): Promise<Transport>;
+  createSession?(config: SessionConfig, sinks: SessionSinks): SessionLike;
+  createVideoPipeline?(
+    canvas: OffscreenCanvas,
+    onAck: () => void,
+    onNeedRefresh: () => void,
+    onStats: (s: Partial<SessionStats>) => void,
+  ): VideoPipelineLike;
+  createAudioPipeline?(): AudioPipelineLike;
+  probeDecoding?(): Promise<SupportedDecoding>;
+  ready?(): Promise<void>;
+  cursorToPng?(c: CursorData): Promise<{ pngDataUrl: string; hotx: number; hoty: number }>;
+  decodeClipboard?(c: Clipboard): string | null;
+}
+
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+const CONNECT_TIMEOUT_MS = 25000;
+const CONNECT_STAGE: Partial<Record<string, string>> = {
+  connecting: 'connecting',
+  rendezvous: 'contacting the server',
+  relay: 'opening the relay',
+  handshake: 'securing the channel',
+  login: 'authenticating',
+  needAccept: 'waiting for the remote user to accept',
+};
+
+export class WorkerHost {
+  private readonly deps: Required<WorkerDeps>;
+  private session: SessionLike | null = null;
+  private video: VideoPipelineLike | null = null;
+  private audio: AudioPipelineLike | null = null;
+  private ws1: Transport | null = null;
+  private ws2: Transport | null = null;
+  private probe: SupportedDecoding | null = null;
+  private connectStarted = false;
+  private tornDown = false;
+  private connectTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(deps: WorkerDeps) {
+    this.deps = {
+      openWs: (url) => WsStream.open(url),
+      createSession: (config, sinks) => new Session(config, sinks),
+      createVideoPipeline: (canvas, onAck, onNeedRefresh, onStats) =>
+        new VideoPipeline(canvas, onAck, onNeedRefresh, onStats),
+      createAudioPipeline: () => new AudioPipeline(),
+      probeDecoding: () => probeSupportedDecoding(),
+      ready: async () => {
+        await sodiumReady();
+        try {
+          await initZstd(); // clipboard/cursor decompression degrades gracefully
+        } catch {
+          // zstd wasm unavailable: text clipboard (uncompressed) still works
+        }
+      },
+      cursorToPng: (c) => cursorToDataUrl(c),
+      decodeClipboard: (c) => decodeClipboardText(c),
+      ...deps,
+    };
+  }
+
+  handle(cmd: UiCommand): void {
+    switch (cmd.c) {
+      case 'connect':
+        void this.connect(cmd.config, cmd.canvas);
+        return;
+      case 'connectFile':
+        void this.connect(cmd.config, undefined);
+        return;
+      case 'ftReadDir':
+        this.session?.sendFileAction({
+          $case: 'read_dir',
+          read_dir: { path: cmd.path, include_hidden: cmd.includeHidden },
+        });
+        return;
+      case 'ftSend':
+        this.session?.sendFileAction({
+          $case: 'send',
+          send: {
+            id: cmd.id,
+            path: cmd.path,
+            include_hidden: cmd.includeHidden,
+            file_num: cmd.fileNum,
+            file_type: 0,
+          },
+        });
+        return;
+      case 'ftReceive':
+        this.session?.sendFileAction({
+          $case: 'receive',
+          receive: {
+            id: cmd.id,
+            path: cmd.path,
+            files: cmd.files.map((f) => ({
+              entry_type: 4, // File
+              name: f.name,
+              is_hidden: false,
+              size: BigInt(f.size),
+              modified_time: BigInt(f.modifiedSec),
+            })),
+            file_num: cmd.fileNum,
+            total_size: BigInt(cmd.totalSize),
+          },
+        });
+        return;
+      case 'ftDigest':
+        // Upload handshake: announce the source file; blocks wait for a confirm.
+        this.session?.sendFileResponse({
+          $case: 'digest',
+          digest: FileTransferDigest.fromPartial({
+            id: cmd.id,
+            file_num: cmd.fileNum,
+            file_size: BigInt(cmd.fileSize),
+            last_modified: BigInt(cmd.lastModifiedSec),
+          }),
+        });
+        return;
+      case 'ftBlock':
+        this.session?.sendFileResponse({
+          $case: 'block',
+          block: FileTransferBlock.fromPartial({
+            id: cmd.id,
+            file_num: cmd.fileNum,
+            data: cmd.data,
+            compressed: false,
+            blk_id: cmd.blkId,
+          }),
+        });
+        // Ack with the socket backlog so the UI can self-clock the upload.
+        this.deps.post({ t: 'ftSent', id: cmd.id, fileNum: cmd.fileNum, buffered: this.ws2?.buffered?.() ?? 0 });
+        return;
+      case 'ftDone':
+        this.session?.sendFileResponse({
+          $case: 'done',
+          done: FileTransferDone.fromPartial({ id: cmd.id, file_num: cmd.fileNum }),
+        });
+        return;
+      case 'ftError':
+        this.session?.sendFileResponse({
+          $case: 'error',
+          error: FileTransferError.fromPartial({ id: cmd.id, file_num: cmd.fileNum, error: cmd.error }),
+        });
+        return;
+      case 'ftConfirm':
+        this.session?.sendFileAction({
+          $case: 'send_confirm',
+          send_confirm: {
+            id: cmd.id,
+            file_num: cmd.fileNum,
+            union: cmd.skip ? { $case: 'skip', skip: true } : { $case: 'offset_blk', offset_blk: cmd.offsetBlk },
+          },
+        });
+        return;
+      case 'ftCancel':
+        this.session?.sendFileAction({ $case: 'cancel', cancel: { id: cmd.id } });
+        return;
+      case 'ftCreateDir':
+        this.session?.sendFileAction({ $case: 'create', create: { id: cmd.id, path: cmd.path } });
+        return;
+      case 'ftRemoveFile':
+        this.session?.sendFileAction({
+          $case: 'remove_file',
+          remove_file: { id: cmd.id, path: cmd.path, file_num: cmd.fileNum },
+        });
+        return;
+      case 'ftRemoveDir':
+        this.session?.sendFileAction({
+          $case: 'remove_dir',
+          remove_dir: { id: cmd.id, path: cmd.path, recursive: true },
+        });
+        return;
+      case 'ftRename':
+        this.session?.sendFileAction({
+          $case: 'rename',
+          rename: { id: cmd.id, path: cmd.path, new_name: cmd.newName },
+        });
+        return;
+      case 'mouse':
+        this.session?.sendMouse(cmd.mask, cmd.x, cmd.y, cmd.modifiers);
+        return;
+      case 'key':
+        this.session?.sendKey(cmd.down, cmd.press, cmd.keyKind, cmd.value, cmd.modifiers);
+        return;
+      case 'switchDisplay':
+        this.session?.switchDisplay(cmd.index);
+        this.video?.reset(); // new display = new stream; wait for its keyframe
+        return;
+      case 'ctrlAltDel':
+        this.session?.ctrlAltDel();
+        return;
+      case 'refresh':
+        this.session?.refresh();
+        return;
+      case 'quality':
+        this.session?.setQuality(cmd.imageQuality);
+        return;
+      case 'clipboardText':
+        this.session?.sendClipboardText(cmd.text);
+        return;
+      case 'disconnect':
+        this.session?.disconnect(); // emits 'closed' + closeAll -> teardown
+        this.teardown();
+        return;
+      default:
+        return;
+    }
+  }
+
+  // canvas === undefined -> file-transfer connection: no video/audio pipelines,
+  // no codec probe; the message layer is FileAction/FileResponse instead.
+  private async connect(config: SessionConfig, canvas: OffscreenCanvas | undefined): Promise<void> {
+    if (this.connectStarted) {
+      this.deps.post({ t: 'state', state: 'error', detail: 'worker already connected' });
+      return;
+    }
+    this.connectStarted = true;
+    try {
+      this.deps.post({ t: 'state', state: 'connecting' });
+      await this.deps.ready();
+
+      if (canvas) {
+        this.probe = await this.deps.probeDecoding();
+
+        // Session acks every video_frame on receipt (video_ack_required), so the
+        // per-drawn-frame ack hook is a no-op here.
+        const video = this.deps.createVideoPipeline(
+          canvas,
+          () => {},
+          () => this.session?.refresh(),
+          (s) => this.postStats(s),
+        );
+        video.onNeedReadvertise = () => this.readvertise();
+        this.video = video;
+
+        const audio = this.deps.createAudioPipeline();
+        audio.onPcm = (pcm, sampleRate, channels) =>
+          this.deps.post({ t: 'audioPcm', pcm, sampleRate, channels }, [pcm.buffer]);
+        this.audio = audio;
+      }
+
+      const ws1 = await this.deps.openWs(config.wsIdUrl);
+      if (this.tornDown) {
+        ws1.close();
+        return;
+      }
+      this.ws1 = ws1;
+
+      const session = this.deps.createSession(config, {
+        sendSignaling: (b) => this.ws1?.send(b),
+        sendRelay: (b) => this.ws2?.send(b),
+        emit: (ev) => {
+          // Clear the connect watchdog once we reach a terminal/settled state.
+          if (ev.t === 'state' && (ev.state === 'streaming' || ev.state === 'error' || ev.state === 'closed')) {
+            this.clearConnectTimer();
+          }
+          // A UAC secure-desktop switch (either direction) restarts the host's
+          // capture pipeline; without a kick the stream can stay frozen until
+          // reconnect. Reset the decoder and ask for a fresh keyframe.
+          if (ev.t === 'uac' || (ev.t === 'msgbox' && /uac/i.test(ev.msgtype))) {
+            this.kickVideo();
+          }
+          this.deps.post(ev);
+        },
+        onVideo: (vf) => this.video?.pushFrame(vf),
+        onAudioFormat: (sampleRate, channels) => this.audio?.setFormat(sampleRate, channels),
+        onAudioFrame: (d) => this.audio?.pushFrame(d),
+        openRelay: () => {
+          void this.openRelay(config.wsRelayUrl);
+        },
+        closeAll: () => this.teardown(),
+        onCursor: (c) => {
+          void this.postCursor(c);
+        },
+        onClipboard: (cb) => this.postClipboard(cb),
+        onFileResponse: (fr) => this.postFileResponse(fr),
+        onFileSendConfirm: (c) =>
+          this.deps.post({
+            t: 'ftSendConfirm',
+            id: c.id,
+            fileNum: c.file_num,
+            skip: c.union?.$case === 'skip' && c.union.skip,
+            // Field is named offset_blk but carries an absolute BYTE offset.
+            offsetBytes: c.union?.$case === 'offset_blk' ? c.union.offset_blk : 0,
+          }),
+      });
+      this.session = session;
+      if (this.probe) session.setSupportedDecoding(this.probe);
+
+      ws1.onMessage((b) => session.onSignalingBytes(b));
+      ws1.onClose(() => this.onIdSocketClosed());
+      session.start();
+
+      // Watchdog: if pairing/handshake/login stalls (busy relay, peer offline,
+      // controller already attached), fail with a reason instead of spinning.
+      this.connectTimer = setTimeout(() => {
+        this.connectTimer = null;
+        const st = this.session?.currentState;
+        if (st && st !== 'streaming' && st !== 'error' && st !== 'closed') {
+          this.deps.post({
+            t: 'state',
+            state: 'error',
+            detail: `Timed out while ${CONNECT_STAGE[st] ?? 'connecting'} — the device may be offline or busy. Try again.`,
+          });
+          this.teardown();
+        }
+      }, CONNECT_TIMEOUT_MS);
+    } catch (e) {
+      this.deps.post({ t: 'state', state: 'error', detail: errMsg(e) });
+      this.teardown();
+    }
+  }
+
+  private async openRelay(url: string): Promise<void> {
+    try {
+      const ws2 = await this.deps.openWs(url);
+      if (this.tornDown) {
+        ws2.close();
+        return;
+      }
+      this.ws2 = ws2;
+      // onRelayBytes decrypts synchronously before its first await, so
+      // fire-and-forget preserves cipher order across frames.
+      ws2.onMessage((b) => {
+        void this.session?.onRelayBytes(b);
+      });
+      ws2.onClose(() => this.onSocketClosed('relay'));
+      this.session?.relayOpened();
+    } catch (e) {
+      this.deps.post({ t: 'state', state: 'error', detail: `relay connect failed: ${errMsg(e)}` });
+      this.teardown();
+    }
+  }
+
+  // Debounced video restart: drop deltas until the next keyframe and request
+  // one. uac(true) and uac(false) often arrive close together with msgbox
+  // variants; one kick per burst is enough.
+  private lastKickMs = 0;
+  private kickVideo(): void {
+    const now = Date.now();
+    if (now - this.lastKickMs < 500) return;
+    this.lastKickMs = now;
+    this.video?.reset();
+    this.session?.refresh();
+  }
+
+  private readvertise(): void {
+    if (!this.probe || !this.video || !this.session) return;
+    const sd = SupportedDecoding.fromPartial(this.probe);
+    for (const c of this.video.disabledCodecs()) {
+      switch (c) {
+        case 'vp9s':
+          sd.ability_vp9 = 0;
+          break;
+        case 'vp8s':
+          sd.ability_vp8 = 0;
+          break;
+        case 'h264s':
+          sd.ability_h264 = 0;
+          break;
+        case 'h265s':
+          sd.ability_h265 = 0;
+          break;
+        case 'av1s':
+          sd.ability_av1 = 0;
+          break;
+      }
+    }
+    this.session.setSupportedDecoding(sd);
+  }
+
+  private postStats(p: Partial<SessionStats>): void {
+    this.deps.post({
+      t: 'stats',
+      stats: {
+        codec: p.codec ?? '',
+        width: p.width ?? 0,
+        height: p.height ?? 0,
+        fps: p.fps ?? 0,
+        mbps: p.mbps ?? 0,
+        framesDropped: p.framesDropped ?? 0,
+        startedAtMs: p.startedAtMs ?? Date.now(),
+      },
+    });
+  }
+
+  private async postCursor(c: CursorData): Promise<void> {
+    try {
+      const { pngDataUrl, hotx, hoty } = await this.deps.cursorToPng(c);
+      this.deps.post({ t: 'cursor', pngDataUrl, hotx, hoty });
+    } catch {
+      // cursor rendering is best-effort; pointer position still flows via cursorPos
+    }
+  }
+
+  private postFileResponse(fr: FileResponse): void {
+    for (const ev of fileResponseToEvents(fr, (d) => zstdDecode(d))) {
+      // Block payloads can be large — transfer the buffer instead of copying.
+      if (ev.t === 'ftBlock' && ev.data.buffer instanceof ArrayBuffer && ev.data.byteLength === ev.data.buffer.byteLength) {
+        this.deps.post(ev, [ev.data.buffer]);
+      } else {
+        this.deps.post(ev);
+      }
+    }
+  }
+
+  private postClipboard(cb: Clipboard): void {
+    try {
+      const text = this.deps.decodeClipboard(cb);
+      if (text !== null) this.deps.post({ t: 'clipboard', text });
+    } catch {
+      // undecodable (zstd not ready / non-text): drop silently
+    }
+  }
+
+  // The id server (hbbs) is only needed for rendezvous. Once the relay is
+  // opened, hbbs routinely closes this socket — that is expected and MUST NOT
+  // tear down the live relay session. Only a close while we still need it
+  // (before the relay hand-off) is a real failure.
+  private onIdSocketClosed(): void {
+    if (this.tornDown) return;
+    const st = this.session?.currentState;
+    if (st === 'connecting' || st === 'rendezvous') {
+      this.deps.post({ t: 'state', state: 'error', detail: 'id server connection lost' });
+      this.teardown();
+    }
+    // else: relay is live; drop the id socket silently, keep the session.
+    this.ws1 = null;
+  }
+
+  private onSocketClosed(which: string): void {
+    if (this.tornDown) return;
+    const st = this.session?.currentState;
+    if (st !== 'closed' && st !== 'error') {
+      this.deps.post({ t: 'state', state: 'error', detail: `${which} connection lost` });
+    }
+    this.teardown();
+  }
+
+  private clearConnectTimer(): void {
+    if (this.connectTimer !== null) {
+      clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
+  }
+
+  private teardown(): void {
+    if (this.tornDown) return;
+    this.tornDown = true;
+    this.clearConnectTimer();
+    this.video?.close();
+    this.video = null;
+    this.audio?.close();
+    this.audio = null;
+    const w1 = this.ws1;
+    const w2 = this.ws2;
+    this.ws1 = null;
+    this.ws2 = null;
+    try {
+      w1?.close();
+    } catch {
+      // already closed
+    }
+    try {
+      w2?.close();
+    } catch {
+      // already closed
+    }
+  }
+}
+
+// Wire up only when actually running inside a worker scope (importScripts is a
+// WorkerGlobalScope method; absent on window and in Node, where tests import us).
+type WorkerScope = {
+  postMessage(msg: unknown, transfer?: Transferable[]): void;
+  onmessage: ((ev: { data: unknown }) => void) | null;
+  importScripts?: unknown;
+  document?: unknown;
+};
+const scope = globalThis as Partial<WorkerScope>;
+if (
+  typeof scope.postMessage === 'function' &&
+  typeof scope.importScripts === 'function' &&
+  scope.document === undefined
+) {
+  const host = new WorkerHost({
+    post: (msg, transfer) => scope.postMessage!(msg, transfer ?? []),
+  });
+  scope.onmessage = (ev) => host.handle(ev.data as UiCommand);
+}

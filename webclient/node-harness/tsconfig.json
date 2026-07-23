@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "libsodium-wrappers": ["../node_modules/libsodium-wrappers/dist/modules/libsodium-wrappers.js"]
+    }
+  },
+  "include": ["**/*.mjs", "../src/**/*.ts"]
+}

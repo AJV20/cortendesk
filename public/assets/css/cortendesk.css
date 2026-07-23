@@ -1,0 +1,103 @@
+/* CortenDesk custom styles — static, no build step. */
+
+/* Clickable stat tiles: lift on hover */
+a.card-hover {
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+a.card-hover:hover,
+a.card-hover:focus-visible {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+}
+
+a.card-hover:active {
+    transform: translateY(-1px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    a.card-hover,
+    a.card-hover:hover {
+        transition: none;
+        transform: none;
+    }
+}
+
+/* Sidebar wordmark: larger (~1.8x) and left-justified so it fills the header.
+   Logo SVG is 470x88 (5.34:1) → 40px tall ≈ 213px wide, fits the 240px sidebar.
+   Condensed / sm-hover rules have higher specificity, so those modes are
+   unaffected and keep their centered small mark. */
+.leftside-menu .logo {
+    text-align: left;
+    padding: 0 0 0 18px;
+}
+.leftside-menu .logo-lg img {
+    height: 40px;
+}
+
+/* Auth (login) brand block — mirrors the web client login: big icon with an
+   orange glow + two-tone wordmark. Header background is always dark, so the
+   light wordmark color is fixed, not theme-dependent. */
+.auth-brand {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    text-decoration: none;
+}
+.auth-brand-logo {
+    flex: none;
+    width: 60px;
+    height: 60px;
+    border-radius: 14px;
+    object-fit: contain;
+    filter: drop-shadow(0 6px 16px rgba(201, 83, 31, 0.45));
+}
+.auth-brand-wordmark {
+    font-size: 40px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    color: #e7ebf3;
+}
+.auth-brand-wordmark span {
+    color: #e2652e;
+}
+@media (max-width: 480px) {
+    .auth-brand-wordmark {
+        font-size: 32px;
+    }
+    .auth-brand-logo {
+        width: 50px;
+        height: 50px;
+    }
+}
+
+/* Sidebar: keep the light-mode near-black menu (#212529) in dark mode too —
+   Attex swaps it to a lighter slate (#313a46) which we don't want. */
+html[data-bs-theme="dark"][data-menu-color="dark"] {
+    --ct-menu-bg: #212529;
+}
+
+/* Condensed sidebar: the wordmark rule above (left-align + 18px pad) leaks in
+   here — Attex doesn't reset it. Re-center the small mark and give it a bit
+   of breathing room at the top. */
+html[data-sidenav-size="condensed"]:not([data-layout="topnav"]) .wrapper .leftside-menu .logo {
+    text-align: center;
+    padding: 10px 0 0;
+}
+
+/* Login page background — covers the viewport, centered, cropping as needed.
+   Fixed-position pseudo-element instead of background-attachment:fixed, which
+   iOS Safari mishandles. Base color matches the image's darkest tone so any
+   flash-of-unloaded-background is invisible. */
+body.authentication-bg {
+    background-color: #171d29;
+}
+body.authentication-bg::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background: url('../images/login-bkg.jpg') center center / cover no-repeat;
+}

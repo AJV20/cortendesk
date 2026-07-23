@@ -1,0 +1,31 @@
+CortenDesk
+==========
+
+A self-hosted web console for RustDesk servers (hbbs/hbbr), built on
+Laravel + Livewire. Devices, users, groups, address books, audit logs,
+and a fully native in-browser client (view, control, and file transfer
+over the RustDesk protocol — no WASM port, all TypeScript).
+
+Requirements
+------------
+- PHP 8.4+, Composer, MySQL (or SQLite)
+- A RustDesk server (open-source hbbs/hbbr) with WebSocket access
+  (wss proxy for ports 21118/21119)
+
+Setup
+-----
+  composer install
+  cp .env.example .env && php artisan key:generate
+  php artisan migrate --seed
+  php artisan serve
+
+Sign in and set your ID server, relay server, and public key under
+Settings. Point RustDesk clients at this console as their API server.
+
+The in-browser client is prebuilt in public/rdclient/. To rebuild it:
+  cd webclient && npm install && npm run build
+
+License
+-------
+AGPL-3.0-only (see LICENSE). The bundled admin theme is licensed
+separately — see NOTICE.
