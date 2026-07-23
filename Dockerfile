@@ -13,7 +13,11 @@ WORKDIR /app
 COPY composer.json composer.lock ./
 RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist --no-interaction
 COPY . .
-RUN composer dump-autoload --optimize --no-dev
+# The storage/cache skeleton must exist for artisan package:discover (git
+# doesn't track empty directories, so don't trust the checkout).
+RUN mkdir -p storage/framework/cache/data storage/framework/sessions storage/framework/testing \
+      storage/framework/views storage/logs storage/app/private storage/app/public bootstrap/cache \
+    && composer dump-autoload --optimize --no-dev
 
 # ---- stage 2: runtime (php-fpm + nginx under supervisord) --------------------
 FROM php:8.4-fpm-alpine
