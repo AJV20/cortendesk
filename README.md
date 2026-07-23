@@ -37,7 +37,29 @@ Built on Laravel + Livewire with precompiled assets: **there is no frontend buil
 - A running open-source **RustDesk server** (`hbbs`/`hbbr`), reachable from your devices
 - For the web client: a TLS-terminating proxy that bridges `wss://` to hbbs/hbbr WebSocket ports (21118/21119) — sample config below
 
-## Installation
+## Quick start with Docker
+
+The repo ships a self-contained image (php-fpm + nginx, web client included,
+WebSocket bridge to your RustDesk server built in):
+
+```bash
+docker build -t cortendesk .
+docker run -d -p 8080:8080 -v cortendesk-data:/data \
+  -e CORTENDESK_ID_SERVER=hbbs.example.com:21116 \
+  -e CORTENDESK_RELAY_SERVER=hbbs.example.com:21117 \
+  -e CORTENDESK_PUBLIC_KEY="<contents of id_ed25519.pub>" \
+  cortendesk
+```
+
+First boot creates **admin / changeme** (override with `CORTENDESK_ADMIN_USER`
+/ `CORTENDESK_ADMIN_PASSWORD`) and uses SQLite in the `/data` volume — see
+`docker-compose.yml` for a MySQL setup. The container bridges `/ws/id` and
+`/ws/relay` to your hbbs/hbbr (host taken from `CORTENDESK_ID_SERVER`, or set
+`RUSTDESK_WS_HOST`). Put a TLS reverse proxy in front and set
+`CORTENDESK_WS_ID_URL` / `CORTENDESK_WS_RELAY_URL` to the resulting
+`wss://your-host/ws/*` URLs — browsers require wss for the web client.
+
+## Manual installation
 
 There is no installer — setup is a standard Laravel deployment:
 

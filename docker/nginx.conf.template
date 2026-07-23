@@ -1,0 +1,66 @@
+# CortenDesk container nginx — rendered by entrypoint.sh with envsubst
+# (only ${RUSTDESK_WS_HOST} is substituted; $nginx_vars are untouched).
+worker_processes auto;
+pid /run/nginx/nginx.pid;
+error_log /dev/stderr warn;
+
+events { worker_connections 1024; }
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    access_log off;
+    sendfile on;
+    client_max_body_size 32m;
+
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        ''      close;
+    }
+
+    server {
+        listen 8080;
+        server_name _;
+        root /app/public;
+        index index.php;
+
+        # WebSocket bridge for the native web client -> hbbs/hbbr.
+        # RUSTDESK_WS_HOST is derived from CORTENDESK_ID_SERVER (or set it
+        # explicitly). A TLS reverse proxy in front of this container turns
+        # these into the wss:// endpoints the browser requires.
+        # The upstream is a variable so nginx resolves it per-request instead
+        # of refusing to start when the host isn't resolvable yet.
+        resolver ${NGINX_RESOLVER} valid=30s;
+        set $rd_ws_host "${RUSTDESK_WS_HOST}";
+
+        location = /ws/id {
+            proxy_pass http://$rd_ws_host:21118/;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+        }
+        location = /ws/relay {
+            proxy_pass http://$rd_ws_host:21119/;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+        }
+
+        location / {
+            try_files $uri $uri/ /index.php?$query_string;
+        }
+
+        location ~ \.php$ {
+            fastcgi_pass 127.0.0.1:9000;
+            fastcgi_index index.php;
+            fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+            include fastcgi_params;
+        }
+
+        location ~ /\.(?!well-known) { deny all; }
+    }
+}

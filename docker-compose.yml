@@ -1,0 +1,47 @@
+# CortenDesk + MySQL. For a zero-dependency trial, the image also runs
+# standalone on SQLite:  docker run -p 8080:8080 -v cortendesk-data:/data cortendesk
+services:
+  cortendesk:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      APP_URL: http://localhost:8080
+      DB_CONNECTION: mysql
+      DB_HOST: db
+      DB_DATABASE: cortendesk
+      DB_USERNAME: cortendesk
+      DB_PASSWORD: cortendesk-change-me
+      # Your RustDesk server:
+      CORTENDESK_ID_SERVER: hbbs.example.com:21116
+      CORTENDESK_RELAY_SERVER: hbbs.example.com:21117
+      CORTENDESK_PUBLIC_KEY: ""
+      # Web client wss endpoints as seen by BROWSERS (your TLS proxy):
+      CORTENDESK_WS_ID_URL: ""
+      CORTENDESK_WS_RELAY_URL: ""
+    volumes:
+      - cortendesk-data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: cortendesk
+      MYSQL_USER: cortendesk
+      MYSQL_PASSWORD: cortendesk-change-me
+      MYSQL_RANDOM_ROOT_PASSWORD: "1"
+    volumes:
+      - cortendesk-db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  cortendesk-data:
+  cortendesk-db:
