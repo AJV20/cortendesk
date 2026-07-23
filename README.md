@@ -40,9 +40,11 @@ Built on Laravel + Livewire with precompiled assets: **there is no frontend buil
 ## Quick start with Docker
 
 The repo ships a self-contained image (php-fpm + nginx, web client included,
-WebSocket bridge to your RustDesk server built in):
+WebSocket bridge to your RustDesk server built in). Releases are published to
+GHCR — or build it yourself:
 
 ```bash
+docker pull ghcr.io/marcpope/cortendesk:0.8.0-beta.1   # or build locally:
 docker build -t cortendesk .
 docker run -d -p 8080:8080 -v cortendesk-data:/data \
   -e CORTENDESK_ID_SERVER=hbbs.example.com:21116 \

@@ -8,7 +8,9 @@ return [
     |--------------------------------------------------------------------------
     | Returned by GET /api/version. Clients may use this for capability hints.
     */
-    'api_version' => env('CORTENDESK_API_VERSION', '1.0.0'),
+    // Single source of truth is the VERSION file at the repo root (also used
+    // by release tags and the Docker image); env can still override.
+    'api_version' => env('CORTENDESK_API_VERSION', trim((string) @file_get_contents(base_path('VERSION'))) ?: '0.0.0'),
 
     /*
     |--------------------------------------------------------------------------
