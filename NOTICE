@@ -6,12 +6,12 @@ CortenDesk is licensed under the GNU Affero General Public License v3.0
 
 Exception — bundled admin theme:
 The files under public/assets/ (excluding public/assets/images/cortendesk-*
-and public/assets/css/cortendesk.css) belong to the "Attex" admin template
-by Coderthemes, included here under a ThemeForest Regular License held by
-this project. These theme files are NOT covered by the AGPL license of this
-repository and may not be extracted, redistributed, or reused outside of
-this end product. To use the Attex theme in your own projects, purchase a
-license at themeforest.net.
+and public/assets/css/cortendesk.css) belong to the Att ex template
+by Coder Themes, included here under a license held by this project as a
+no-cost to the user project. These theme files are NOT covered bythe AGPL license
+of this repository and may not be extracted, redistributed, or reused outside
+of this end product. To use the Attex theme in your own projects, purchase
+a license at themeforest.net.
 
 The vendored RustDesk protocol definitions (webclient/protos/) originate
 from the RustDesk project and are licensed AGPL-3.0, consistent with this
