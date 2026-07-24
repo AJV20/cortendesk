@@ -25,12 +25,14 @@ Route::middleware('auth')->group(function () {
 
     Route::view('/logs/connections', 'logs.connections')->name('logs.connections');
     Route::view('/logs/file-transfers', 'logs.file-transfers')->name('logs.file-transfers');
+    Route::view('/logs/alarms', 'logs.alarms')->name('logs.alarms');
 
     // Admin-only sections
     Route::middleware('admin')->group(function () {
         Route::view('/groups', 'groups.index')->name('groups');
         Route::view('/users', 'users.index')->name('users');
         Route::view('/logs/logins', 'logs.logins')->name('logs.logins');
+        Route::view('/logs/console', 'logs.console')->name('logs.console');
         Route::view('/settings', 'settings.index')->name('settings');
     });
 });

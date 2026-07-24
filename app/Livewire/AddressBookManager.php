@@ -5,6 +5,7 @@ namespace App\Livewire;
 use App\Models\AddressBook;
 use App\Models\AddressBookEntry;
 use App\Models\AddressBookRule;
+use App\Models\ConsoleAudit;
 use App\Models\Tag;
 use App\Models\User;
 use App\Models\UserGroup;
@@ -230,6 +231,8 @@ class AddressBookManager extends Component
             'is_personal' => false,
         ]);
 
+        ConsoleAudit::record('address-book.create', 'Created address book '.$book->name, 'address-book', $book->name);
+
         $this->closeModal();
         $this->selectBook($book->id);
     }
@@ -261,10 +264,13 @@ class AddressBookManager extends Component
             return; // personal address books can never be deleted
         }
 
+        $bookName = $book->name;
         $book->entries()->delete();
         $book->tags()->delete();
         $book->rules()->delete();
         $book->delete();
+
+        ConsoleAudit::record('address-book.delete', 'Deleted address book '.$bookName, 'address-book', $bookName);
 
         $this->selectedBookId = $this->defaultBookId();
         $this->resetPage();
@@ -392,6 +398,8 @@ class AddressBookManager extends Component
             'permission' => $this->rulePermission,
         ]);
 
+        ConsoleAudit::record('address-book.rule-add', 'Added sharing rule to address book '.$book->name, 'address-book', $book->name);
+
         $this->closeModal();
     }
 
@@ -401,14 +409,17 @@ class AddressBookManager extends Component
             return;
         }
 
-        AddressBookRule::where('address_book_id', $this->selectedBookId)
-            ->findOrFail($id)
-            ->update(['permission' => $permission]);
+        $rule = AddressBookRule::where('address_book_id', $this->selectedBookId)->findOrFail($id);
+        $rule->update(['permission' => $permission]);
+
+        ConsoleAudit::record('address-book.rule-update', 'Updated sharing rule on address book '.$this->book()?->name, 'address-book', $this->book()?->name);
     }
 
     public function deleteRule(int $id): void
     {
         AddressBookRule::where('address_book_id', $this->selectedBookId)->findOrFail($id)->delete();
+
+        ConsoleAudit::record('address-book.rule-delete', 'Removed sharing rule from address book '.$this->book()?->name, 'address-book', $this->book()?->name);
     }
 
     /* ---------------------------------------------------------------------

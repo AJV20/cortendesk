@@ -2,6 +2,7 @@
 
 namespace App\Livewire;
 
+use App\Models\ConsoleAudit;
 use App\Models\Setting;
 use Livewire\Component;
 
@@ -17,7 +18,11 @@ class SettingsPage extends Component
 
     public string $rdgenUrl = '';
 
+    public int $logRetentionDays = 365;
+
     public bool $saved = false;
+
+    public string $pruneResult = '';
 
     public function mount(): void
     {
@@ -26,6 +31,7 @@ class SettingsPage extends Component
         $this->publicKey = Setting::get('public_key', config('cortendesk.public_key')) ?? '';
         $this->onlineWindow = (int) (Setting::get('online_window', (string) config('cortendesk.online_window')) ?: 60);
         $this->rdgenUrl = Setting::get('rdgen_url', config('cortendesk.rdgen_url')) ?? '';
+        $this->logRetentionDays = (int) (Setting::get('log_retention_days', (string) config('cortendesk.log_retention_days')) ?: 0);
     }
 
     public function save(): void
@@ -36,6 +42,7 @@ class SettingsPage extends Component
             'publicKey' => 'nullable|string|max:255',
             'onlineWindow' => 'required|integer|min:20|max:600',
             'rdgenUrl' => 'nullable|url|max:255',
+            'logRetentionDays' => 'required|integer|min:0|max:3650',
         ]);
 
         Setting::put('id_server', $this->idServer);
@@ -43,8 +50,21 @@ class SettingsPage extends Component
         Setting::put('public_key', $this->publicKey);
         Setting::put('online_window', (string) $this->onlineWindow);
         Setting::put('rdgen_url', rtrim($this->rdgenUrl, '/'));
+        Setting::put('log_retention_days', (string) $this->logRetentionDays);
+
+        ConsoleAudit::record('settings.update', 'Updated server settings', 'settings', null);
 
         $this->saved = true;
+    }
+
+    /** "Prune now": run retention immediately and surface the summary line. */
+    public function pruneNow(): void
+    {
+        Setting::put('log_retention_days', (string) $this->logRetentionDays);
+        \Illuminate\Support\Facades\Artisan::call('cortendesk:prune-logs');
+        $this->pruneResult = trim(\Illuminate\Support\Facades\Artisan::output());
+
+        ConsoleAudit::record('logs.prune', 'Pruned logs older than '.$this->logRetentionDays.' days', 'logs', null);
     }
 
     public function render()

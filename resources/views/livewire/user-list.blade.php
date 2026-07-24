@@ -93,6 +93,7 @@
                             </td>
                             <td class="text-end">
                                 <a href="javascript:void(0);" class="text-primary me-2" wire:click="edit({{ $user->id }})">Edit</a>
+                                <a href="javascript:void(0);" class="text-primary me-2" wire:click="openAssign({{ $user->id }})">Devices</a>
                                 @if ($user->id === auth()->id())
                                     <span class="text-muted me-2" title="You cannot disable your own account" style="cursor:not-allowed;">
                                         {{ $user->is_active ? 'Disable' : 'Enable' }}
@@ -102,6 +103,9 @@
                                     <a href="javascript:void(0);" class="text-warning me-2" wire:click="toggleActive({{ $user->id }})">
                                         {{ $user->is_active ? 'Disable' : 'Enable' }}
                                     </a>
+                                    <a href="javascript:void(0);" class="text-secondary me-2"
+                                       wire:click="forceLogout({{ $user->id }})"
+                                       wire:confirm="Force {{ $user->username }} to log out everywhere? This signs out their RustDesk clients and console sessions.">Log out</a>
                                     <a href="javascript:void(0);" class="text-danger"
                                        wire:click="deleteUser({{ $user->id }})"
                                        wire:confirm="Delete user {{ $user->username }}? Their devices will be kept but no longer assigned to any user.">Delete</a>
@@ -121,21 +125,21 @@
             <div class="d-md-none">
                 @forelse ($users as $user)
                     <div class="card border mb-2" wire:key="mu{{ $user->id }}">
-                        <div class="card-body p-3">
-                            <div class="d-flex justify-content-between align-items-start">
-                                <div class="d-flex align-items-center gap-2">
+                        <div class="card-body p-2">
+                            <div class="d-flex justify-content-between align-items-start gap-2">
+                                <div class="d-flex align-items-center gap-2 min-width-0">
                                     <span class="d-inline-flex align-items-center justify-content-center rounded-circle bg-primary-subtle text-primary flex-shrink-0"
-                                          style="width:36px;height:36px;font-weight:600;">
+                                          style="width:32px;height:32px;font-weight:600;">
                                         {{ strtoupper(substr($user->username, 0, 1)) }}
                                     </span>
-                                    <div>
-                                        <span class="fw-semibold d-block">{{ $user->username }}</span>
-                                        <small class="text-muted">{{ $user->name ?: ($user->email ?: '—') }}</small>
+                                    <div class="min-width-0 lh-sm">
+                                        <span class="fw-semibold d-block text-truncate">{{ $user->username }}</span>
+                                        <small class="text-muted d-block text-truncate">{{ $user->name ?: ($user->email ?: '—') }}</small>
                                     </div>
                                 </div>
-                                <div class="text-end">
+                                <div class="text-end flex-shrink-0">
                                     @if ($user->is_admin)
-                                        <span class="badge bg-danger-subtle text-danger d-block mb-1">Admin</span>
+                                        <span class="badge bg-danger-subtle text-danger">Admin</span>
                                     @endif
                                     @if ($user->is_active)
                                         <span class="badge bg-success-subtle text-success">Active</span>
@@ -144,26 +148,29 @@
                                     @endif
                                 </div>
                             </div>
-                            <div class="d-flex justify-content-between align-items-center mt-2">
-                                <small class="text-muted">
-                                    {{ $user->groups->isNotEmpty() ? $user->groups->pluck('name')->join(', ') : 'No group' }} ·
-                                    {{ $user->devices_count }} {{ Str::plural('device', $user->devices_count) }} ·
-                                    {{ $user->created_at?->format('Y-m-d') }}
-                                </small>
-                                <div class="flex-shrink-0">
-                                    <a href="javascript:void(0);" class="btn btn-sm btn-light me-1" wire:click="edit({{ $user->id }})"><i class="ri-pencil-line"></i></a>
-                                    @if ($user->id === auth()->id())
-                                        <button type="button" class="btn btn-sm btn-light" disabled title="You cannot modify your own account here"><i class="ri-user-forbid-line"></i></button>
-                                    @else
-                                        <a href="javascript:void(0);" class="btn btn-sm btn-light me-1" title="{{ $user->is_active ? 'Disable' : 'Enable' }}"
-                                           wire:click="toggleActive({{ $user->id }})">
-                                            <i class="{{ $user->is_active ? 'ri-user-unfollow-line' : 'ri-user-follow-line' }}"></i>
-                                        </a>
-                                        <a href="javascript:void(0);" class="btn btn-sm btn-light text-danger"
-                                           wire:click="deleteUser({{ $user->id }})"
-                                           wire:confirm="Delete user {{ $user->username }}? Their devices will be kept but no longer assigned to any user."><i class="ri-delete-bin-line"></i></a>
-                                    @endif
-                                </div>
+                            {{-- Meta on its own full-width line; actions in one non-wrapping row below --}}
+                            <small class="text-muted d-block mt-1">
+                                {{ $user->groups->isNotEmpty() ? $user->groups->pluck('name')->join(', ') : 'No group' }} ·
+                                {{ $user->devices_count }} {{ Str::plural('device', $user->devices_count) }} ·
+                                <span class="text-nowrap">{{ $user->created_at?->format('Y-m-d') }}</span>
+                            </small>
+                            <div class="d-flex flex-nowrap justify-content-end gap-1 mt-1">
+                                <a href="javascript:void(0);" class="btn btn-sm btn-light" wire:click="edit({{ $user->id }})"><i class="ri-pencil-line"></i></a>
+                                <a href="javascript:void(0);" class="btn btn-sm btn-light" title="Assign devices" wire:click="openAssign({{ $user->id }})"><i class="ri-computer-line"></i></a>
+                                @unless ($user->id === auth()->id())
+                                    <a href="javascript:void(0);" class="btn btn-sm btn-light" title="{{ $user->is_active ? 'Disable' : 'Enable' }}"
+                                       wire:click="toggleActive({{ $user->id }})">
+                                        <i class="{{ $user->is_active ? 'ri-user-unfollow-line' : 'ri-user-follow-line' }}"></i>
+                                    </a>
+                                    <a href="javascript:void(0);" class="btn btn-sm btn-light" title="Force logout everywhere"
+                                       wire:click="forceLogout({{ $user->id }})"
+                                       wire:confirm="Force {{ $user->username }} to log out everywhere? This signs out their RustDesk clients and console sessions.">
+                                        <i class="ri-logout-box-r-line"></i>
+                                    </a>
+                                    <a href="javascript:void(0);" class="btn btn-sm btn-light text-danger"
+                                       wire:click="deleteUser({{ $user->id }})"
+                                       wire:confirm="Delete user {{ $user->username }}? Their devices will be kept but no longer assigned to any user."><i class="ri-delete-bin-line"></i></a>
+                                @endunless
                             </div>
                         </div>
                     </div>
@@ -287,6 +294,64 @@
                             </button>
                         </div>
                     </form>
+                </div>
+            </div>
+        </div>
+        <div class="modal-backdrop fade show"></div>
+    @endif
+
+    {{-- Assign devices modal: bulk-set which devices this user owns --}}
+    @if ($showAssignModal)
+        <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true" wire:key="assign-modal">
+            <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Assign Devices</h5>
+                        <button type="button" class="btn-close" wire:click="closeAssign" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="text-muted fs-13">
+                            Select the devices owned by <strong>{{ optional(\App\Models\User::find($assignUserId))->username }}</strong>.
+                            Checked devices become theirs; unchecking a device they currently own releases it (no owner).
+                        </p>
+                        <input type="search" class="form-control mb-2" placeholder="Search ID, alias, hostname…"
+                               wire:model.live.debounce.300ms="assignSearch">
+                        <div class="border rounded" style="max-height: 340px; overflow-y: auto;">
+                            <table class="table table-sm table-hover mb-0">
+                                <tbody>
+                                    @forelse ($assignDevices as $d)
+                                        <tr wire:key="ad{{ $d->id }}">
+                                            <td style="width:38px;">
+                                                <input class="form-check-input" type="checkbox"
+                                                       value="{{ $d->id }}" wire:model="assignDeviceIds">
+                                            </td>
+                                            <td>
+                                                <span class="fw-semibold">{{ $d->rustdesk_id }}</span>
+                                                @if ($d->alias || $d->hostname)
+                                                    <small class="text-muted d-block">{{ $d->alias ?: $d->hostname }}</small>
+                                                @endif
+                                            </td>
+                                            <td class="text-end">
+                                                @if ($d->user_id && $d->user_id !== $assignUserId)
+                                                    <span class="badge bg-secondary-subtle text-secondary">owned by {{ optional($d->user)->username ?? '—' }}</span>
+                                                @endif
+                                            </td>
+                                        </tr>
+                                    @empty
+                                        <tr><td class="text-center text-muted py-3">No devices match.</td></tr>
+                                    @endforelse
+                                </tbody>
+                            </table>
+                        </div>
+                        <small class="text-muted">{{ count($assignDeviceIds) }} selected @if($assignDevices->count() >= 200) · showing first 200, refine with search @endif</small>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-light" wire:click="closeAssign">Cancel</button>
+                        <button type="button" class="btn btn-primary" wire:click="saveAssign">
+                            <span wire:loading.remove wire:target="saveAssign">Save Assignment</span>
+                            <span wire:loading wire:target="saveAssign">Saving…</span>
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>

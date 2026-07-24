@@ -2,6 +2,7 @@
 
 namespace App\Livewire;
 
+use App\Models\AlarmLog;
 use App\Models\AuditConnection;
 use App\Models\Device;
 use App\Models\User;
@@ -24,6 +25,10 @@ class LiveStats extends Component
             'connectionsToday' => AuditConnection::query()
                 ->when($visibleIds !== null, fn ($q) => $q->whereIn('rustdesk_id', $visibleIds))
                 ->whereDate('created_at', today())
+                ->count(),
+            'alarms24h' => AlarmLog::query()
+                ->when($visibleIds !== null, fn ($q) => $q->whereIn('rustdesk_id', $visibleIds))
+                ->where('created_at', '>=', now()->subDay())
                 ->count(),
         ]);
     }

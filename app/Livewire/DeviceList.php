@@ -2,6 +2,7 @@
 
 namespace App\Livewire;
 
+use App\Models\ConsoleAudit;
 use App\Models\Device;
 use App\Models\DeviceGroup;
 use App\Models\User;
@@ -23,6 +24,9 @@ class DeviceList extends Component
 
     #[Url(except: 0)]
     public int $group = 0;
+
+    #[Url(except: 0)]
+    public int $owner = 0; // 0 = any, -1 = unassigned, >0 = user id
 
     #[Url(except: false)]
     public bool $trashed = false;
@@ -57,6 +61,11 @@ class DeviceList extends Component
         $this->resetPage();
     }
 
+    public function updatedOwner(): void
+    {
+        $this->resetPage();
+    }
+
     public function updatedTrashed(): void
     {
         $this->resetPage();
@@ -64,7 +73,7 @@ class DeviceList extends Component
 
     public function resetFilters(): void
     {
-        $this->reset('search', 'status', 'group', 'trashed');
+        $this->reset('search', 'status', 'group', 'owner', 'trashed');
         $this->resetPage();
     }
 
@@ -114,8 +123,11 @@ class DeviceList extends Component
                 'rustdesk_id' => $data['formRustdeskId'],
                 'uuid' => '',
             ]);
+            ConsoleAudit::record('device.create', 'Created device '.$data['formRustdeskId'], 'device', $data['formRustdeskId']);
         } else {
-            $this->scopedDevice($this->editingId)->update($attributes);
+            $device = $this->scopedDevice($this->editingId);
+            $device->update($attributes);
+            ConsoleAudit::record('device.update', 'Updated device '.$device->rustdesk_id, 'device', $device->rustdesk_id);
         }
 
         $this->editingId = null;
@@ -128,17 +140,25 @@ class DeviceList extends Component
 
     public function deleteDevice(int $id): void
     {
-        $this->scopedDevice($id)->delete(); // soft delete → recycle bin
+        $device = $this->scopedDevice($id);
+        $rustdeskId = $device->rustdesk_id;
+        $device->delete(); // soft delete → recycle bin
+        ConsoleAudit::record('device.delete', 'Deleted device '.$rustdeskId, 'device', $rustdeskId);
     }
 
     public function restoreDevice(int $id): void
     {
-        $this->scopedDevice($id)->restore();
+        $device = $this->scopedDevice($id);
+        $device->restore();
+        ConsoleAudit::record('device.restore', 'Restored device '.$device->rustdesk_id, 'device', $device->rustdesk_id);
     }
 
     public function forceDeleteDevice(int $id): void
     {
-        $this->scopedDevice($id)->forceDelete();
+        $device = $this->scopedDevice($id);
+        $rustdeskId = $device->rustdesk_id;
+        $device->forceDelete();
+        ConsoleAudit::record('device.destroy', 'Permanently deleted device '.$rustdeskId, 'device', $rustdeskId);
     }
 
     public function render()
@@ -147,7 +167,7 @@ class DeviceList extends Component
 
         $devices = Device::query()
             ->visibleTo($user)
-            ->with('group')
+            ->with(['group', 'user'])
             ->when($this->trashed, fn ($q) => $q->onlyTrashed())
             ->when($this->search !== '', function ($q) {
                 $s = '%'.$this->search.'%';
@@ -162,6 +182,8 @@ class DeviceList extends Component
             ->when(! $this->trashed && $this->status === 'online', fn ($q) => $q->online())
             ->when(! $this->trashed && $this->status === 'offline', fn ($q) => $q->offline())
             ->when($this->group > 0, fn ($q) => $q->where('device_group_id', $this->group))
+            ->when($this->owner === -1, fn ($q) => $q->whereNull('user_id'))
+            ->when($this->owner > 0, fn ($q) => $q->where('user_id', $this->owner))
             ->orderByRaw('last_online_at IS NULL')
             ->orderByDesc('last_online_at')
             ->paginate($this->perPage);

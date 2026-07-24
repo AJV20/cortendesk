@@ -18,6 +18,14 @@ http {
         ''      close;
     }
 
+    # When a TLS-terminating proxy forwards X-Forwarded-Proto: https, tell PHP
+    # the request is secure (belt-and-suspenders alongside Laravel's trusted
+    # proxies, so scheme detection is correct however the container is fronted).
+    map $http_x_forwarded_proto $fcgi_https {
+        default '';
+        https   'on';
+    }
+
     server {
         listen 8080;
         server_name _;
@@ -58,6 +66,7 @@ http {
             fastcgi_pass 127.0.0.1:9000;
             fastcgi_index index.php;
             fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+            fastcgi_param HTTPS $fcgi_https if_not_empty;
             include fastcgi_params;
         }
 

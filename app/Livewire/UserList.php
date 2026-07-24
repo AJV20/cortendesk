@@ -2,6 +2,7 @@
 
 namespace App\Livewire;
 
+use App\Models\ConsoleAudit;
 use App\Models\DeviceGroup;
 use App\Models\User;
 use App\Models\UserGroup;
@@ -49,6 +50,16 @@ class UserList extends Component
 
     /** @var array<int,int> device_group ids this user may access (non-admins) */
     public array $device_group_ids = [];
+
+    // "Assign devices" modal — bulk-set the owner of several devices at once.
+    public bool $showAssignModal = false;
+
+    public ?int $assignUserId = null;
+
+    public string $assignSearch = '';
+
+    /** @var array<int,int> device ids selected in the assign modal */
+    public array $assignDeviceIds = [];
 
     public function updatedSearch(): void
     {
@@ -131,6 +142,13 @@ class UserList extends Component
 
         $user->groups()->sync($userGroupIds);
 
+        ConsoleAudit::record(
+            $this->editing ? 'user.update' : 'user.create',
+            ($this->editing ? 'Updated' : 'Created').' user '.$user->username,
+            'user',
+            $user->username,
+        );
+
         $this->closeModal();
     }
 
@@ -142,6 +160,40 @@ class UserList extends Component
 
         $user = User::findOrFail($id);
         $user->update(['is_active' => ! $user->is_active]);
+
+        // Disabling takes effect NOW, not at next login: revoke everything.
+        if (! $user->is_active) {
+            $this->revokeAllAccess($user);
+        }
+
+        ConsoleAudit::record(
+            $user->is_active ? 'user.enable' : 'user.disable',
+            ($user->is_active ? 'Enabled' : 'Disabled').' user '.$user->username,
+            'user',
+            $user->username,
+        );
+    }
+
+    /** Kick a user everywhere: RustDesk clients, console sessions, remember-me. */
+    public function forceLogout(int $id): void
+    {
+        if ($id === auth()->id()) {
+            return; // use the account menu to log yourself out
+        }
+
+        $user = User::findOrFail($id);
+        $this->revokeAllAccess($user);
+
+        ConsoleAudit::record('user.force-logout', 'Forced logout of '.$user->username, 'user', $user->username);
+    }
+
+    private function revokeAllAccess(User $user): void
+    {
+        $user->clientTokens()->delete();
+        \Illuminate\Support\Facades\DB::table('sessions')->where('user_id', $user->id)->delete();
+        // A surviving remember-me cookie must not silently re-authenticate.
+        $user->setRememberToken(\Illuminate\Support\Str::random(60));
+        $user->save();
     }
 
     public function deleteUser(int $id): void
@@ -151,10 +203,52 @@ class UserList extends Component
         }
 
         $user = User::findOrFail($id);
+        $username = $user->username;
 
         // Keep the devices, just detach them from the deleted owner.
         $user->devices()->update(['user_id' => null]);
         $user->delete();
+
+        ConsoleAudit::record('user.delete', 'Deleted user '.$username, 'user', $username);
+    }
+
+    // --- Assign devices (bulk owner reassignment) ----------------------------
+
+    public function openAssign(int $userId): void
+    {
+        $this->assignUserId = $userId;
+        $this->assignDeviceIds = [];
+        $this->assignSearch = '';
+        // Preselect the devices this user already owns.
+        $this->assignDeviceIds = \App\Models\Device::where('user_id', $userId)->pluck('id')->all();
+        $this->showAssignModal = true;
+    }
+
+    public function saveAssign(): void
+    {
+        $user = User::findOrFail($this->assignUserId);
+        $ids = array_map('intval', $this->assignDeviceIds);
+
+        // Devices to gain this owner, and this user's current devices to release.
+        \App\Models\Device::whereIn('id', $ids)->update(['user_id' => $user->id]);
+        \App\Models\Device::where('user_id', $user->id)
+            ->whereNotIn('id', $ids ?: [0])
+            ->update(['user_id' => null]);
+
+        ConsoleAudit::record(
+            'user.assign-devices',
+            'Assigned '.count($ids).' device(s) to '.$user->username,
+            'user',
+            $user->username,
+        );
+
+        $this->showAssignModal = false;
+    }
+
+    public function closeAssign(): void
+    {
+        $this->showAssignModal = false;
+        $this->reset('assignUserId', 'assignDeviceIds', 'assignSearch');
     }
 
     public function closeModal(): void
@@ -189,10 +283,26 @@ class UserList extends Component
             ->orderBy('username')
             ->paginate($this->perPage);
 
+        // Candidate devices for the assign modal (filtered by its own search).
+        $assignDevices = collect();
+        if ($this->showAssignModal) {
+            $assignDevices = \App\Models\Device::query()
+                ->when($this->assignSearch !== '', function ($q) {
+                    $s = '%'.$this->assignSearch.'%';
+                    $q->where(fn ($q) => $q->where('rustdesk_id', 'like', $s)
+                        ->orWhere('alias', 'like', $s)
+                        ->orWhere('hostname', 'like', $s));
+                })
+                ->orderBy('rustdesk_id')
+                ->limit(200)
+                ->get(['id', 'rustdesk_id', 'alias', 'hostname', 'user_id']);
+        }
+
         return view('livewire.user-list', [
             'users' => $users,
             'userGroups' => UserGroup::orderBy('name')->get(),
             'deviceGroups' => DeviceGroup::orderBy('name')->get(),
+            'assignDevices' => $assignDevices,
         ]);
     }
 }

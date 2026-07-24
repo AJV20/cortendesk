@@ -28,6 +28,17 @@
 
         <ul class="topbar-menu d-flex align-items-center gap-3">
 
+            @if (auth()->user()?->is_admin && ($newVersion = \App\Support\UpdateChecker::upgradeAvailable()))
+                <li>
+                    <a class="nav-link" href="{{ \App\Support\UpdateChecker::UPGRADE_DOC }}" target="_blank" rel="noopener"
+                       data-bs-toggle="tooltip" data-bs-placement="bottom" title="Version {{ $newVersion }} is available — how to upgrade">
+                        <span class="badge bg-warning-subtle text-warning">
+                            <i class="ri-download-cloud-2-line align-middle me-1"></i>Upgrade Available
+                        </span>
+                    </a>
+                </li>
+            @endif
+
             <li class="d-none d-sm-inline-block">
                 <div class="nav-link" id="light-dark-mode" data-bs-toggle="tooltip" data-bs-placement="left" title="Theme Mode">
                     <i class="ri-moon-line fs-22"></i>

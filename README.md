@@ -4,7 +4,7 @@
 
 **A professional, self-hosted web console for RustDesk servers — with a fully native in-browser remote desktop client.**
 
-CortenDesk gives the free, open-source RustDesk server (`hbbs`/`hbbr`) a clean management console: device fleet management, users and scoped access, address books, audit logs, and a web client that can view, control, and transfer files to your devices straight from the browser — no installer, no Electron, no paid tier.
+CortenDesk gives the free, open-source RustDesk server (`hbbs`/`hbbr`) the management console it deserves: device fleet management, users and scoped access, address books, audit logs, and a web client that can view, control, and transfer files to your devices straight from the browser — no installer, no Electron, no paid tier.
 
 Built on Laravel + Livewire with precompiled assets: **there is no frontend build step**. Clone, configure, migrate, serve.
 
@@ -14,7 +14,7 @@ Built on Laravel + Livewire with precompiled assets: **there is no frontend buil
 - **Devices** — live fleet with presence, platform icons, aliases, device groups ("folders"), pre-registration, and a recycle bin. One-click connect via `rustdesk://` deep links or the built-in web client.
 - **Users & access scoping** — admins see everything; regular users see only their own devices plus device groups granted to them or their user groups. The RustDesk client API is scoped with the same rules.
 - **Address books** — full support for the modern multi-address-book API *and* the legacy API: shared books, share rules (everyone / user / group), tags with colors.
-- **Audit logs** — connections, file transfers, and console logins; filterable and exportable to CSV.
+- **Audit logs** — connections, file transfers, console logins, and security alarms (brute-force/blocked-access events); filterable, exportable to CSV, with configurable retention and automatic nightly pruning.
 - **Dashboard** — live stat tiles, active sessions, 14-day connection charts, platform and version breakdowns.
 - **Importer** — one artisan command migrates everything (users with passwords intact, devices, address books, audit history) from a `lejianwen/rustdesk-api` database.
 - **Mobile-first** — every screen works on a phone; wide tables degrade to card lists. Dark and light themes.
@@ -44,7 +44,7 @@ WebSocket bridge to your RustDesk server built in). Releases are published to
 GHCR — or build it yourself:
 
 ```bash
-docker pull ghcr.io/marcpope/cortendesk:0.8.0-beta.1   # or build locally:
+docker pull ghcr.io/marcpope/cortendesk:0.8.0-beta.2   # or build locally:
 docker build -t cortendesk .
 docker run -d -p 8080:8080 -v cortendesk-data:/data \
   -e CORTENDESK_ID_SERVER=hbbs.example.com:21116 \
@@ -104,6 +104,28 @@ php artisan config:cache route:cache view:cache
 ```
 
 Serve `public/` with nginx + php-fpm as usual for Laravel. Log in as **admin / changeme** and change the password immediately.
+
+Add the Laravel scheduler to cron (log retention and other maintenance run through it; the Docker image does this automatically):
+
+```
+* * * * * cd /path/to/cortendesk && php artisan schedule:run >> /dev/null 2>&1
+```
+
+### Behind a reverse proxy (TLS termination)
+
+CortenDesk honors `X-Forwarded-*` headers, so it works out of the box behind a
+TLS-terminating proxy (Traefik, Caddy, nginx-proxy-manager, Cloudflare, …) that
+forwards to the container/app over plain HTTP. Make sure your proxy passes
+`X-Forwarded-Proto` (all of the above do by default), set `APP_URL` to your
+public https URL, and set `SESSION_SECURE_COOKIE=true` so the session cookie
+carries the Secure flag. No mixed-content issues — assets are generated with
+the correct scheme from the forwarded headers.
+
+Forwarded headers are trusted only from private/loopback addresses (Docker
+networks, a same-host proxy) so that clients reaching the app directly cannot
+forge their IP in the audit logs. If your proxy connects from a public
+address, list it explicitly: `TRUSTED_PROXIES=203.0.113.7` (comma-separated,
+CIDRs allowed).
 
 ### WebSocket bridge for the web client
 

@@ -1,7 +1,7 @@
 // Spike 2 — drive the sans-IO Session end-to-end through a decrypted LoginResponse.
 // Run (offline, CI-safe, no network, DEFAULT):  npm run drive
 //   or:  node --import tsx node-harness/drive-login.mjs --offline
-// Run (live, against a real peer):  node --import tsx node-harness/drive-login.mjs --online
+// Run (live, against a real peer through the RustDesk server):  node --import tsx node-harness/drive-login.mjs --online
 //
 // Both modes use the byte-exact crypto/handshake/auth from src/*.ts. The offline
 // mode plays BOTH the client Session and a scripted peer, proving the five

@@ -69,4 +69,21 @@
             </div>
         </a>
     </div>
+    <div class="col-xxl-3 col-sm-6">
+        <a href="{{ route('logs.alarms') }}" class="card text-reset card-hover" title="View alarm log">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h4 class="mb-0">{{ $alarms24h }}</h4>
+                        <p class="text-muted mb-0">Alarms (24h)</p>
+                    </div>
+                    <div class="avatar-sm">
+                        <span class="avatar-title bg-danger-subtle text-danger rounded fs-22">
+                            <i class="ri-alarm-warning-line"></i>
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </a>
+    </div>
 </div>

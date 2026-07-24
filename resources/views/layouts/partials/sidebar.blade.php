@@ -99,8 +99,10 @@
                     <ul class="side-nav-second-level">
                         <li class="{{ request()->routeIs('logs.connections') ? 'menuitem-active' : '' }}"><a href="{{ route('logs.connections') }}">Connections</a></li>
                         <li class="{{ request()->routeIs('logs.file-transfers') ? 'menuitem-active' : '' }}"><a href="{{ route('logs.file-transfers') }}">File Transfers</a></li>
+                        <li class="{{ request()->routeIs('logs.alarms') ? 'menuitem-active' : '' }}"><a href="{{ route('logs.alarms') }}">Alarms</a></li>
                         @if (auth()->user()?->is_admin)
                             <li class="{{ request()->routeIs('logs.logins') ? 'menuitem-active' : '' }}"><a href="{{ route('logs.logins') }}">Logins</a></li>
+                            <li class="{{ request()->routeIs('logs.console') ? 'menuitem-active' : '' }}"><a href="{{ route('logs.console') }}">Console</a></li>
                         @endif
                     </ul>
                 </div>
@@ -132,5 +134,19 @@
 
         <div class="clearfix"></div>
     </div>
+
+    @if (auth()->user()?->is_admin)
+        @php $rdUpgrade = \App\Support\UpdateChecker::upgradeAvailable(); @endphp
+        <div class="rd-sidebar-version">
+            <span class="rd-sidebar-version-num">v{{ config('cortendesk.api_version') }}</span>
+            @if ($rdUpgrade)
+                <a href="{{ \App\Support\UpdateChecker::UPGRADE_DOC }}" target="_blank" rel="noopener"
+                   class="badge bg-warning-subtle text-warning text-decoration-none"
+                   title="Version {{ $rdUpgrade }} is available">Upgrade Available</a>
+            @else
+                <span class="badge bg-success-subtle text-success">Up-to-Date</span>
+            @endif
+        </div>
+    @endif
 </div>
 <!-- ========== Left Sidebar End ========== -->

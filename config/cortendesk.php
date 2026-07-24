@@ -59,6 +59,16 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Log retention
+    |--------------------------------------------------------------------------
+    | Days to keep audit/log rows (connections, file transfers, logins,
+    | alarms). 0 = keep forever. Overridable per-install in Settings; pruned
+    | nightly by cortendesk:prune-logs.
+    */
+    'log_retention_days' => env('CORTENDESK_LOG_RETENTION_DAYS', 365),
+
+    /*
+    |--------------------------------------------------------------------------
     | Build Installers
     |--------------------------------------------------------------------------
     | URL the sidebar "Build Installers" entry opens (an rdgen instance).

@@ -140,3 +140,27 @@ it('hides the Web Client link when no webclient_url is configured', function () 
 
     Livewire::test(DeviceList::class)->assertDontSee('Web Client');
 });
+
+it('filters devices by owner and unassigned', function () {
+    $admin = actingAdmin();
+    $owner = \App\Models\User::factory()->create(['username' => 'owner-a']);
+    $mine = makeDevice(['alias' => 'Owned', 'user_id' => $owner->id]);
+    $free = makeDevice(['alias' => 'Free']);
+
+    \Livewire\Livewire::actingAs($admin)->test(\App\Livewire\DeviceList::class)
+        ->set('owner', $owner->id)
+        ->assertSee('Owned')->assertDontSee('Free');
+
+    \Livewire\Livewire::actingAs($admin)->test(\App\Livewire\DeviceList::class)
+        ->set('owner', -1)
+        ->assertSee('Free')->assertDontSee('Owned');
+});
+
+it('shows the owner column to admins', function () {
+    $admin = actingAdmin();
+    $owner = \App\Models\User::factory()->create(['username' => 'jdoe-owner']);
+    makeDevice(['user_id' => $owner->id]);
+
+    \Livewire\Livewire::actingAs($admin)->test(\App\Livewire\DeviceList::class)
+        ->assertSee('Owner')->assertSee('jdoe-owner');
+});

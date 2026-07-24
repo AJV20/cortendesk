@@ -45,6 +45,29 @@
                     </form>
                 </div>
             </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0"><i class="ri-database-2-line me-1"></i>Maintenance</h5>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label">Log retention (days)</label>
+                        <input type="number" class="form-control @error('logRetentionDays') is-invalid @enderror"
+                               wire:model="logRetentionDays" min="0" max="3650" style="max-width: 140px;">
+                        @error('logRetentionDays') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                        <div class="form-text">Connection, file-transfer, login and alarm logs older than this are deleted nightly. <strong>0 keeps logs forever.</strong></div>
+                    </div>
+                    <button type="button" class="btn btn-light" wire:click="pruneNow"
+                            wire:confirm="Delete all log entries older than {{ $logRetentionDays }} days now?"
+                            @if($logRetentionDays < 1) disabled @endif>
+                        <i class="ri-delete-bin-6-line me-1"></i>Prune now
+                    </button>
+                    @if ($pruneResult)
+                        <div class="alert alert-info py-2 mt-2 mb-0 font-monospace fs-13" style="white-space: pre-line;">{{ $pruneResult }}</div>
+                    @endif
+                </div>
+            </div>
         </div>
 
         <div class="col-lg-5">

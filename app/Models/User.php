@@ -19,6 +19,12 @@ class User extends Authenticatable
     /** @use HasFactory<UserFactory> */
     use HasFactory, Notifiable;
 
+    // Mirror the DB default so a freshly constructed (unsaved/unrefreshed)
+    // model doesn't read as disabled (null) — EnsureUserIsActive depends on it.
+    protected $attributes = [
+        'is_active' => true,
+    ];
+
     /**
      * Get the attributes that should be cast.
      *
@@ -36,6 +42,11 @@ class User extends Authenticatable
     public function devices(): HasMany
     {
         return $this->hasMany(Device::class);
+    }
+
+    public function clientTokens(): HasMany
+    {
+        return $this->hasMany(ClientToken::class);
     }
 
     /** User groups this user belongs to (many-to-many). */

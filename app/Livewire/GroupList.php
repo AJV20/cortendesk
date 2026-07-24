@@ -2,6 +2,7 @@
 
 namespace App\Livewire;
 
+use App\Models\ConsoleAudit;
 use App\Models\Device;
 use App\Models\DeviceGroup;
 use App\Models\User;
@@ -84,6 +85,14 @@ class GroupList extends Component
             $group->deviceGroups()->sync($deviceGroupIds);
         }
 
+        $kind = $group instanceof UserGroup ? 'user group' : 'device group';
+        ConsoleAudit::record(
+            $this->editing ? 'group.update' : 'group.create',
+            ($this->editing ? 'Updated' : 'Created').' '.$kind.' '.$group->name,
+            'group',
+            $group->name,
+        );
+
         $this->closeModal();
     }
 
@@ -92,14 +101,20 @@ class GroupList extends Component
         $type = $this->validType($type);
 
         if ($type === 'devices') {
+            $group = DeviceGroup::findOrFail($id);
+            $name = $group->name;
             Device::where('device_group_id', $id)->update(['device_group_id' => null]);
-            DeviceGroup::findOrFail($id)->delete();
+            $group->delete();
         } else {
             $group = UserGroup::findOrFail($id);
+            $name = $group->name;
             $group->users()->detach();
             $group->deviceGroups()->detach();
             $group->delete();
         }
+
+        $kind = $type === 'devices' ? 'device group' : 'user group';
+        ConsoleAudit::record('group.delete', 'Deleted '.$kind.' '.$name, 'group', $name);
     }
 
     public function closeModal(): void

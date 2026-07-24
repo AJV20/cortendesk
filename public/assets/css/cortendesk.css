@@ -87,6 +87,13 @@ html[data-sidenav-size="condensed"]:not([data-layout="topnav"]) .wrapper .leftsi
     padding: 10px 0 0;
 }
 
+/* Flex helper Bootstrap doesn't ship: allow a flex child to shrink below its
+   content width so text-truncate / wrapping works inside d-flex rows (used by
+   the mobile device-card list). */
+.min-width-0 {
+    min-width: 0;
+}
+
 /* Login page background — covers the viewport, centered, cropping as needed.
    Fixed-position pseudo-element instead of background-attachment:fixed, which
    iOS Safari mishandles. Base color matches the image's darkest tone so any
@@ -101,3 +108,26 @@ body.authentication-bg::before {
     z-index: -1;
     background: url('../images/login-bkg.jpg') center center / cover no-repeat;
 }
+
+/* Sidebar version footer — pinned bottom-left of the full sidebar.
+   The theme's .leftside-menu is already position:fixed, so this anchors to it;
+   do NOT re-position .leftside-menu here (it breaks the fixed sidebar). */
+.rd-sidebar-version {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 20px;
+    font-size: 12px;
+    background: var(--ct-menu-bg);
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.rd-sidebar-version-num {
+    color: var(--ct-menu-item-color, #8391a2);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+/* Hide in the condensed (icons-only) sidebar — no room for the label. */
+html[data-sidenav-size="condensed"]:not([data-layout=topnav]) .rd-sidebar-version { display: none; }
