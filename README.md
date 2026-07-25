@@ -34,6 +34,7 @@ Built on Laravel + Livewire with precompiled assets: **there is no frontend buil
 - **File transfer** — an in-session dual-pane manager: browse the remote filesystem, send/receive files and folders with progress, resume-aware digests, conflict prompts, and drag-and-drop. Uses the File System Access API on Chromium; falls back to picker/Downloads elsewhere.
 - Saved passwords (hashed, never plaintext) with auto-login per device.
 - Best experienced in Chrome/Edge; the desktop stream requires WebCodecs.
+- **HTTPS is required.** Both WebCodecs (`VideoDecoder`) and Web Crypto (`crypto.subtle`) are restricted to secure contexts, so the browser blocks them over plain `http://` — this is browser policy, not a CortenDesk setting, and cannot be worked around in JavaScript. `http://localhost` counts as secure. The console itself works fine over plain HTTP; only the in-browser client needs TLS.
 
 ## Requirements
 
@@ -50,7 +51,7 @@ WebSocket bridge to your RustDesk server built in). Releases are published to
 GHCR — or build it yourself:
 
 ```bash
-docker pull ghcr.io/marcpope/cortendesk:0.9.2   # or build locally:
+docker pull ghcr.io/marcpope/cortendesk:0.9.3   # or build locally:
 docker build -t cortendesk .
 docker run -d -p 8080:8080 -v cortendesk-data:/data \
   -e CORTENDESK_ID_SERVER=hbbs.example.com:21116 \

@@ -40,12 +40,27 @@ php artisan db:seed --class=Database\\Seeders\\DockerSeeder --force --no-interac
 # --- nginx: point the ws bridge at the RustDesk server ------------------------
 # RUSTDESK_WS_HOST > host part of CORTENDESK_ID_SERVER > localhost.
 if [ -z "${RUSTDESK_WS_HOST:-}" ]; then
-    RUSTDESK_WS_HOST="$(echo "${CORTENDESK_ID_SERVER:-127.0.0.1}" | cut -d: -f1)"
+    _id_server="${CORTENDESK_ID_SERVER:-127.0.0.1}"
+    case "$_id_server" in
+        # [2001:db8::1]:21116 — strip the port, keep the brackets nginx needs.
+        \[*\]*) RUSTDESK_WS_HOST="${_id_server%%\]*}]" ;;
+        *)       RUSTDESK_WS_HOST="${_id_server%%:*}" ;;
+    esac
 fi
 export RUSTDESK_WS_HOST
+
 # Per-request DNS for the ws bridge: use the container's own resolver.
 NGINX_RESOLVER="${NGINX_RESOLVER:-$(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf)}"
-export NGINX_RESOLVER="${NGINX_RESOLVER:-127.0.0.11}"
+NGINX_RESOLVER="${NGINX_RESOLVER:-127.0.0.11}"
+# nginx wants an IPv6 resolver in square brackets and an IPv4 one without them.
+# Some platforms hand the container an IPv6-only /etc/resolv.conf (Railway does),
+# and passing that through verbatim aborts startup with
+#   nginx: [emerg] invalid port in resolver "fd12::10"
+case "$NGINX_RESOLVER" in
+    \[*\]) ;;                                  # already bracketed
+    *:*)   NGINX_RESOLVER="[$NGINX_RESOLVER]" ;; # bare IPv6 — only v6 has colons
+esac
+export NGINX_RESOLVER
 envsubst '${RUSTDESK_WS_HOST} ${NGINX_RESOLVER}' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
 
 php artisan config:cache --no-interaction -q

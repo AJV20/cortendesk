@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   QUALITY,
   STATE_LABEL,
@@ -189,5 +190,30 @@ describe('PERMISSION_CONTROLS', () => {
     for (const kind of ['Audio', 'Restart', 'Recording', 'BlockInput', 'PrivacyMode']) {
       expect(PERMISSION_CONTROLS[kind]).toBeUndefined();
     }
+  });
+});
+
+describe('secure context requirement', () => {
+  // Issue #3: over plain http the first symptom was
+  // "Cannot read properties of undefined (reading 'digest')", because
+  // crypto.subtle is absent outside a secure context. A pure-JS hash would not
+  // help — WebCodecs' VideoDecoder is [SecureContext] too, so the failure would
+  // just move to the decoder. The client must say so instead.
+  it('names crypto.subtle and VideoDecoder as the secure-context dependencies', () => {
+    // Pins the two APIs the guard exists for. If either stops being used, the
+    // guard should be revisited rather than left asserting a stale reason.
+    const source = readFileSync(new URL('./app.ts', import.meta.url), 'utf8');
+
+    expect(source).toContain('isSecureContext');
+    expect(source).toContain('crypto.subtle');
+    expect(source).toContain('VideoDecoder');
+  });
+
+  it('checks the context before connecting, not only on load', () => {
+    const source = readFileSync(new URL('./app.ts', import.meta.url), 'utf8');
+    const calls = source.match(/secureContextProblem\(\)/g) ?? [];
+
+    // definition + on-load check + connect check
+    expect(calls.length).toBeGreaterThanOrEqual(3);
   });
 });

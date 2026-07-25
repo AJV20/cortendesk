@@ -165,6 +165,12 @@ export class RdApp {
       this.onConnectClick();
     }
 
+    // Surface it before they type a password and press Connect.
+    const blocked = this.secureContextProblem();
+    if (blocked) {
+      this.setOverlayError(blocked);
+    }
+
     this.ticker = setInterval(() => {
       const start = this.stats?.startedAtMs || this.streamStartMs;
       this.el.statDuration.textContent =
@@ -399,6 +405,41 @@ export class RdApp {
     this.el.passwordInput.placeholder = has ? 'Saved password — click to change' : 'Enter password';
   }
 
+  /**
+   * Why the browser will refuse to run this page's session, or null if it won't.
+   *
+   * Served over plain http:// the page is not a "secure context", and the two
+   * things this client is built on are both gated behind that:
+   * `crypto.subtle` (the login handshake hashes with SHA-256) and WebCodecs'
+   * `VideoDecoder` (the entire video pipeline). Without the check the first
+   * failure surfaces as `Cannot read properties of undefined (reading
+   * 'digest')`, which sends operators hunting for a bug in their config —
+   * reported in #3.
+   *
+   * There is no workaround worth shipping: a pure-JS hash would only move the
+   * failure to the decoder, which cannot be polyfilled. So say so plainly and
+   * point at the ways out.
+   */
+  private secureContextProblem(): string | null {
+    if (typeof isSecureContext !== 'undefined' && !isSecureContext) {
+      return 'This page is served over plain HTTP, so the browser blocks the '
+        + 'cryptography and video decoding the client needs. Serve the console '
+        + 'over HTTPS, or open it as http://localhost, which browsers treat as secure.';
+    }
+
+    if (typeof crypto === 'undefined' || !crypto.subtle) {
+      return 'This browser is not exposing Web Crypto to the page. That normally '
+        + 'means the page is not being served over HTTPS.';
+    }
+
+    if (typeof VideoDecoder === 'undefined') {
+      return 'This browser has no WebCodecs video decoder. Chrome or Edge over '
+        + 'HTTPS is required for the remote screen.';
+    }
+
+    return null;
+  }
+
   private onConnectClick(): void {
     if (this.worker && this.state !== 'error' && this.state !== 'closed') return;
     const peerId = (this.el.peerIdInput.value || this.fixedPeerId).trim();
@@ -408,6 +449,11 @@ export class RdApp {
     }
     if (!this.cfg) {
       this.setOverlayError('Missing window.__RD__ configuration');
+      return;
+    }
+    const blocked = this.secureContextProblem();
+    if (blocked) {
+      this.setOverlayError(blocked);
       return;
     }
     this.peerId = peerId;
