@@ -23,4 +23,49 @@ class Setting extends Model
     {
         static::query()->updateOrCreate(['key' => $key], ['value' => $value]);
     }
+
+    /**
+     * The configured relay pool as an ordered list of ['address' => …, 'geo' => …].
+     *
+     * Relay membership/selection is owned by the rendezvous server (hbbs), not the
+     * console — see docs/relay-protocol.md. These rows document/manage the hbbs
+     * `relay-servers` list; the console does not push them to clients. When no list
+     * is configured we fall back to the single `relay_server` env/setting so existing
+     * single-relay deployments keep working.
+     *
+     * @return array<int, array{address: string, geo: string}>
+     */
+    public static function relayServers(): array
+    {
+        $raw = static::get('relay_servers');
+
+        if ($raw) {
+            $decoded = json_decode($raw, true);
+
+            if (is_array($decoded)) {
+                $rows = [];
+
+                foreach ($decoded as $row) {
+                    $address = trim((string) ($row['address'] ?? ''));
+
+                    if ($address === '') {
+                        continue;
+                    }
+
+                    $rows[] = [
+                        'address' => $address,
+                        'geo' => trim((string) ($row['geo'] ?? '')),
+                    ];
+                }
+
+                if ($rows !== []) {
+                    return $rows;
+                }
+            }
+        }
+
+        $single = trim((string) static::get('relay_server', config('cortendesk.relay_server')));
+
+        return $single === '' ? [] : [['address' => $single, 'geo' => '']];
+    }
 }

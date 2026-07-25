@@ -2,6 +2,7 @@
 
 namespace App\Livewire;
 
+use App\Livewire\Concerns\AuthorizesConsole;
 use App\Models\AddressBook;
 use App\Models\AddressBookEntry;
 use App\Models\AddressBookRule;
@@ -16,7 +17,7 @@ use Livewire\WithPagination;
 
 class AddressBookManager extends Component
 {
-    use WithPagination;
+    use AuthorizesConsole, WithPagination;
 
     protected string $paginationTheme = 'bootstrap';
 
@@ -58,6 +59,8 @@ class AddressBookManager extends Component
 
     public function mount(): void
     {
+        $this->authorizeConsole('address_book', 'r');
+
         if ($user = auth()->user()) {
             AddressBook::personalFor($user);
             // Admins live in the shared list; regular users mostly care about their own book.
@@ -156,6 +159,8 @@ class AddressBookManager extends Component
 
     public function openNewBook(): void
     {
+        $this->authorizeConsole('address_book', 'rw');
+
         $this->reset('bookName', 'bookNote');
         $this->resetValidation();
         $this->modal = 'newBook';
@@ -219,6 +224,8 @@ class AddressBookManager extends Component
 
     public function createBook(): void
     {
+        $this->authorizeConsole('address_book', 'rw');
+
         $this->validate([
             'bookName' => 'required|string|max:255',
             'bookNote' => 'nullable|string|max:500',
@@ -239,7 +246,7 @@ class AddressBookManager extends Component
 
     public function renameBook(): void
     {
-        $book = $this->book();
+        $book = $this->authorizeBook(AddressBookRule::PERM_FULL);
         if (! $book || $book->is_personal) {
             return;
         }
@@ -259,7 +266,7 @@ class AddressBookManager extends Component
 
     public function deleteBook(): void
     {
-        $book = $this->book();
+        $book = $this->authorizeBook(AddressBookRule::PERM_FULL);
         if (! $book || $book->is_personal) {
             return; // personal address books can never be deleted
         }
@@ -282,7 +289,7 @@ class AddressBookManager extends Component
 
     public function addTag(): void
     {
-        $book = $this->book();
+        $book = $this->authorizeBook(AddressBookRule::PERM_FULL);
         if (! $book) {
             return;
         }
@@ -306,6 +313,10 @@ class AddressBookManager extends Component
 
     public function deleteTag(int $id): void
     {
+        if (! $this->authorizeBook(AddressBookRule::PERM_FULL)) {
+            return;
+        }
+
         $tag = Tag::where('address_book_id', $this->selectedBookId)->findOrFail($id);
 
         // Strip the tag id from every entry that references it.
@@ -325,7 +336,7 @@ class AddressBookManager extends Component
 
     public function saveEntry(): void
     {
-        $book = $this->book();
+        $book = $this->authorizeBook(AddressBookRule::PERM_READ_WRITE);
         if (! $book) {
             return;
         }
@@ -361,6 +372,10 @@ class AddressBookManager extends Component
 
     public function deleteEntry(int $id): void
     {
+        if (! $this->authorizeBook(AddressBookRule::PERM_READ_WRITE)) {
+            return;
+        }
+
         AddressBookEntry::where('address_book_id', $this->selectedBookId)->findOrFail($id)->delete();
     }
 
@@ -370,7 +385,7 @@ class AddressBookManager extends Component
 
     public function addRule(): void
     {
-        $book = $this->book();
+        $book = $this->authorizeBook(AddressBookRule::PERM_FULL);
         if (! $book || $book->is_personal) {
             return;
         }
@@ -409,6 +424,10 @@ class AddressBookManager extends Component
             return;
         }
 
+        if (! $this->authorizeBook(AddressBookRule::PERM_FULL)) {
+            return;
+        }
+
         $rule = AddressBookRule::where('address_book_id', $this->selectedBookId)->findOrFail($id);
         $rule->update(['permission' => $permission]);
 
@@ -417,6 +436,10 @@ class AddressBookManager extends Component
 
     public function deleteRule(int $id): void
     {
+        if (! $this->authorizeBook(AddressBookRule::PERM_FULL)) {
+            return;
+        }
+
         AddressBookRule::where('address_book_id', $this->selectedBookId)->findOrFail($id)->delete();
 
         ConsoleAudit::record('address-book.rule-delete', 'Removed sharing rule from address book '.$this->book()?->name, 'address-book', $this->book()?->name);
@@ -442,6 +465,55 @@ class AddressBookManager extends Component
             : null;
     }
 
+    /**
+     * Current user's effective permission tier on the selected book (PLAN B4).
+     *
+     * A delegated role with only "View" on address books (PLAN D4) is clamped
+     * to read here, which is the single choke point the whole screen runs
+     * through: canWriteEntries(), canManage() and authorizeBook() all derive
+     * from it, so the write affordances disappear AND the mutators refuse.
+     * A role can only ever narrow what the per-book rules already granted.
+     */
+    public function permission(): int
+    {
+        $book = $this->book();
+        $permission = $book ? $book->permissionFor(auth()->user()) : 0;
+
+        if (! $this->consoleAllows('address_book', 'rw')) {
+            $permission = min($permission, AddressBookRule::PERM_READ);
+        }
+
+        return $permission;
+    }
+
+    /** True when the user may manage entries (peers) — RW or FULL. */
+    public function canWriteEntries(): bool
+    {
+        return $this->permission() >= AddressBookRule::PERM_READ_WRITE;
+    }
+
+    /** True when the user may manage tags, rules, and the book itself — FULL. */
+    public function canManage(): bool
+    {
+        return $this->permission() >= AddressBookRule::PERM_FULL;
+    }
+
+    /**
+     * Guard a mutating action against the required tier. Returns the selected
+     * book when allowed, or null (caller aborts) when not. This is the console
+     * half of the same ro / rw / full authority the client AB API enforces.
+     */
+    protected function authorizeBook(int $required): ?AddressBook
+    {
+        $book = $this->book();
+
+        if (! $book || $book->permissionFor(auth()->user()) < $required) {
+            return null;
+        }
+
+        return $book;
+    }
+
     public function render()
     {
         $allBooks = self::orderedBooks()
@@ -462,11 +534,18 @@ class AddressBookManager extends Component
         $entries = $book ? $book->entries()->orderBy('rustdesk_id')->paginate(15) : null;
         $rules = ($book && ! $book->is_personal) ? $book->rules()->orderBy('id')->get() : collect();
 
+        // Effective tier of the current user on the selected book (PLAN B4) —
+        // drives which action buttons render.
+        $permission = $book ? $book->permissionFor(auth()->user()) : 0;
+
         return view('livewire.address-book-manager', [
             'books' => $books,
             'personalCount' => $personalBooks->count(),
             'sharedCount' => $sharedBooks->count(),
             'book' => $book,
+            'permission' => $permission,
+            'canWriteEntries' => $permission >= AddressBookRule::PERM_READ_WRITE,
+            'canManage' => $permission >= AddressBookRule::PERM_FULL,
             'tags' => $tags,
             'tagMap' => $tags->keyBy('id'),
             'entries' => $entries,

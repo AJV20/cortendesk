@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Device;
+use App\Models\Strategy;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 
@@ -13,7 +14,7 @@ class SyncController extends Controller
      * POST /api/heartbeat — spec §8. Tokenless, fire-and-forget.
      *
      * Response keys (all optional): `sysinfo` (presence forces re-upload),
-     * `disconnect` (conn ids to close), `modified_at` + `strategy` (Phase 3).
+     * `disconnect` (conn ids to close), `modified_at` + `strategy` (PLAN C3).
      */
     public function heartbeat(Request $request)
     {
@@ -63,6 +64,18 @@ class SyncController extends Controller
             $response['sysinfo'] = 1;
         }
 
+        // Strategy push (PLAN C3, wire contract docs/strategy-protocol.md).
+        // `modified_at` is the version token the device echoed back to us; it is
+        // an opaque i64 the client never interprets, so change detection is
+        // entirely ours. deliveryFor() returns null whenever there is nothing to
+        // say — which is what keeps this response byte-identical to the
+        // pre-strategy one for every device that has no policy.
+        $delivery = Strategy::deliveryFor($device, (int) $request->input('modified_at', 0));
+        if ($delivery !== null) {
+            $response['modified_at'] = $delivery['modified_at'];
+            $response['strategy'] = $delivery['strategy'];
+        }
+
         return response()->json((object) $response);
     }
 
@@ -104,6 +117,15 @@ class SyncController extends Controller
         ];
 
         if ($device === null) {
+            // Deployment approval gate (PLAN B3): when enabled, a first-seen
+            // id+uuid is quarantined as 'pending' — registered but excluded from
+            // scoping/address books/group tab/device list until an operator
+            // approves it. The plain-text ack stays identical so the client sees
+            // no difference (heartbeat/sysinfo remain fully transparent).
+            $attributes['status'] = Device::approvalGateEnabled()
+                ? Device::STATUS_PENDING
+                : Device::STATUS_ACTIVE;
+
             Device::create(['rustdesk_id' => $id] + $attributes);
         } else {
             $device->update($attributes);

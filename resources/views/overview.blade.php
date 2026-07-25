@@ -3,6 +3,20 @@
 @section('title', 'Overview')
 
 @section('content')
+    {{-- Only shown to someone who can actually fix it. Everything listed here
+         is a feature that exists and silently cannot run without a relay. --}}
+    @if (auth()->user()?->consoleAllows('setting', 'rw') && ! app(\App\Services\MailSettings::class)->isEnabled())
+        <div class="alert alert-warning d-flex align-items-start gap-2">
+            <i class="ri-mail-close-line fs-20 mt-1"></i>
+            <div class="flex-grow-1">
+                <strong>Email is not configured.</strong>
+                User invitations cannot be sent, and emailed sign-in verification codes cannot
+                be delivered, so anyone locked out has to be recovered by an administrator by hand.
+                <a href="{{ route('settings', ['tab' => 'email']) }}" class="alert-link">Set up SMTP</a>.
+            </div>
+        </div>
+    @endif
+
     @livewire(App\Livewire\LiveStats::class)
 
     <div class="row">

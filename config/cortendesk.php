@@ -75,4 +75,16 @@ return [
     | Overridable per-install in Settings; empty hides the menu entry.
     */
     'rdgen_url' => env('CORTENDESK_RDGEN_URL', 'https://rdgen.crayoneater.org'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | OIDC break-glass switch
+    |--------------------------------------------------------------------------
+    | Set CORTENDESK_OIDC_DISABLED=true to turn single sign-on off from the
+    | shell, without database access. Everything else about SSO is configured
+    | in Settings → SSO; this exists purely so a misconfigured provider can
+    | never permanently lock an operator out of their own console. Turning SSO
+    | off also re-enables password sign-in, whatever the stored settings say.
+    */
+    'oidc_disabled' => filter_var(env('CORTENDESK_OIDC_DISABLED', false), FILTER_VALIDATE_BOOL),
 ];

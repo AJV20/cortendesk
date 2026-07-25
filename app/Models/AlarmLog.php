@@ -23,7 +23,44 @@ class AlarmLog extends Model
         7 => ['label' => 'Terminal login backoff', 'severity' => 'warning'],
         8 => ['label' => 'Terminal login concurrency', 'severity' => 'warning'],
         9 => ['label' => 'Session scope violation', 'severity' => 'danger'],
+
+        // Console-raised alarms. Deliberately numbered from 100 so they can
+        // never collide with a client type the upstream protocol adds later —
+        // 0–9 are the client's and the range between is left to it.
+        100 => ['label' => 'Console brute force', 'severity' => 'danger'],
+        101 => ['label' => 'Console password spraying', 'severity' => 'danger'],
     ];
+
+    /** Repeated failed sign-ins against one console account. */
+    public const TYP_BRUTE_FORCE = 100;
+
+    /** Many failed sign-ins from one address, spread across accounts. */
+    public const TYP_SPRAYING = 101;
+
+    /**
+     * Placeholder device id for alarms the console raises itself.
+     *
+     * `alarm_logs.rustdesk_id` is not nullable and normally holds the device
+     * that reported the alarm. Real device ids are numeric, so this sentinel
+     * can never collide — and because the alarm list scopes non-admins to
+     * their own visible devices, it keeps console security alarms admin-only.
+     */
+    public const CONSOLE_SOURCE = 'console';
+
+    /**
+     * Record a console-raised alarm.
+     *
+     * @param  array<string, mixed>  $info
+     */
+    public static function console(int $typ, array $info = []): self
+    {
+        return static::create([
+            'rustdesk_id' => self::CONSOLE_SOURCE,
+            'typ' => $typ,
+            // Same convention as the client: `info` is a JSON-encoded string.
+            'info' => json_encode($info),
+        ]);
+    }
 
     protected function casts(): array
     {

@@ -7,7 +7,6 @@ use App\Http\Controllers\Controller;
 use App\Models\Device;
 use App\Models\DeviceGroup;
 use App\Models\User;
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -52,15 +51,11 @@ class GroupTabController extends Controller
 
         $query = User::query()->orderBy('username');
 
-        // Non-admins see only users sharing at least one user group, plus themself.
+        // Non-admins see group-mates plus anyone in a user group "accessed from"
+        // one of their groups (PLAN B4), plus themself. visibleUserIds() is the
+        // single source of truth for that set.
         if (! $user->seesAllDevices()) {
-            $groupIds = $user->groups()->pluck('user_groups.id')->all();
-            $query->where(function (Builder $q) use ($user, $groupIds) {
-                $q->where('id', $user->id);
-                if ($groupIds !== []) {
-                    $q->orWhereHas('groups', fn (Builder $g) => $g->whereIn('user_groups.id', $groupIds));
-                }
-            });
+            $query->whereIn('id', $user->visibleUserIds());
         }
 
         if ((string) $request->query('status', '') === '1') {

@@ -342,6 +342,81 @@ it('enforces share permissions: read-only members cannot mutate', function () {
         ->assertJsonStructure(['error']);
 });
 
+/*
+|--------------------------------------------------------------------------
+| B4 — ro / rw / full tiers enforced across every write endpoint.
+| Pro-shaped rejection = HTTP 200 with a JSON {error} body.
+|--------------------------------------------------------------------------
+*/
+
+/** Build a shared book granting $member the given tier, return [$book, $headers]. */
+function sharedBookWithTier(int $permission): array
+{
+    $owner = apiUser();
+    $member = apiUser();
+    $book = AddressBook::create(['name' => 'Team', 'owner_user_id' => $owner->id, 'is_personal' => false]);
+    $book->rules()->create(['subject_type' => 'everyone', 'permission' => $permission]);
+
+    // Seed a tag + peer so update/delete/rename targets exist.
+    $book->tags()->create(['name' => 'work', 'color' => 0]);
+    $book->entries()->create(['rustdesk_id' => '42']);
+
+    return [$book, bearerFor($member)];
+}
+
+it('rejects every AB write for a READ-ONLY member with the Pro-shaped error body', function () {
+    [$book, $headers] = sharedBookWithTier(AddressBookRule::PERM_READ);
+    $g = $book->guid;
+
+    // Entry endpoints (would need RW).
+    $this->postJson("/api/ab/peer/add/$g", ['id' => '1'], $headers)->assertOk()->assertJsonStructure(['error']);
+    $this->putJson("/api/ab/peer/update/$g", ['id' => '42', 'alias' => 'x'], $headers)->assertOk()->assertJsonStructure(['error']);
+    $this->call('DELETE', "/api/ab/peer/$g", [], [], [],
+        $this->transformHeadersToServerVars($headers + ['CONTENT_TYPE' => 'application/json']), json_encode(['42']))
+        ->assertOk()->assertJsonStructure(['error']);
+
+    // Tag endpoints (would need FULL).
+    $this->postJson("/api/ab/tag/add/$g", ['name' => 'n', 'color' => 0], $headers)->assertOk()->assertJsonStructure(['error']);
+    $this->putJson("/api/ab/tag/rename/$g", ['old' => 'work', 'new' => 'w2'], $headers)->assertOk()->assertJsonStructure(['error']);
+    $this->putJson("/api/ab/tag/update/$g", ['name' => 'work', 'color' => 1], $headers)->assertOk()->assertJsonStructure(['error']);
+    $this->call('DELETE', "/api/ab/tag/$g", [], [], [],
+        $this->transformHeadersToServerVars($headers + ['CONTENT_TYPE' => 'application/json']), json_encode(['work']))
+        ->assertOk()->assertJsonStructure(['error']);
+
+    // Nothing changed.
+    expect($book->fresh()->entries()->count())->toBe(1)
+        ->and($book->fresh()->tags()->pluck('name')->all())->toBe(['work']);
+});
+
+it('lets a READ/WRITE member manage entries but NOT tags (tags need FULL)', function () {
+    [$book, $headers] = sharedBookWithTier(AddressBookRule::PERM_READ_WRITE);
+    $g = $book->guid;
+
+    // Entries: allowed → empty 200 body.
+    $add = $this->postJson("/api/ab/peer/add/$g", ['id' => '99', 'alias' => 'ok'], $headers)->assertOk();
+    expect($add->getContent())->toBe('');
+    expect($book->fresh()->entries()->where('rustdesk_id', '99')->exists())->toBeTrue();
+
+    // Tags: rejected with the Pro-shaped error.
+    $this->postJson("/api/ab/tag/add/$g", ['name' => 'nope', 'color' => 0], $headers)
+        ->assertOk()->assertJsonStructure(['error']);
+    $this->putJson("/api/ab/tag/rename/$g", ['old' => 'work', 'new' => 'x'], $headers)
+        ->assertOk()->assertJsonStructure(['error']);
+
+    expect($book->fresh()->tags()->pluck('name')->all())->toBe(['work']);
+});
+
+it('lets a FULL-control member manage entries AND tags', function () {
+    [$book, $headers] = sharedBookWithTier(AddressBookRule::PERM_FULL);
+    $g = $book->guid;
+
+    $this->postJson("/api/ab/peer/add/$g", ['id' => '99'], $headers)->assertOk();
+    $this->postJson("/api/ab/tag/add/$g", ['name' => 'urgent', 'color' => 0], $headers)->assertOk();
+
+    expect($book->fresh()->entries()->where('rustdesk_id', '99')->exists())->toBeTrue()
+        ->and($book->fresh()->tags()->pluck('name')->sort()->values()->all())->toBe(['urgent', 'work']);
+});
+
 it('matches group share rules for every group a multi-group user belongs to', function () {
     $owner = apiUser();
     $member = apiUser();

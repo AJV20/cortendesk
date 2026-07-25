@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\ClientToken;
 use App\Models\LoginLog;
 use App\Models\User;
+use App\Services\OidcService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -16,12 +17,34 @@ class ClientAuthController extends Controller
     use SerializesUsers;
 
     /**
-     * GET /api/login-options — OIDC provider list (none yet).
-     * Must also answer HEAD: the client uses this URL as its TLS probe.
+     * Provider name advertised to the client and echoed back as `op`.
+     * The console has a single OIDC provider, so this is a fixed handle.
+     */
+    public const CLIENT_PROVIDER = 'sso';
+
+    /**
+     * GET /api/login-options — the third-party sign-in buttons the client shows.
+     *
+     * This response IS the client's SSO UI: the stock app renders a button per
+     * entry, so enabling SSO here makes one appear with no client change. The
+     * `common-oidc/<json>` form carries a display name for the button; we send
+     * a single entry because the console has one provider (spec §2).
+     *
+     * Must also answer HEAD — the client uses this URL as its TLS probe.
      */
     public function loginOptions(): JsonResponse
     {
-        return response()->json([]);
+        $oidc = app(OidcService::class);
+
+        if (! $oidc->isEnabled()) {
+            return response()->json([]);
+        }
+
+        // The client renders "Continue with {name}", so `name` carries the
+        // display wording — there is no separate label field it reads.
+        return response()->json([
+            'common-oidc/'.json_encode([['name' => $oidc->clientProviderName()]]),
+        ]);
     }
 
     /** POST /api/login — spec §3. */

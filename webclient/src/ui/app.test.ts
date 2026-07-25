@@ -3,6 +3,7 @@ import {
   QUALITY,
   STATE_LABEL,
   ICONS,
+  PERMISSION_CONTROLS,
   buildSessionConfig,
   cursorCss,
   displayToRect,
@@ -171,6 +172,22 @@ describe('iconHtml', () => {
       expect(html).toContain('<svg');
       expect(html).toContain('stroke="currentColor"');
       expect(html).toContain('aria-hidden="true"');
+    }
+  });
+});
+
+describe('PERMISSION_CONTROLS', () => {
+  it('maps the peer permissions that gate a toolbar control', () => {
+    // Names must match PermissionInfo_Permission in the generated protobuf; a
+    // rename there silently stops the gating from ever firing.
+    expect(PERMISSION_CONTROLS.File.id).toBe('rd-btn-files');
+    expect(PERMISSION_CONTROLS.Clipboard.id).toBe('rd-btn-clip');
+    expect(PERMISSION_CONTROLS.Keyboard.id).toBe('rd-btn-cad');
+  });
+
+  it('leaves ungated permissions out rather than mapping them to nothing', () => {
+    for (const kind of ['Audio', 'Restart', 'Recording', 'BlockInput', 'PrivacyMode']) {
+      expect(PERMISSION_CONTROLS[kind]).toBeUndefined();
     }
   });
 });

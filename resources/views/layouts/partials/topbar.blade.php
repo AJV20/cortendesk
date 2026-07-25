@@ -28,7 +28,7 @@
 
         <ul class="topbar-menu d-flex align-items-center gap-3">
 
-            @if (auth()->user()?->is_admin && ($newVersion = \App\Support\UpdateChecker::upgradeAvailable()))
+            @if (auth()->user()?->consoleAllows('setting') && ($newVersion = \App\Support\UpdateChecker::upgradeAvailable()))
                 <li>
                     <a class="nav-link" href="{{ \App\Support\UpdateChecker::UPGRADE_DOC }}" target="_blank" rel="noopener"
                        data-bs-toggle="tooltip" data-bs-placement="bottom" title="Version {{ $newVersion }} is available — how to upgrade">
@@ -60,7 +60,7 @@
                     </span>
                     <span class="d-lg-flex flex-column gap-1 d-none">
                         <h5 class="my-0">{{ auth()->user()?->displayName() }}</h5>
-                        <h6 class="my-0 fw-normal">{{ auth()->user()?->is_admin ? 'Administrator' : 'User' }}</h6>
+                        <h6 class="my-0 fw-normal">{{ auth()->user()?->is_admin ? 'Administrator' : (auth()->user()?->role?->name ?? 'User') }}</h6>
                     </span>
                 </a>
                 <div class="dropdown-menu dropdown-menu-end dropdown-menu-animated profile-dropdown">
@@ -68,9 +68,14 @@
                         <h6 class="text-overflow m-0">Welcome!</h6>
                     </div>
 
-                    <a href="javascript:void(0);" class="dropdown-item">
+                    <a href="{{ route('account') }}" class="dropdown-item">
                         <i class="ri-account-circle-line fs-18 align-middle me-1"></i>
                         <span>My Account</span>
+                    </a>
+
+                    <a href="{{ route('account.two-factor') }}" class="dropdown-item">
+                        <i class="ri-shield-keyhole-line fs-18 align-middle me-1"></i>
+                        <span>Two-Factor Authentication</span>
                     </a>
 
                     <form method="POST" action="{{ route('logout') }}">

@@ -29,6 +29,23 @@
 
     <div class="h-100" id="leftside-menu-container" data-simplebar>
 
+        @php
+            // Delegated roles (PLAN D4). consoleAllows() returns true for
+            // is_admin and, for a user with no role, for exactly the areas a
+            // non-admin could always reach — so this sidebar renders
+            // identically on an install with no roles defined.
+            $u = auth()->user();
+            $canDevices = $u?->consoleAllows('device');
+            $canAddressBooks = $u?->consoleAllows('address_book');
+            $canGroups = $u?->consoleAllows('group');
+            $canUsers = $u?->consoleAllows('user');
+            $canStrategies = $u?->consoleAllows('strategy');
+            $canAudit = $u?->consoleAllows('audit');
+            $canAuditManage = $u?->consoleAllows('audit', 'rw');
+            $canSettings = $u?->consoleAllows('setting');
+            $canRoles = $u?->is_admin;
+        @endphp
+
         <ul class="side-nav">
 
             <li class="side-nav-item {{ request()->routeIs('overview') ? 'menuitem-active' : '' }}">
@@ -38,22 +55,28 @@
                 </a>
             </li>
 
-            <li class="side-nav-title">Manage</li>
+            @if ($canDevices || $canAddressBooks || $canGroups || $canUsers || $canStrategies || $canRoles)
+                <li class="side-nav-title">Manage</li>
+            @endif
 
-            <li class="side-nav-item {{ request()->routeIs('devices') ? 'menuitem-active' : '' }}">
-                <a href="{{ route('devices') }}" class="side-nav-link {{ request()->routeIs('devices') ? 'active' : '' }}">
-                    <i class="ri-computer-line"></i>
-                    <span class="badge bg-success float-end" id="sidebar-online-count"></span>
-                    <span> Devices </span>
-                </a>
-            </li>
+            @if ($canDevices)
+                <li class="side-nav-item {{ request()->routeIs('devices') ? 'menuitem-active' : '' }}">
+                    <a href="{{ route('devices') }}" class="side-nav-link {{ request()->routeIs('devices') ? 'active' : '' }}">
+                        <i class="ri-computer-line"></i>
+                        <span class="badge bg-success float-end" id="sidebar-online-count"></span>
+                        <span> Devices </span>
+                    </a>
+                </li>
+            @endif
 
-            <li class="side-nav-item {{ request()->routeIs('address-books') ? 'menuitem-active' : '' }}">
-                <a href="{{ route('address-books') }}" class="side-nav-link {{ request()->routeIs('address-books') ? 'active' : '' }}">
-                    <i class="ri-contacts-book-2-line"></i>
-                    <span> Address Books </span>
-                </a>
-            </li>
+            @if ($canAddressBooks)
+                <li class="side-nav-item {{ request()->routeIs('address-books') ? 'menuitem-active' : '' }}">
+                    <a href="{{ route('address-books') }}" class="side-nav-link {{ request()->routeIs('address-books') ? 'active' : '' }}">
+                        <i class="ri-contacts-book-2-line"></i>
+                        <span> Address Books </span>
+                    </a>
+                </li>
+            @endif
 
             @if (config('cortendesk.native_webclient'))
                 <li class="side-nav-item">
@@ -71,14 +94,16 @@
                 </li>
             @endif
 
-            @if (auth()->user()?->is_admin)
+            @if ($canGroups)
                 <li class="side-nav-item {{ request()->routeIs('groups') ? 'menuitem-active' : '' }}">
                     <a href="{{ route('groups') }}" class="side-nav-link {{ request()->routeIs('groups') ? 'active' : '' }}">
                         <i class="ri-group-line"></i>
                         <span> Groups </span>
                     </a>
                 </li>
+            @endif
 
+            @if ($canUsers)
                 <li class="side-nav-item {{ request()->routeIs('users') ? 'menuitem-active' : '' }}">
                     <a href="{{ route('users') }}" class="side-nav-link {{ request()->routeIs('users') ? 'active' : '' }}">
                         <i class="ri-user-settings-line"></i>
@@ -87,28 +112,50 @@
                 </li>
             @endif
 
-            <li class="side-nav-title">Monitor</li>
+            {{-- Roles are super-admin only: a delegated admin who could edit
+                 roles could grant themselves anything (PLAN D4). --}}
+            @if ($canRoles)
+                <li class="side-nav-item {{ request()->routeIs('roles') ? 'menuitem-active' : '' }}">
+                    <a href="{{ route('roles') }}" class="side-nav-link {{ request()->routeIs('roles') ? 'active' : '' }}">
+                        <i class="ri-shield-user-line"></i>
+                        <span> Roles </span>
+                    </a>
+                </li>
+            @endif
 
-            <li class="side-nav-item {{ request()->routeIs('logs.*') ? 'menuitem-active' : '' }}">
-                <a data-bs-toggle="collapse" href="#sidebarLogs" aria-expanded="{{ request()->routeIs('logs.*') ? 'true' : 'false' }}" aria-controls="sidebarLogs" class="side-nav-link">
-                    <i class="ri-file-list-3-line"></i>
-                    <span> Logs </span>
-                    <span class="menu-arrow"></span>
-                </a>
-                <div class="collapse {{ request()->routeIs('logs.*') ? 'show' : '' }}" id="sidebarLogs">
-                    <ul class="side-nav-second-level">
-                        <li class="{{ request()->routeIs('logs.connections') ? 'menuitem-active' : '' }}"><a href="{{ route('logs.connections') }}">Connections</a></li>
-                        <li class="{{ request()->routeIs('logs.file-transfers') ? 'menuitem-active' : '' }}"><a href="{{ route('logs.file-transfers') }}">File Transfers</a></li>
-                        <li class="{{ request()->routeIs('logs.alarms') ? 'menuitem-active' : '' }}"><a href="{{ route('logs.alarms') }}">Alarms</a></li>
-                        @if (auth()->user()?->is_admin)
-                            <li class="{{ request()->routeIs('logs.logins') ? 'menuitem-active' : '' }}"><a href="{{ route('logs.logins') }}">Logins</a></li>
-                            <li class="{{ request()->routeIs('logs.console') ? 'menuitem-active' : '' }}"><a href="{{ route('logs.console') }}">Console</a></li>
-                        @endif
-                    </ul>
-                </div>
-            </li>
+            @if ($canStrategies)
+                <li class="side-nav-item {{ request()->routeIs('strategies') ? 'menuitem-active' : '' }}">
+                    <a href="{{ route('strategies') }}" class="side-nav-link {{ request()->routeIs('strategies') ? 'active' : '' }}">
+                        <i class="ri-shield-keyhole-line"></i>
+                        <span> Strategies </span>
+                    </a>
+                </li>
+            @endif
 
-            @if (auth()->user()?->is_admin)
+            @if ($canAudit)
+                <li class="side-nav-title">Monitor</li>
+
+                <li class="side-nav-item {{ request()->routeIs('logs.*') ? 'menuitem-active' : '' }}">
+                    <a data-bs-toggle="collapse" href="#sidebarLogs" aria-expanded="{{ request()->routeIs('logs.*') ? 'true' : 'false' }}" aria-controls="sidebarLogs" class="side-nav-link">
+                        <i class="ri-file-list-3-line"></i>
+                        <span> Logs </span>
+                        <span class="menu-arrow"></span>
+                    </a>
+                    <div class="collapse {{ request()->routeIs('logs.*') ? 'show' : '' }}" id="sidebarLogs">
+                        <ul class="side-nav-second-level">
+                            <li class="{{ request()->routeIs('logs.connections') ? 'menuitem-active' : '' }}"><a href="{{ route('logs.connections') }}">Connections</a></li>
+                            <li class="{{ request()->routeIs('logs.file-transfers') ? 'menuitem-active' : '' }}"><a href="{{ route('logs.file-transfers') }}">File Transfers</a></li>
+                            <li class="{{ request()->routeIs('logs.alarms') ? 'menuitem-active' : '' }}"><a href="{{ route('logs.alarms') }}">Alarms</a></li>
+                            @if ($canAuditManage)
+                                <li class="{{ request()->routeIs('logs.logins') ? 'menuitem-active' : '' }}"><a href="{{ route('logs.logins') }}">Logins</a></li>
+                                <li class="{{ request()->routeIs('logs.console') ? 'menuitem-active' : '' }}"><a href="{{ route('logs.console') }}">Console</a></li>
+                            @endif
+                        </ul>
+                    </div>
+                </li>
+            @endif
+
+            @if ($canSettings)
                 <li class="side-nav-title">System</li>
 
                 <li class="side-nav-item {{ request()->routeIs('settings') ? 'menuitem-active' : '' }}">
@@ -135,7 +182,7 @@
         <div class="clearfix"></div>
     </div>
 
-    @if (auth()->user()?->is_admin)
+    @if ($canSettings)
         @php $rdUpgrade = \App\Support\UpdateChecker::upgradeAvailable(); @endphp
         <div class="rd-sidebar-version">
             <span class="rd-sidebar-version-num">v{{ config('cortendesk.api_version') }}</span>

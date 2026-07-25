@@ -93,6 +93,16 @@ function q<T extends Element>(scope: ParentNode, sel: string): T {
   return el;
 }
 
+/**
+ * Peer permission name (PermissionInfo_Permission) -> the toolbar control it
+ * governs. Permissions with no control here are tracked but change nothing.
+ */
+export const PERMISSION_CONTROLS: Record<string, { id: string; title: string }> = {
+  File: { id: 'rd-btn-files', title: 'File transfer' },
+  Clipboard: { id: 'rd-btn-clip', title: 'Send clipboard to remote' },
+  Keyboard: { id: 'rd-btn-cad', title: 'Send Ctrl+Alt+Del' },
+};
+
 export class RdApp {
   private cfg: RdGlobalConfig | undefined;
   private el!: Els;
@@ -113,6 +123,9 @@ export class RdApp {
   private pendingHashHex: string | undefined; // h1 emitted this session, pending persist
   private connectedWithSavedHash = false; // this attempt used a stored hash
   private sessionHashHex: string | undefined; // h1 of the live session — lets the file panel log in silently
+  /** Peer-advertised permissions for THIS session; absent means granted. */
+  private permissions: Record<string, boolean> = {};
+
   private filePanel: FilePanel | undefined;
 
   mount(): void {
@@ -439,6 +452,7 @@ export class RdApp {
     worker.postMessage(cmd, [offscreen]);
     this.detach = attachInput(canvas, (c) => this.post(c), () => this.currentRect());
     this.el.peerLabel.textContent = this.peerId;
+    this.resetPermissions();
     this.setState('connecting');
   }
 
@@ -506,7 +520,7 @@ export class RdApp {
           .catch(() => this.toast('Remote clipboard received (press Ctrl+V on this page to sync)'));
         break;
       case 'permission':
-        this.toast(`Peer ${ev.enabled ? 'enabled' : 'disabled'} ${ev.kind}`);
+        this.applyPermission(ev.kind, ev.enabled);
         break;
       case 'credentials':
         this.pendingHashHex = ev.hashHex; // persisted only once the session streams
@@ -634,9 +648,64 @@ export class RdApp {
 
   // Slide the file-transfer panel over the live desktop. Its FILE_TRANSFER
   // connection reuses this session's h1 credential — no second password prompt.
+  /**
+   * Apply a peer-advertised permission to the toolbar.
+   *
+   * The peer is the only thing that ENFORCES these — a server policy (a
+   * CortenDesk strategy, or the user's own settings) is applied on the
+   * controlled machine, and it will refuse the capability whatever this client
+   * does. Gating here is purely so the operator sees a disabled control instead
+   * of clicking one that silently fails.
+   *
+   * Permissions are assumed granted until the peer says otherwise: it reports
+   * the restricted ones after login, and anything it never mentions is allowed.
+   */
+  private applyPermission(kind: string, enabled: boolean): void {
+    this.permissions[kind] = enabled;
+
+    const target = PERMISSION_CONTROLS[kind];
+    if (!target) {
+      return; // nothing in the toolbar maps to it
+    }
+
+    const el = this.el.toolbar.querySelector<HTMLButtonElement>(`#${target.id}`);
+    if (!el) {
+      return;
+    }
+
+    el.disabled = !enabled;
+    el.title = enabled ? target.title : `${target.title} — not permitted by this device`;
+    el.setAttribute('aria-label', el.title);
+
+    // A capability withdrawn mid-session has to close what it opened.
+    if (!enabled && kind === 'File') {
+      this.filePanel?.destroy();
+      this.filePanel = undefined;
+    }
+
+    this.toast(`Peer ${enabled ? 'enabled' : 'disabled'} ${target.title.toLowerCase()}`);
+  }
+
+  /** Forget peer permissions — they belong to one session, not to the client. */
+  private resetPermissions(): void {
+    this.permissions = {};
+    for (const { id, title } of Object.values(PERMISSION_CONTROLS)) {
+      const el = this.el.toolbar.querySelector<HTMLButtonElement>(`#${id}`);
+      if (el) {
+        el.disabled = false;
+        el.title = title;
+        el.setAttribute('aria-label', title);
+      }
+    }
+  }
+
   private openFileTransfer(): void {
     if (this.state !== 'streaming') {
       this.toast('Connect to a device first');
+      return;
+    }
+    if (this.permissions.File === false) {
+      this.toast('This device does not permit file transfer');
       return;
     }
     if (!this.filePanel) {

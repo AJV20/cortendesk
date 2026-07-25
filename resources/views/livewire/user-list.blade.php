@@ -1,4 +1,11 @@
 <div>
+    @php
+        // Roles gate the screen; is_admin additionally gates the two controls
+        // that could hand out MORE authority than the actor holds (D4).
+        $canManageUsers = auth()->user()?->consoleAllows('user', 'rw');
+        $isSuperAdmin = auth()->user()?->is_admin;
+    @endphp
+
     <div class="card">
         <div class="card-body">
 
@@ -29,9 +36,11 @@
                     <button type="button" class="btn btn-light w-100" wire:click="resetFilters">Reset</button>
                 </div>
                 <div class="col-6 col-md-2 text-md-end">
-                    <button type="button" class="btn btn-primary w-100" wire:click="create">
-                        <i class="ri-add-line me-1"></i>Add User
-                    </button>
+                    @if ($canManageUsers)
+                        <button type="button" class="btn btn-primary w-100" wire:click="create">
+                            <i class="ri-add-line me-1"></i>Add User
+                        </button>
+                    @endif
                 </div>
             </div>
 
@@ -52,6 +61,10 @@
                     </thead>
                     <tbody>
                     @forelse ($users as $user)
+                        @php
+                            $canTouch = $canManageUsers && ($isSuperAdmin
+                                || (! $user->is_admin && $user->role_id === null && $user->id !== auth()->id()));
+                        @endphp
                         <tr wire:key="u{{ $user->id }}">
                             <td>
                                 <div class="d-flex align-items-center gap-2">
@@ -76,6 +89,8 @@
                             <td>
                                 @if ($user->is_admin)
                                     <span class="badge bg-danger-subtle text-danger">Administrator</span>
+                                @elseif ($user->role)
+                                    <span class="badge bg-info-subtle text-info">{{ $user->role->name }}</span>
                                 @else
                                     <span class="badge bg-secondary-subtle text-secondary">User</span>
                                 @endif
@@ -86,12 +101,19 @@
                                 @else
                                     <span class="badge bg-warning-subtle text-warning">Disabled</span>
                                 @endif
+                                @if ($user->totp_enabled)
+                                    <span class="badge bg-info-subtle text-info" title="Two-factor authentication enabled"><i class="ri-shield-keyhole-line"></i> 2FA</span>
+                                @endif
                             </td>
                             <td>{{ $user->devices_count }}</td>
                             <td>
                                 <span title="{{ $user->created_at }}">{{ $user->created_at?->format('Y-m-d') }}</span>
                             </td>
                             <td class="text-end">
+                                @unless ($canTouch)
+                                    <span class="text-muted">—</span>
+                                @endunless
+                                @if ($canTouch)
                                 <a href="javascript:void(0);" class="text-primary me-2" wire:click="edit({{ $user->id }})">Edit</a>
                                 <a href="javascript:void(0);" class="text-primary me-2" wire:click="openAssign({{ $user->id }})">Devices</a>
                                 @if ($user->id === auth()->id())
@@ -106,9 +128,15 @@
                                     <a href="javascript:void(0);" class="text-secondary me-2"
                                        wire:click="forceLogout({{ $user->id }})"
                                        wire:confirm="Force {{ $user->username }} to log out everywhere? This signs out their RustDesk clients and console sessions.">Log out</a>
+                                    @if ($user->totp_enabled)
+                                        <a href="javascript:void(0);" class="text-warning me-2"
+                                           wire:click="resetTwoFactor({{ $user->id }})"
+                                           wire:confirm="Reset 2FA for {{ $user->username }}? Their authenticator and recovery codes are removed and they must re-enroll.">Reset 2FA</a>
+                                    @endif
                                     <a href="javascript:void(0);" class="text-danger"
                                        wire:click="deleteUser({{ $user->id }})"
                                        wire:confirm="Delete user {{ $user->username }}? Their devices will be kept but no longer assigned to any user.">Delete</a>
+                                @endif
                                 @endif
                             </td>
                         </tr>
@@ -124,6 +152,10 @@
             {{-- Mobile card list (below md) --}}
             <div class="d-md-none">
                 @forelse ($users as $user)
+                    @php
+                        $canTouch = $canManageUsers && ($isSuperAdmin
+                            || (! $user->is_admin && $user->role_id === null && $user->id !== auth()->id()));
+                    @endphp
                     <div class="card border mb-2" wire:key="mu{{ $user->id }}">
                         <div class="card-body p-2">
                             <div class="d-flex justify-content-between align-items-start gap-2">
@@ -140,11 +172,16 @@
                                 <div class="text-end flex-shrink-0">
                                     @if ($user->is_admin)
                                         <span class="badge bg-danger-subtle text-danger">Admin</span>
+                                    @elseif ($user->role)
+                                        <span class="badge bg-info-subtle text-info">{{ $user->role->name }}</span>
                                     @endif
                                     @if ($user->is_active)
                                         <span class="badge bg-success-subtle text-success">Active</span>
                                     @else
                                         <span class="badge bg-warning-subtle text-warning">Disabled</span>
+                                    @endif
+                                    @if ($user->totp_enabled)
+                                        <span class="badge bg-info-subtle text-info" title="2FA enabled"><i class="ri-shield-keyhole-line"></i></span>
                                     @endif
                                 </div>
                             </div>
@@ -155,6 +192,7 @@
                                 <span class="text-nowrap">{{ $user->created_at?->format('Y-m-d') }}</span>
                             </small>
                             <div class="d-flex flex-nowrap justify-content-end gap-1 mt-1">
+                                @if ($canTouch)
                                 <a href="javascript:void(0);" class="btn btn-sm btn-light" wire:click="edit({{ $user->id }})"><i class="ri-pencil-line"></i></a>
                                 <a href="javascript:void(0);" class="btn btn-sm btn-light" title="Assign devices" wire:click="openAssign({{ $user->id }})"><i class="ri-computer-line"></i></a>
                                 @unless ($user->id === auth()->id())
@@ -167,10 +205,18 @@
                                        wire:confirm="Force {{ $user->username }} to log out everywhere? This signs out their RustDesk clients and console sessions.">
                                         <i class="ri-logout-box-r-line"></i>
                                     </a>
+                                    @if ($user->totp_enabled)
+                                        <a href="javascript:void(0);" class="btn btn-sm btn-light text-warning" title="Reset 2FA"
+                                           wire:click="resetTwoFactor({{ $user->id }})"
+                                           wire:confirm="Reset 2FA for {{ $user->username }}? Their authenticator and recovery codes are removed and they must re-enroll.">
+                                            <i class="ri-shield-keyhole-line"></i>
+                                        </a>
+                                    @endif
                                     <a href="javascript:void(0);" class="btn btn-sm btn-light text-danger"
                                        wire:click="deleteUser({{ $user->id }})"
                                        wire:confirm="Delete user {{ $user->username }}? Their devices will be kept but no longer assigned to any user."><i class="ri-delete-bin-line"></i></a>
                                 @endunless
+                                @endif
                             </div>
                         </div>
                     </div>
@@ -232,11 +278,33 @@
                                                wire:model="password" autocomplete="new-password">
                                         @error('password') <div class="invalid-feedback">{{ $message }}</div> @enderror
                                     </div>
-                                    <div class="form-check form-switch mb-2">
-                                        <input class="form-check-input" type="checkbox" role="switch" id="ul-admin" wire:model.live="is_admin">
-                                        <label class="form-check-label" for="ul-admin">Administrator</label>
-                                        <small class="text-muted d-block">Admins see and manage everything.</small>
-                                    </div>
+                                    @if ($isSuperAdmin)
+                                        <div class="form-check form-switch mb-2">
+                                            <input class="form-check-input" type="checkbox" role="switch" id="ul-admin" wire:model.live="is_admin">
+                                            <label class="form-check-label" for="ul-admin">Administrator</label>
+                                            <small class="text-muted d-block">Admins see and manage everything.</small>
+                                        </div>
+
+                                        {{-- Delegated role (PLAN D4). Only a full administrator may
+                                             grant one; save() strips it from anyone else's payload. --}}
+                                        @unless ($is_admin)
+                                            <div class="mb-3">
+                                                <label class="form-label" for="ul-role">Role</label>
+                                                <select id="ul-role" class="form-select @error('role_id') is-invalid @enderror" wire:model="role_id">
+                                                    <option value="">Standard user</option>
+                                                    @foreach ($roles as $r)
+                                                        <option value="{{ $r->id }}">{{ $r->name }}</option>
+                                                    @endforeach
+                                                </select>
+                                                @error('role_id') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                                                <small class="text-muted d-block">
+                                                    A role opens extra console sections. It never widens which devices
+                                                    or address books this user can see — that stays with the grants below.
+                                                    <a href="{{ route('roles') }}">Manage roles</a>
+                                                </small>
+                                            </div>
+                                        @endunless
+                                    @endif
                                     <div class="form-check form-switch mb-3">
                                         <input class="form-check-input" type="checkbox" role="switch" id="ul-active" wire:model="is_active"
                                                @if ($editing === auth()->id()) disabled @endif>
@@ -258,7 +326,7 @@
                                                     <label class="form-check-label" for="ul-ug-{{ $g->id }}">{{ $g->name }}</label>
                                                 </div>
                                             @empty
-                                                <p class="text-muted fs-13 mb-0">No user groups exist yet.</p>
+                                                <p class="text-muted fs-13 mb-0">{{ auth()->user()?->is_admin ? 'No user groups exist yet.' : 'No user groups you can grant.' }}</p>
                                             @endforelse
                                         </div>
                                         @error('user_group_ids') <div class="text-danger fs-13">{{ $message }}</div> @enderror
@@ -278,7 +346,7 @@
                                                         <label class="form-check-label" for="ul-dg-{{ $dg->id }}">{{ $dg->name }}</label>
                                                     </div>
                                                 @empty
-                                                    <p class="text-muted fs-13 mb-0">No device groups exist yet.</p>
+                                                    <p class="text-muted fs-13 mb-0">{{ auth()->user()?->is_admin ? 'No device groups exist yet.' : 'No device groups you can grant.' }}</p>
                                                 @endforelse
                                             </div>
                                         </div>

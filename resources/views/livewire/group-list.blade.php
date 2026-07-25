@@ -163,20 +163,42 @@
 
                             {{-- Device-group access (user groups only) --}}
                             @if ($modalType === 'users')
-                                <div class="mb-1">
+                                <div class="mb-3">
                                     <label class="form-label">Device group access</label>
                                     <p class="text-muted fs-13 mb-2">Every member of this user group sees the devices in the groups checked below (in addition to devices they own or were granted individually).</p>
-                                    @forelse ($deviceGroups as $dg)
+                                    @forelse ($grantableDeviceGroups as $dg)
                                         <div class="form-check">
                                             <input class="form-check-input" type="checkbox" id="gl-dg-{{ $dg->id }}"
                                                    value="{{ $dg->id }}" wire:model="device_group_ids">
                                             <label class="form-check-label" for="gl-dg-{{ $dg->id }}">{{ $dg->name }}</label>
                                         </div>
                                     @empty
-                                        <p class="text-muted fs-13">No device groups exist yet.</p>
+                                        <p class="text-muted fs-13">{{ auth()->user()?->is_admin ? 'No device groups exist yet.' : 'No device groups you can grant.' }}</p>
                                     @endforelse
                                 </div>
                             @endif
+
+                            {{-- Accessed from: which user groups may see this group (B4) --}}
+                            <div class="mb-0">
+                                <label class="form-label">Accessed from</label>
+                                <p class="text-muted fs-13 mb-2">
+                                    @if ($modalType === 'users')
+                                        Members of the user groups checked below may see the members of this group (their machines appear in the group tab).
+                                    @else
+                                        Members of the user groups checked below may see the devices in this folder.
+                                    @endif
+                                </p>
+                                @php $accessorOptions = $userGroups->where('id', '!=', $editing ?? 0); @endphp
+                                @forelse ($accessorOptions as $ug)
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="gl-af-{{ $ug->id }}"
+                                               value="{{ $ug->id }}" wire:model="accessor_group_ids">
+                                        <label class="form-check-label" for="gl-af-{{ $ug->id }}">{{ $ug->name }}</label>
+                                    </div>
+                                @empty
+                                    <p class="text-muted fs-13 mb-0">No other user groups exist yet.</p>
+                                @endforelse
+                            </div>
                         </div>
                         <div class="modal-footer">
                             <button type="button" class="btn btn-light" wire:click="closeModal">Cancel</button>

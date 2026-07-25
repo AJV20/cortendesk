@@ -83,7 +83,7 @@
                         <button type="button" class="btn btn-secondary w-100" wire:click="$set('trashed', false)">
                             <i class="ri-arrow-left-line me-1"></i>Back to Devices
                         </button>
-                    @else
+                    @elseif (auth()->user()?->consoleAllows('device', 'rw'))
                         <button type="button" class="btn btn-primary w-100" wire:click="create">
                             <i class="ri-add-line me-1"></i>Add Device
                         </button>
@@ -92,7 +92,15 @@
             </div>
 
             @unless ($trashed)
-                <div class="mb-2 text-end">
+                <div class="mb-2 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <div>
+                        @if ($pendingCount > 0)
+                            <a href="javascript:void(0);" class="fs-13 text-warning fw-semibold" wire:click="$set('pendingTab', true)">
+                                <i class="ri-time-line me-1"></i>Pending approval
+                                <span class="badge bg-warning-subtle text-warning ms-1">{{ $pendingCount }}</span>
+                            </a>
+                        @endif
+                    </div>
                     <a href="javascript:void(0);" class="fs-13 text-muted" wire:click="$set('trashed', true)">
                         <i class="ri-delete-bin-line me-1"></i>Recycle Bin ({{ $trashedCount }})
                     </a>
@@ -163,10 +171,12 @@
                             </td>
                             <td class="text-end">
                                 @if ($trashed)
-                                    <a href="javascript:void(0);" class="text-success me-2" wire:click="restoreDevice({{ $device->id }})">Restore</a>
-                                    <a href="javascript:void(0);" class="text-danger"
-                                       wire:click="forceDeleteDevice({{ $device->id }})"
-                                       wire:confirm="PERMANENTLY delete device {{ $device->rustdesk_id }}? This cannot be undone.">Destroy</a>
+                                    @if (auth()->user()?->consoleAllows('device', 'rw'))
+                                        <a href="javascript:void(0);" class="text-success me-2" wire:click="restoreDevice({{ $device->id }})">Restore</a>
+                                        <a href="javascript:void(0);" class="text-danger"
+                                           wire:click="forceDeleteDevice({{ $device->id }})"
+                                           wire:confirm="PERMANENTLY delete device {{ $device->rustdesk_id }}? This cannot be undone.">Destroy</a>
+                                    @endif
                                 @else
                                     @if (config('cortendesk.native_webclient'))
                                         <a href="{{ route('webclient') }}?id={{ $device->rustdesk_id }}"
@@ -178,10 +188,12 @@
                                            target="cortendesk-webclient" rel="noopener" class="text-info me-2"
                                            title="Connect in the browser">Web Client</a>
                                     @endif
-                                    <a href="javascript:void(0);" class="text-primary me-2" wire:click="edit({{ $device->id }})">Edit</a>
-                                    <a href="javascript:void(0);" class="text-danger"
-                                       wire:click="deleteDevice({{ $device->id }})"
-                                       wire:confirm="Move device {{ $device->rustdesk_id }} to the recycle bin?">Delete</a>
+                                    @if (auth()->user()?->consoleAllows('device', 'rw'))
+                                        <a href="javascript:void(0);" class="text-primary me-2" wire:click="edit({{ $device->id }})">Edit</a>
+                                        <a href="javascript:void(0);" class="text-danger"
+                                           wire:click="deleteDevice({{ $device->id }})"
+                                           wire:confirm="Move device {{ $device->rustdesk_id }} to the recycle bin?">Delete</a>
+                                    @endif
                                 @endif
                             </td>
                         </tr>
@@ -229,10 +241,12 @@
                                 </small>
                                 <div class="d-flex flex-nowrap gap-1 flex-shrink-0">
                                     @if ($trashed)
-                                        <a href="javascript:void(0);" class="btn btn-sm btn-light text-success" wire:click="restoreDevice({{ $device->id }})"><i class="ri-arrow-go-back-line"></i></a>
-                                        <a href="javascript:void(0);" class="btn btn-sm btn-light text-danger"
-                                           wire:click="forceDeleteDevice({{ $device->id }})"
-                                           wire:confirm="PERMANENTLY delete device {{ $device->rustdesk_id }}?"><i class="ri-close-circle-line"></i></a>
+                                        @if (auth()->user()?->consoleAllows('device', 'rw'))
+                                            <a href="javascript:void(0);" class="btn btn-sm btn-light text-success" wire:click="restoreDevice({{ $device->id }})"><i class="ri-arrow-go-back-line"></i></a>
+                                            <a href="javascript:void(0);" class="btn btn-sm btn-light text-danger"
+                                               wire:click="forceDeleteDevice({{ $device->id }})"
+                                               wire:confirm="PERMANENTLY delete device {{ $device->rustdesk_id }}?"><i class="ri-close-circle-line"></i></a>
+                                        @endif
                                     @else
                                         @if (config('cortendesk.native_webclient'))
                                             <a href="{{ route('webclient') }}?id={{ $device->rustdesk_id }}"
@@ -244,10 +258,12 @@
                                                target="cortendesk-webclient" rel="noopener" class="btn btn-sm btn-light text-info"
                                                title="Connect in the browser"><i class="ri-global-line"></i></a>
                                         @endif
-                                        <a href="javascript:void(0);" class="btn btn-sm btn-light" wire:click="edit({{ $device->id }})"><i class="ri-pencil-line"></i></a>
-                                        <a href="javascript:void(0);" class="btn btn-sm btn-light text-danger"
-                                           wire:click="deleteDevice({{ $device->id }})"
-                                           wire:confirm="Move device {{ $device->rustdesk_id }} to the recycle bin?"><i class="ri-delete-bin-line"></i></a>
+                                        @if (auth()->user()?->consoleAllows('device', 'rw'))
+                                            <a href="javascript:void(0);" class="btn btn-sm btn-light" wire:click="edit({{ $device->id }})"><i class="ri-pencil-line"></i></a>
+                                            <a href="javascript:void(0);" class="btn btn-sm btn-light text-danger"
+                                               wire:click="deleteDevice({{ $device->id }})"
+                                               wire:confirm="Move device {{ $device->rustdesk_id }} to the recycle bin?"><i class="ri-delete-bin-line"></i></a>
+                                        @endif
                                     @endif
                                 </div>
                             </div>
@@ -317,6 +333,71 @@
                                 <label class="form-label">Note</label>
                                 <textarea class="form-control" rows="2" wire:model="formNote" maxlength="500"></textarea>
                             </div>
+
+                            {{-- Effective strategy inspector (PLAN C4) --}}
+                            @if ($editingId !== 0 && auth()->user()?->is_admin && $strategyExplain)
+                                <hr class="my-3">
+                                <label class="form-label" for="dl-strategy">Strategy</label>
+                                <select id="dl-strategy" class="form-select" wire:model="formStrategyId">
+                                    <option value="0">Inherit (owner, group, or default)</option>
+                                    @foreach ($strategies as $s)
+                                        <option value="{{ $s->id }}">
+                                            {{ $s->name }}@unless ($s->enabled) (disabled)@endunless
+                                        </option>
+                                    @endforeach
+                                </select>
+                                <div class="form-text">A strategy set here wins over the owner's, the group's and the default.</div>
+
+                                <div class="mt-2 p-2 border rounded bg-light-subtle">
+                                    <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap">
+                                        <span class="fs-13 text-muted">In force now</span>
+                                        @if ($strategyExplain['resolved'])
+                                            <span class="badge bg-success-subtle text-success">{{ $strategyExplain['resolved']->name }}</span>
+                                        @else
+                                            <span class="badge bg-secondary-subtle text-secondary">None</span>
+                                        @endif
+                                    </div>
+                                    <ul class="list-unstyled mb-0 mt-2 fs-13">
+                                        @foreach ($strategyExplain['steps'] as $step)
+                                            <li class="d-flex justify-content-between align-items-start gap-2 py-1 border-top">
+                                                <span class="text-muted">
+                                                    {{ $step['label'] }}@if ($step['target'])<span class="text-body"> · {{ $step['target'] }}</span>@endif
+                                                </span>
+                                                <span class="text-end">
+                                                    @switch ($step['state'])
+                                                        @case ('applied')
+                                                            <span class="fw-semibold">{{ $step['strategy']->name }}</span>
+                                                            <span class="badge bg-success-subtle text-success ms-1">Wins</span>
+                                                            @break
+                                                        @case ('overridden')
+                                                            <span>{{ $step['strategy']->name }}</span>
+                                                            <span class="badge bg-secondary-subtle text-secondary ms-1">Overridden</span>
+                                                            @break
+                                                        @case ('disabled')
+                                                            <span>{{ $step['strategy']->name }}</span>
+                                                            <span class="badge bg-warning-subtle text-warning ms-1">Disabled — skipped</span>
+                                                            @break
+                                                        @case ('unset')
+                                                            <span class="text-muted">Not set</span>
+                                                            @break
+                                                        @default
+                                                            <span class="text-muted">No strategy</span>
+                                                    @endswitch
+                                                </span>
+                                            </li>
+                                        @endforeach
+                                    </ul>
+                                    @if ($strategyExplain['acked_at'])
+                                        <div class="fs-13 text-muted mt-2">
+                                            Device last confirmed a policy {{ $strategyExplain['acked_at']->diffForHumans() }}.
+                                        </div>
+                                    @elseif ($strategyExplain['resolved'])
+                                        <div class="fs-13 text-muted mt-2">
+                                            Not confirmed by the device yet — it applies on its next heartbeat.
+                                        </div>
+                                    @endif
+                                </div>
+                            @endif
                         </div>
                         <div class="modal-footer">
                             <button type="button" class="btn btn-light" wire:click="closeModal">Cancel</button>

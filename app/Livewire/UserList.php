@@ -2,10 +2,14 @@
 
 namespace App\Livewire;
 
+use App\Livewire\Concerns\AuthorizesConsole;
 use App\Models\ConsoleAudit;
-use App\Models\DeviceGroup;
+use App\Models\Device;
+use App\Models\Role;
+use App\Models\Strategy;
 use App\Models\User;
-use App\Models\UserGroup;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Livewire\Attributes\Url;
 use Livewire\Component;
@@ -13,7 +17,7 @@ use Livewire\WithPagination;
 
 class UserList extends Component
 {
-    use WithPagination;
+    use AuthorizesConsole, WithPagination;
 
     protected string $paginationTheme = 'bootstrap';
 
@@ -44,6 +48,12 @@ class UserList extends Component
 
     public bool $is_admin = false;
 
+    /**
+     * Delegated role for the user being edited; null = standard user. Named
+     * role_id on purpose — $role above is the list filter, not the editor.
+     */
+    public ?int $role_id = null;
+
     public bool $is_active = true;
 
     public string $password = '';
@@ -60,6 +70,48 @@ class UserList extends Component
 
     /** @var array<int,int> device ids selected in the assign modal */
     public array $assignDeviceIds = [];
+
+    /** The Users screen needs "View"; every mutator below re-checks "Manage". */
+    public function mount(): void
+    {
+        $this->authorizeConsole('user', 'r');
+    }
+
+    /**
+     * Guard the target of a delegated user-manager's action (PLAN D4).
+     *
+     * A role-holder may only touch plain users: never themselves (self-edit is
+     * the shortest path to granting yourself a device group or a better role —
+     * My Account is where you edit yourself), never a super-admin, and never
+     * another role-holder. A full administrator is unaffected.
+     */
+    private function guardTarget(User $target): void
+    {
+        if (auth()->user()?->is_admin) {
+            return;
+        }
+
+        abort_if($target->id === auth()->id(), 403);
+        abort_if($target->is_admin || $target->role_id !== null, 403);
+    }
+
+    /**
+     * Combine what a delegated actor is allowed to grant with what the target
+     * already holds beyond the actor's reach.
+     *
+     * The out-of-reach rows were never rendered in the editor, so saving that
+     * editor must not silently revoke them: an actor can only ever add or remove
+     * within their own scope.
+     *
+     * @param  array<int,int>  $allowed  clamped ids the form submitted
+     * @param  array<int,int>  $existing  ids the target already holds
+     * @param  array<int,int>  $reachable  the subset of $existing the actor may manage
+     * @return array<int,int>
+     */
+    private function mergeGrants(array $allowed, array $existing, array $reachable): array
+    {
+        return array_values(array_unique(array_merge($allowed, array_diff($existing, $reachable))));
+    }
 
     public function updatedSearch(): void
     {
@@ -84,13 +136,18 @@ class UserList extends Component
 
     public function create(): void
     {
+        $this->authorizeConsole('user', 'rw');
+
         $this->resetForm();
         $this->showModal = true;
     }
 
     public function edit(int $id): void
     {
+        $this->authorizeConsole('user', 'rw');
+
         $user = User::findOrFail($id);
+        $this->guardTarget($user);
 
         $this->resetForm();
         $this->editing = $user->id;
@@ -99,6 +156,7 @@ class UserList extends Component
         $this->email = $user->email ?? '';
         $this->user_group_ids = $user->groups()->pluck('user_groups.id')->all();
         $this->is_admin = $user->is_admin;
+        $this->role_id = $user->role_id;
         $this->is_active = $user->is_active;
         $this->device_group_ids = $user->deviceGroups()->pluck('device_groups.id')->all();
         $this->showModal = true;
@@ -106,6 +164,8 @@ class UserList extends Component
 
     public function save(): void
     {
+        $this->authorizeConsole('user', 'rw');
+
         $validated = $this->validate([
             'username' => ['required', 'string', 'max:255', Rule::unique('users', 'username')->ignore($this->editing)],
             'name' => ['nullable', 'string', 'max:255'],
@@ -113,18 +173,70 @@ class UserList extends Component
             'user_group_ids' => ['array'],
             'user_group_ids.*' => [Rule::exists('user_groups', 'id')],
             'is_admin' => ['boolean'],
+            'role_id' => ['nullable', 'integer', Rule::exists('roles', 'id')],
             'is_active' => ['boolean'],
             'password' => [$this->editing ? 'nullable' : 'required', 'string', 'min:8'],
             'device_group_ids' => ['array'],
             'device_group_ids.*' => [Rule::exists('device_groups', 'id')],
         ]);
 
-        $groupIds = $validated['device_group_ids'] ?? [];
-        $userGroupIds = $validated['user_group_ids'] ?? [];
+        $actor = auth()->user();
+        $groupIds = array_map('intval', $validated['device_group_ids'] ?? []);
+        $userGroupIds = array_map('intval', $validated['user_group_ids'] ?? []);
         unset($validated['device_group_ids'], $validated['user_group_ids']);
+
+        // ---- Privilege-escalation guards for a delegated user-manager (D4) --
+        // A role-holder with `user: rw` runs the same screen as a super-admin,
+        // so everything that could hand out MORE authority than the actor holds
+        // is stripped here. The blade hides these controls too, but that is
+        // cosmetic — this block is the authority.
+        if (! $actor?->is_admin) {
+            // Never mint an administrator, and never assign or change a role:
+            // roles are granted by super-admins only (see RoleList::mount).
+            $validated['is_admin'] = false;
+            unset($validated['role_id']);
+
+            $existingDeviceGroupIds = [];
+            $existingUserGroupIds = [];
+
+            if ($this->editing) {
+                $target = User::findOrFail($this->editing);
+                $this->guardTarget($target);
+                $existingDeviceGroupIds = $target->deviceGroups()->pluck('device_groups.id')
+                    ->map(fn ($id) => (int) $id)->all();
+                $existingUserGroupIds = $target->userGroupIds();
+            }
+
+            // Device-group grants can only ever be handed out from what the
+            // actor can see themselves — otherwise "manage users" would be a
+            // back door onto the whole fleet via Device::scopeVisibleTo.
+            $groupIds = $this->mergeGrants(
+                $this->grantableDeviceGroupIds($groupIds),
+                $existingDeviceGroupIds,
+                $this->grantableDeviceGroupIds($existingDeviceGroupIds),
+            );
+
+            // …and the same clamp on user groups, which carry folder grants of
+            // their own: clamping only the direct grants would leave "add them
+            // to Finance staff" as a one-click way round the line above.
+            $userGroupIds = $this->mergeGrants(
+                $this->grantableUserGroupIds($userGroupIds),
+                $existingUserGroupIds,
+                $this->grantableUserGroupIds($existingUserGroupIds),
+            );
+        }
+
+        // A super-admin needs no role: is_admin already outranks every matrix,
+        // and leaving a stale role_id behind would make consoleAllows ambiguous
+        // if the flag were later removed.
+        if ($validated['is_admin']) {
+            $validated['role_id'] = null;
+        }
 
         $validated['name'] = $validated['name'] ?? null;
         $validated['email'] = ($validated['email'] ?? '') !== '' ? $validated['email'] : null;
+
+        $previousRoleId = null;
 
         if ($this->editing) {
             // Blank password on edit = keep the current one.
@@ -132,6 +244,7 @@ class UserList extends Component
                 unset($validated['password']);
             }
             $user = User::findOrFail($this->editing);
+            $previousRoleId = $user->role_id;
             $user->update($validated);
         } else {
             $user = User::create($validated);
@@ -142,9 +255,18 @@ class UserList extends Component
 
         $user->groups()->sync($userGroupIds);
 
+        // Surface a role grant in the audit trail — it is the single most
+        // consequential thing this form can do.
+        $roleNote = '';
+        if ($previousRoleId !== $user->role_id) {
+            $roleNote = ' (role: '.($user->role_id
+                ? (string) Role::whereKey($user->role_id)->value('name')
+                : 'standard user').')';
+        }
+
         ConsoleAudit::record(
             $this->editing ? 'user.update' : 'user.create',
-            ($this->editing ? 'Updated' : 'Created').' user '.$user->username,
+            ($this->editing ? 'Updated' : 'Created').' user '.$user->username.$roleNote,
             'user',
             $user->username,
         );
@@ -154,11 +276,14 @@ class UserList extends Component
 
     public function toggleActive(int $id): void
     {
+        $this->authorizeConsole('user', 'rw');
+
         if ($id === auth()->id()) {
             return; // never lock yourself out
         }
 
         $user = User::findOrFail($id);
+        $this->guardTarget($user);
         $user->update(['is_active' => ! $user->is_active]);
 
         // Disabling takes effect NOW, not at next login: revoke everything.
@@ -174,35 +299,59 @@ class UserList extends Component
         );
     }
 
+    /**
+     * Admin "Reset 2FA" (PLAN B6): wipe the user's TOTP secret, flags, replay
+     * pointer and recovery codes so they must re-enroll. Break-glass for a
+     * locked-out operator; audited.
+     */
+    public function resetTwoFactor(int $id): void
+    {
+        $this->authorizeConsole('user', 'rw');
+
+        $user = User::findOrFail($id);
+        $this->guardTarget($user);
+
+        if (! $user->hasTwoFactorEnabled() && $user->recoveryCodes()->doesntExist() && $user->totp_secret === null) {
+            return; // nothing to reset
+        }
+
+        $user->clearTwoFactor();
+
+        ConsoleAudit::record('user.2fa-reset', 'Reset two-factor authentication for '.$user->username, 'user', $user->username);
+    }
+
     /** Kick a user everywhere: RustDesk clients, console sessions, remember-me. */
     public function forceLogout(int $id): void
     {
+        $this->authorizeConsole('user', 'rw');
+
         if ($id === auth()->id()) {
             return; // use the account menu to log yourself out
         }
 
         $user = User::findOrFail($id);
+        $this->guardTarget($user);
         $this->revokeAllAccess($user);
 
         ConsoleAudit::record('user.force-logout', 'Forced logout of '.$user->username, 'user', $user->username);
     }
 
+    /** Delegates to the model so reset and force-logout cannot drift apart. */
     private function revokeAllAccess(User $user): void
     {
-        $user->clientTokens()->delete();
-        \Illuminate\Support\Facades\DB::table('sessions')->where('user_id', $user->id)->delete();
-        // A surviving remember-me cookie must not silently re-authenticate.
-        $user->setRememberToken(\Illuminate\Support\Str::random(60));
-        $user->save();
+        $user->revokeAllAccess();
     }
 
     public function deleteUser(int $id): void
     {
+        $this->authorizeConsole('user', 'rw');
+
         if ($id === auth()->id()) {
             return; // cannot delete yourself
         }
 
         $user = User::findOrFail($id);
+        $this->guardTarget($user);
         $username = $user->username;
 
         // Keep the devices, just detach them from the deleted owner.
@@ -216,24 +365,62 @@ class UserList extends Component
 
     public function openAssign(int $userId): void
     {
+        $this->authorizeConsole('user', 'rw');
+        $this->guardTarget(User::findOrFail($userId));
+
         $this->assignUserId = $userId;
         $this->assignDeviceIds = [];
         $this->assignSearch = '';
-        // Preselect the devices this user already owns.
-        $this->assignDeviceIds = \App\Models\Device::where('user_id', $userId)->pluck('id')->all();
+        // Preselect the devices this user already owns — but only the ones the
+        // actor can see, so the checkbox state matches what saveAssign will act
+        // on and a device out of scope is never silently released.
+        $this->assignDeviceIds = $this->assignableDevices()
+            ->where('user_id', $userId)->pluck('id')->all();
         $this->showAssignModal = true;
+    }
+
+    /**
+     * The devices this actor may re-own (PLAN D4).
+     *
+     * Ownership is row scope, and row scope never comes from a role: an actor
+     * hands out only devices they can already see themselves. Without this the
+     * modal both listed the whole fleet and re-owned any id posted to it, which
+     * is a complete bypass of device-group access — reassign a hidden device to
+     * an account you control, sign in as it, and the device is yours.
+     */
+    private function assignableDevices()
+    {
+        $actor = auth()->user();
+
+        return $actor?->is_admin
+            ? Device::query()
+            : Device::query()->visibleTo($actor);
     }
 
     public function saveAssign(): void
     {
-        $user = User::findOrFail($this->assignUserId);
-        $ids = array_map('intval', $this->assignDeviceIds);
+        $this->authorizeConsole('user', 'rw');
 
-        // Devices to gain this owner, and this user's current devices to release.
-        \App\Models\Device::whereIn('id', $ids)->update(['user_id' => $user->id]);
-        \App\Models\Device::where('user_id', $user->id)
+        $user = User::findOrFail($this->assignUserId);
+        $this->guardTarget($user);
+
+        $ids = $this->assignableDevices()
+            ->whereIn('id', array_map('intval', $this->assignDeviceIds))
+            ->pluck('id')->map(fn ($id) => (int) $id)->all();
+
+        // Devices to gain this owner, and this user's current devices to release
+        // — the release is scoped too, or a delegated actor could orphan devices
+        // they cannot see just by opening the modal and saving.
+        Device::whereIn('id', $ids)->update(['user_id' => $user->id]);
+        $this->assignableDevices()
+            ->where('user_id', $user->id)
             ->whereNotIn('id', $ids ?: [0])
             ->update(['user_id' => null]);
+
+        // Both updates above are query-builder writes, so no model event fired
+        // and the cached strategy resolution (PLAN C2) is now stale for every
+        // device that changed hands. Rebuild it.
+        Strategy::recomputeAll();
 
         ConsoleAudit::record(
             'user.assign-devices',
@@ -259,14 +446,14 @@ class UserList extends Component
 
     private function resetForm(): void
     {
-        $this->reset('editing', 'username', 'name', 'email', 'user_group_ids', 'is_admin', 'is_active', 'password', 'device_group_ids');
+        $this->reset('editing', 'username', 'name', 'email', 'user_group_ids', 'is_admin', 'role_id', 'is_active', 'password', 'device_group_ids');
         $this->resetValidation();
     }
 
     public function render()
     {
         $users = User::query()
-            ->with('groups')
+            ->with(['groups', 'role'])
             ->withCount('devices')
             ->when($this->search !== '', function ($q) {
                 $s = '%'.$this->search.'%';
@@ -286,7 +473,7 @@ class UserList extends Component
         // Candidate devices for the assign modal (filtered by its own search).
         $assignDevices = collect();
         if ($this->showAssignModal) {
-            $assignDevices = \App\Models\Device::query()
+            $assignDevices = $this->assignableDevices()
                 ->when($this->assignSearch !== '', function ($q) {
                     $s = '%'.$this->assignSearch.'%';
                     $q->where(fn ($q) => $q->where('rustdesk_id', 'like', $s)
@@ -300,8 +487,12 @@ class UserList extends Component
 
         return view('livewire.user-list', [
             'users' => $users,
-            'userGroups' => UserGroup::orderBy('name')->get(),
-            'deviceGroups' => DeviceGroup::orderBy('name')->get(),
+            'roles' => Role::orderBy('name')->get(),
+            // The pickers offer only what save() would actually accept from this
+            // actor, so a delegated user-manager is never shown a grant that
+            // would be silently dropped (or a folder name they cannot see).
+            'userGroups' => $this->grantableUserGroups(),
+            'deviceGroups' => $this->grantableDeviceGroups(),
             'assignDevices' => $assignDevices,
         ]);
     }

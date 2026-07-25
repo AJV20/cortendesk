@@ -60,7 +60,15 @@
                             <td>
                                 <span title="{{ $alarm->created_at }}">{{ $alarm->created_at?->diffForHumans() }}</span>
                             </td>
-                            <td><span class="fw-semibold">{{ $alarm->rustdesk_id }}</span></td>
+                            <td>
+                                @if ($alarm->rustdesk_id === \App\Models\AlarmLog::CONSOLE_SOURCE)
+                                    <span class="badge bg-secondary-subtle text-secondary"><i class="ri-terminal-box-line me-1"></i>Console</span>
+                                @else
+                                    <span class="fw-semibold">
+                                    {{ $alarm->rustdesk_id === \App\Models\AlarmLog::CONSOLE_SOURCE ? 'Console' : $alarm->rustdesk_id }}
+                                </span>
+                                @endif
+                            </td>
                             <td>
                                 <span class="badge bg-{{ $alarm->typeSeverity() }}-subtle text-{{ $alarm->typeSeverity() }}">
                                     <i class="ri-alarm-warning-line me-1"></i>{{ $alarm->typeLabel() }}

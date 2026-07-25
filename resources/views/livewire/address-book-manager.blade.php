@@ -41,9 +41,11 @@
                             </option>
                         @endforeach
                     </select>
-                    <button type="button" class="btn btn-primary flex-shrink-0" wire:click="openNewBook" title="New shared address book">
-                        <i class="ri-add-line"></i>
-                    </button>
+                    @if (auth()->user()?->consoleAllows('address_book', 'rw'))
+                        <button type="button" class="btn btn-primary flex-shrink-0" wire:click="openNewBook" title="New shared address book">
+                            <i class="ri-add-line"></i>
+                        </button>
+                    @endif
                 </div>
             </div>
 
@@ -51,9 +53,11 @@
             <div class="card d-none d-lg-block">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <h5 class="card-title mb-0">Address Books</h5>
-                    <button type="button" class="btn btn-sm btn-primary" wire:click="openNewBook">
-                        <i class="ri-add-line me-1"></i>New shared
-                    </button>
+                    @if (auth()->user()?->consoleAllows('address_book', 'rw'))
+                        <button type="button" class="btn btn-sm btn-primary" wire:click="openNewBook">
+                            <i class="ri-add-line me-1"></i>New shared
+                        </button>
+                    @endif
                 </div>
                 <div class="list-group list-group-flush">
                     @forelse ($books as $b)
@@ -109,7 +113,7 @@
                                     @endif
                                 </p>
                             </div>
-                            @unless ($book->is_personal)
+                            @if (! $book->is_personal && $canManage)
                                 <div class="d-flex gap-2">
                                     <button type="button" class="btn btn-sm btn-light" wire:click="openRenameBook">
                                         <i class="ri-pencil-line me-1"></i>Rename
@@ -120,7 +124,11 @@
                                         <i class="ri-delete-bin-line me-1"></i>Delete
                                     </button>
                                 </div>
-                            @endunless
+                            @elseif (! $book->is_personal)
+                                <span class="badge bg-secondary-subtle text-secondary align-self-start">
+                                    {{ $permission >= 2 ? 'Read/Write' : 'Read only' }}
+                                </span>
+                            @endif
                         </div>
 
                         <hr class="my-3">
@@ -133,25 +141,31 @@
                                 <span class="badge d-inline-flex align-items-center gap-1 {{ ABM::chipTextClass($hex) }}"
                                       style="background-color: {{ $hex }};" wire:key="tag{{ $tag->id }}">
                                     {{ $tag->name }}
-                                    <a href="javascript:void(0);" class="{{ ABM::chipTextClass($hex) }} text-decoration-none lh-1"
-                                       wire:click="deleteTag({{ $tag->id }})"
-                                       wire:confirm="Delete tag “{{ $tag->name }}”? It will be removed from all entries."
-                                       title="Delete tag"><i class="ri-close-line align-middle"></i></a>
+                                    @if ($canManage)
+                                        <a href="javascript:void(0);" class="{{ ABM::chipTextClass($hex) }} text-decoration-none lh-1"
+                                           wire:click="deleteTag({{ $tag->id }})"
+                                           wire:confirm="Delete tag “{{ $tag->name }}”? It will be removed from all entries."
+                                           title="Delete tag"><i class="ri-close-line align-middle"></i></a>
+                                    @endif
                                 </span>
                             @empty
                                 <span class="text-muted fst-italic">none</span>
                             @endforelse
-                            <button type="button" class="btn btn-sm btn-light" wire:click="openAddTag">
-                                <i class="ri-add-line"></i> Add tag
-                            </button>
+                            @if ($canManage)
+                                <button type="button" class="btn btn-sm btn-light" wire:click="openAddTag">
+                                    <i class="ri-add-line"></i> Add tag
+                                </button>
+                            @endif
                         </div>
 
                         {{-- Entries toolbar --}}
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <h5 class="mb-0">Entries</h5>
-                            <button type="button" class="btn btn-sm btn-primary" wire:click="openAddEntry">
-                                <i class="ri-add-line me-1"></i>Add entry
-                            </button>
+                            @if ($canWriteEntries)
+                                <button type="button" class="btn btn-sm btn-primary" wire:click="openAddEntry">
+                                    <i class="ri-add-line me-1"></i>Add entry
+                                </button>
+                            @endif
                         </div>
 
                         {{-- Desktop entries table (md and up) --}}
@@ -187,10 +201,14 @@
                                         </td>
                                         <td><span title="{{ $entry->created_at }}">{{ $entry->created_at?->diffForHumans() ?? '—' }}</span></td>
                                         <td class="text-end">
-                                            <a href="javascript:void(0);" class="text-primary me-2" wire:click="openEditEntry({{ $entry->id }})">Edit</a>
-                                            <a href="javascript:void(0);" class="text-danger"
-                                               wire:click="deleteEntry({{ $entry->id }})"
-                                               wire:confirm="Remove {{ $entry->rustdesk_id }} from this address book?">Remove</a>
+                                            @if ($canWriteEntries)
+                                                <a href="javascript:void(0);" class="text-primary me-2" wire:click="openEditEntry({{ $entry->id }})">Edit</a>
+                                                <a href="javascript:void(0);" class="text-danger"
+                                                   wire:click="deleteEntry({{ $entry->id }})"
+                                                   wire:confirm="Remove {{ $entry->rustdesk_id }} from this address book?">Remove</a>
+                                            @else
+                                                <span class="text-muted">—</span>
+                                            @endif
                                         </td>
                                     </tr>
                                 @empty
@@ -216,12 +234,14 @@
                                                     <small class="text-muted">{{ $entry->alias ?: ($entry->username ?: '—') }}</small>
                                                 </div>
                                             </div>
-                                            <div>
-                                                <a href="javascript:void(0);" class="btn btn-sm btn-light me-1" wire:click="openEditEntry({{ $entry->id }})"><i class="ri-pencil-line"></i></a>
-                                                <a href="javascript:void(0);" class="btn btn-sm btn-light text-danger"
-                                                   wire:click="deleteEntry({{ $entry->id }})"
-                                                   wire:confirm="Remove {{ $entry->rustdesk_id }} from this address book?"><i class="ri-delete-bin-line"></i></a>
-                                            </div>
+                                            @if ($canWriteEntries)
+                                                <div>
+                                                    <a href="javascript:void(0);" class="btn btn-sm btn-light me-1" wire:click="openEditEntry({{ $entry->id }})"><i class="ri-pencil-line"></i></a>
+                                                    <a href="javascript:void(0);" class="btn btn-sm btn-light text-danger"
+                                                       wire:click="deleteEntry({{ $entry->id }})"
+                                                       wire:confirm="Remove {{ $entry->rustdesk_id }} from this address book?"><i class="ri-delete-bin-line"></i></a>
+                                                </div>
+                                            @endif
                                         </div>
                                         <div class="mt-2 d-flex flex-wrap gap-1">
                                             @foreach (collect($entry->tag_ids ?? [])->map(fn ($id) => $tagMap->get((int) $id))->filter() as $t)
@@ -248,8 +268,8 @@
                     </div>
                 </div>
 
-                {{-- Sharing rules (shared books only) --}}
-                @unless ($book->is_personal)
+                {{-- Sharing rules (shared books, FULL control only) --}}
+                @if (! $book->is_personal && $canManage)
                     <div class="card">
                         <div class="card-body">
                             <div class="d-flex justify-content-between align-items-center mb-2">
@@ -286,7 +306,7 @@
                             @endforelse
                         </div>
                     </div>
-                @endunless
+                @endif
             @else
                 <div class="card">
                     <div class="card-body text-center text-muted py-5">

@@ -1,0 +1,394 @@
+<div>
+    <div class="card">
+        <div class="card-body">
+
+            {{-- Toolbar --}}
+            <div class="d-flex justify-content-between align-items-center gap-2 mb-3">
+                <div>
+                    <h5 class="mb-0">Strategies</h5>
+                    <small class="text-muted">Client settings pushed to devices on their next heartbeat.</small>
+                </div>
+                <button type="button" class="btn btn-primary flex-shrink-0" wire:click="create">
+                    <i class="ri-add-line me-1"></i>Add Strategy
+                </button>
+            </div>
+
+            @if ($strategies->isNotEmpty() && $strategies->firstWhere('is_default', true) === null)
+                <div class="alert alert-secondary py-2 fs-13">
+                    <i class="ri-information-line me-1"></i>No default strategy. Devices with no assignment of their own keep whatever settings they already have.
+                </div>
+            @endif
+
+            {{-- Desktop table (md and up) --}}
+            <div class="table-responsive d-none d-md-block">
+                <table class="table table-hover table-centered mb-0">
+                    <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Options</th>
+                        <th>Assigned to</th>
+                        <th>In force on</th>
+                        <th>Enabled</th>
+                        <th class="text-end">Action</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    @forelse ($strategies as $strategy)
+                        <tr wire:key="s{{ $strategy->id }}">
+                            <td>
+                                <span class="fw-semibold">{{ $strategy->name }}</span>
+                                @if ($strategy->is_default)
+                                    <span class="badge bg-primary-subtle text-primary ms-1">Default</span>
+                                @endif
+                                @if ($strategy->enforce)
+                                    <span class="badge bg-warning-subtle text-warning ms-1" title="Re-pushed on every heartbeat, overwriting local changes">Enforced</span>
+                                @endif
+                                @if ($strategy->note)
+                                    <small class="text-muted d-block">{{ $strategy->note }}</small>
+                                @endif
+                            </td>
+                            <td>
+                                <span class="badge bg-secondary-subtle text-secondary">{{ count($strategy->optionMap()) }}</span>
+                            </td>
+                            <td>
+                                <span class="text-nowrap" title="Devices">
+                                    <i class="ri-computer-line me-1 text-muted"></i>{{ $strategy->devices_count }}
+                                </span>
+                                <span class="text-nowrap ms-2" title="Users">
+                                    <i class="ri-user-line me-1 text-muted"></i>{{ $strategy->users_count }}
+                                </span>
+                                <span class="text-nowrap ms-2" title="Device groups">
+                                    <i class="ri-folder-line me-1 text-muted"></i>{{ $strategy->device_groups_count }}
+                                </span>
+                            </td>
+                            <td>
+                                <span class="badge bg-info-subtle text-info">{{ $strategy->resolved_devices_count }} device(s)</span>
+                            </td>
+                            <td>
+                                <div class="form-check form-switch mb-0">
+                                    <input class="form-check-input" type="checkbox" role="switch"
+                                           id="strategy-enabled-{{ $strategy->id }}"
+                                           @checked($strategy->enabled)
+                                           wire:click="toggleEnabled({{ $strategy->id }})">
+                                    <label class="form-check-label visually-hidden" for="strategy-enabled-{{ $strategy->id }}">Enabled</label>
+                                </div>
+                            </td>
+                            <td class="text-end">
+                                <a href="javascript:void(0);" class="text-primary me-2" wire:click="openAssign({{ $strategy->id }})">Assign</a>
+                                <a href="javascript:void(0);" class="text-primary me-2" wire:click="edit({{ $strategy->id }})">Edit</a>
+                                <a href="javascript:void(0);" class="text-danger"
+                                   wire:click="deleteStrategy({{ $strategy->id }})"
+                                   wire:confirm="Delete strategy {{ $strategy->name }}? Devices assigned to it fall back to the default strategy, and the options it pushed are reset to the client defaults on the next heartbeat.">Delete</a>
+                            </td>
+                        </tr>
+                    @empty
+                        <tr>
+                            <td colspan="6" class="text-center text-muted py-4">
+                                No strategies yet. Click "Add Strategy" to create one.
+                            </td>
+                        </tr>
+                    @endforelse
+                    </tbody>
+                </table>
+            </div>
+
+            {{-- Mobile card list (below md) --}}
+            <div class="d-md-none">
+                @forelse ($strategies as $strategy)
+                    <div class="card border mb-2" wire:key="ms{{ $strategy->id }}">
+                        <div class="card-body p-2">
+                            <div class="d-flex justify-content-between align-items-start gap-2">
+                                <div class="lh-sm min-width-0">
+                                    <span class="fw-semibold d-block text-truncate">{{ $strategy->name }}</span>
+                                    <small class="text-muted d-block text-truncate">{{ $strategy->note ?: count($strategy->optionMap()).' option(s)' }}</small>
+                                </div>
+                                <div class="form-check form-switch mb-0 flex-shrink-0">
+                                    <input class="form-check-input" type="checkbox" role="switch"
+                                           id="m-strategy-enabled-{{ $strategy->id }}"
+                                           @checked($strategy->enabled)
+                                           wire:click="toggleEnabled({{ $strategy->id }})">
+                                    <label class="form-check-label visually-hidden" for="m-strategy-enabled-{{ $strategy->id }}">Enabled</label>
+                                </div>
+                            </div>
+                            <div class="mt-1">
+                                @if ($strategy->is_default)
+                                    <span class="badge bg-primary-subtle text-primary">Default</span>
+                                @endif
+                                @if ($strategy->enforce)
+                                    <span class="badge bg-warning-subtle text-warning">Enforced</span>
+                                @endif
+                                <span class="badge bg-info-subtle text-info">{{ $strategy->resolved_devices_count }} in force</span>
+                            </div>
+                            <div class="d-flex justify-content-between align-items-center gap-2 mt-1">
+                                <small class="text-muted text-nowrap">
+                                    <i class="ri-computer-line me-1"></i>{{ $strategy->devices_count }}
+                                    <i class="ri-user-line ms-2 me-1"></i>{{ $strategy->users_count }}
+                                    <i class="ri-folder-line ms-2 me-1"></i>{{ $strategy->device_groups_count }}
+                                </small>
+                                <div class="d-flex flex-nowrap gap-1 flex-shrink-0">
+                                    <a href="javascript:void(0);" class="btn btn-sm btn-light" title="Assign"
+                                       wire:click="openAssign({{ $strategy->id }})"><i class="ri-links-line"></i></a>
+                                    <a href="javascript:void(0);" class="btn btn-sm btn-light" title="Edit"
+                                       wire:click="edit({{ $strategy->id }})"><i class="ri-pencil-line"></i></a>
+                                    <a href="javascript:void(0);" class="btn btn-sm btn-light text-danger" title="Delete"
+                                       wire:click="deleteStrategy({{ $strategy->id }})"
+                                       wire:confirm="Delete strategy {{ $strategy->name }}? Devices assigned to it fall back to the default strategy."><i class="ri-delete-bin-line"></i></a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                @empty
+                    <p class="text-center text-muted py-4 mb-0">No strategies yet. Tap "Add Strategy" to create one.</p>
+                @endforelse
+            </div>
+        </div>
+    </div>
+
+    {{-- Create / edit modal --}}
+    @if ($editingId !== null)
+        <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true"
+             style="background: rgba(0,0,0,.5);" wire:key="strategy-editor">
+            <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+                <div class="modal-content">
+                    <form wire:submit="save">
+                        <div class="modal-header">
+                            <h5 class="modal-title">{{ $editingId === 0 ? 'Add Strategy' : 'Edit Strategy' }}</h5>
+                            <button type="button" class="btn-close" wire:click="closeModal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="row">
+                                <div class="col-12 col-md-6 mb-3">
+                                    <label class="form-label" for="sl-name">Name <span class="text-danger">*</span></label>
+                                    <input type="text" id="sl-name" class="form-control @error('formName') is-invalid @enderror"
+                                           wire:model="formName" autocomplete="off">
+                                    @error('formName') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                                </div>
+                                <div class="col-12 col-md-6 mb-3">
+                                    <label class="form-label" for="sl-note">Note</label>
+                                    <input type="text" id="sl-note" class="form-control @error('formNote') is-invalid @enderror"
+                                           wire:model="formNote" maxlength="500">
+                                    @error('formNote') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                                </div>
+                            </div>
+
+                            <div class="row g-2 mb-3">
+                                <div class="col-12 col-md-4">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" role="switch" id="sl-enabled" wire:model="formEnabled">
+                                        <label class="form-check-label" for="sl-enabled">Enabled</label>
+                                    </div>
+                                    <small class="text-muted">A disabled strategy is skipped as if it were not assigned.</small>
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" role="switch" id="sl-default" wire:model="formIsDefault">
+                                        <label class="form-check-label" for="sl-default">Default strategy</label>
+                                    </div>
+                                    <small class="text-muted">Applied to every device with no assignment of its own. Only one strategy can hold this.</small>
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" role="switch" id="sl-enforce" wire:model="formEnforce">
+                                        <label class="form-check-label" for="sl-enforce">Enforce</label>
+                                    </div>
+                                    <small class="text-muted">Re-push on every heartbeat, so a change made on the device is undone within a minute. Off = push once, then leave the device alone.</small>
+                                </div>
+                            </div>
+
+                            <div class="alert alert-secondary py-2 fs-13 mb-3">
+                                <i class="ri-information-line me-1"></i>Controls left on <strong>Not managed</strong> are not part of this strategy: the device keeps whatever it has. Changing a managed option back to Not managed resets that option to the client's built-in default on the next heartbeat.
+                            </div>
+
+                            @foreach ($catalog as $groupKey => $group)
+                                <h5 class="mt-3 mb-1 fs-15">
+                                    <i class="{{ $group['icon'] }} me-1 text-muted"></i>{{ $group['title'] }}
+                                </h5>
+                                <p class="text-muted fs-13">{{ $group['help'] }}</p>
+
+                                <div class="row">
+                                    @foreach ($group['options'] as $key => $opt)
+                                        <div class="col-12 col-md-6 mb-3" wire:key="opt-{{ $key }}">
+                                            <label class="form-label mb-1" for="sl-opt-{{ $key }}">{{ $opt['label'] }}</label>
+                                            @if ($opt['choices'] !== null)
+                                                <select id="sl-opt-{{ $key }}" class="form-select"
+                                                        wire:model="formOptions.{{ $key }}">
+                                                    <option value="">Not managed</option>
+                                                    @foreach ($opt['choices'] as $value => $choiceLabel)
+                                                        <option value="{{ $value }}">{{ $choiceLabel }}</option>
+                                                    @endforeach
+                                                </select>
+                                            @else
+                                                <input type="text" id="sl-opt-{{ $key }}"
+                                                       class="form-control @error('formOptions.'.$key) is-invalid @enderror"
+                                                       placeholder="Not managed"
+                                                       wire:model="formOptions.{{ $key }}">
+                                                @error('formOptions.'.$key) <div class="invalid-feedback">{{ $message }}</div> @enderror
+                                            @endif
+                                            <small class="text-muted d-block">
+                                                <code class="fs-12">{{ $opt['key'] }}</code>
+                                                @if ($opt['help']) — {{ $opt['help'] }} @endif
+                                            </small>
+                                        </div>
+                                    @endforeach
+                                </div>
+                            @endforeach
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-light" wire:click="closeModal">Cancel</button>
+                            <button type="submit" class="btn btn-primary">
+                                <span wire:loading.remove wire:target="save">{{ $editingId === 0 ? 'Create Strategy' : 'Save Changes' }}</span>
+                                <span wire:loading wire:target="save">Saving…</span>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        <div class="modal-backdrop fade show"></div>
+    @endif
+
+    {{-- Assignment modal --}}
+    @if ($assigning)
+        <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true"
+             style="background: rgba(0,0,0,.5);" wire:key="strategy-assign">
+            <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Assign "{{ $assigning->name }}"</h5>
+                        <button type="button" class="btn-close" wire:click="closeAssign" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="text-muted fs-13">
+                            A device gets one strategy: its own assignment wins, then its owner's, then its device group's, then the default.
+                            Checking a target that already belongs to another strategy moves it here.
+                        </p>
+
+                        <ul class="nav nav-tabs nav-bordered mb-3">
+                            <li class="nav-item">
+                                <a href="javascript:void(0);" class="nav-link {{ $assignTab === 'devices' ? 'active' : '' }}"
+                                   wire:click="setAssignTab('devices')">
+                                    <i class="ri-computer-line me-1"></i>Devices
+                                    <span class="badge bg-secondary-subtle text-secondary ms-1">{{ count($assignDeviceIds) }}</span>
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="javascript:void(0);" class="nav-link {{ $assignTab === 'users' ? 'active' : '' }}"
+                                   wire:click="setAssignTab('users')">
+                                    <i class="ri-user-line me-1"></i>Users
+                                    <span class="badge bg-secondary-subtle text-secondary ms-1">{{ count($assignUserIds) }}</span>
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="javascript:void(0);" class="nav-link {{ $assignTab === 'groups' ? 'active' : '' }}"
+                                   wire:click="setAssignTab('groups')">
+                                    <i class="ri-folder-line me-1"></i>Device groups
+                                    <span class="badge bg-secondary-subtle text-secondary ms-1">{{ count($assignGroupIds) }}</span>
+                                </a>
+                            </li>
+                        </ul>
+
+                        @if ($assignTab === 'devices')
+                            <input type="search" class="form-control mb-2" placeholder="Search ID, alias, hostname…"
+                                   wire:model.live.debounce.300ms="assignSearch">
+                            <div class="border rounded" style="max-height: 340px; overflow-y: auto;">
+                                <table class="table table-sm table-hover mb-0">
+                                    <tbody>
+                                    @forelse ($assignDevices as $d)
+                                        <tr wire:key="ad{{ $d->id }}">
+                                            <td style="width:38px;">
+                                                <input class="form-check-input" type="checkbox"
+                                                       value="{{ $d->id }}" wire:model="assignDeviceIds"
+                                                       aria-label="Assign device {{ $d->rustdesk_id }}">
+                                            </td>
+                                            <td>
+                                                <span class="fw-semibold">{{ $d->rustdesk_id }}</span>
+                                                @if ($d->alias || $d->hostname)
+                                                    <small class="text-muted d-block">{{ $d->alias ?: $d->hostname }}</small>
+                                                @endif
+                                            </td>
+                                            <td class="text-end">
+                                                @if (($assignTaken['devices'][$d->id] ?? null) && $assignTaken['devices'][$d->id] !== $assigning->name)
+                                                    <span class="badge bg-secondary-subtle text-secondary">{{ $assignTaken['devices'][$d->id] }}</span>
+                                                @endif
+                                            </td>
+                                        </tr>
+                                    @empty
+                                        <tr><td class="text-center text-muted py-3">No devices match.</td></tr>
+                                    @endforelse
+                                    </tbody>
+                                </table>
+                            </div>
+                            <small class="text-muted">
+                                {{ count($assignDeviceIds) }} selected
+                                @if ($assignDevices->count() >= 200) · showing first 200, refine with search @endif
+                            </small>
+                        @elseif ($assignTab === 'users')
+                            <div class="border rounded" style="max-height: 340px; overflow-y: auto;">
+                                <table class="table table-sm table-hover mb-0">
+                                    <tbody>
+                                    @forelse ($assignUsers as $u)
+                                        <tr wire:key="au{{ $u->id }}">
+                                            <td style="width:38px;">
+                                                <input class="form-check-input" type="checkbox"
+                                                       value="{{ $u->id }}" wire:model="assignUserIds"
+                                                       aria-label="Assign user {{ $u->username }}">
+                                            </td>
+                                            <td>
+                                                <span class="fw-semibold">{{ $u->username }}</span>
+                                                @if ($u->name)
+                                                    <small class="text-muted d-block">{{ $u->name }}</small>
+                                                @endif
+                                            </td>
+                                            <td class="text-end">
+                                                @if (($assignTaken['users'][$u->id] ?? null) && $assignTaken['users'][$u->id] !== $assigning->name)
+                                                    <span class="badge bg-secondary-subtle text-secondary">{{ $assignTaken['users'][$u->id] }}</span>
+                                                @endif
+                                            </td>
+                                        </tr>
+                                    @empty
+                                        <tr><td class="text-center text-muted py-3">No users yet.</td></tr>
+                                    @endforelse
+                                    </tbody>
+                                </table>
+                            </div>
+                            <small class="text-muted">Applies to every device owned by the checked users.</small>
+                        @else
+                            <div class="border rounded" style="max-height: 340px; overflow-y: auto;">
+                                <table class="table table-sm table-hover mb-0">
+                                    <tbody>
+                                    @forelse ($assignGroups as $g)
+                                        <tr wire:key="ag{{ $g->id }}">
+                                            <td style="width:38px;">
+                                                <input class="form-check-input" type="checkbox"
+                                                       value="{{ $g->id }}" wire:model="assignGroupIds"
+                                                       aria-label="Assign device group {{ $g->name }}">
+                                            </td>
+                                            <td><span class="fw-semibold">{{ $g->name }}</span></td>
+                                            <td class="text-end">
+                                                @if (($assignTaken['groups'][$g->id] ?? null) && $assignTaken['groups'][$g->id] !== $assigning->name)
+                                                    <span class="badge bg-secondary-subtle text-secondary">{{ $assignTaken['groups'][$g->id] }}</span>
+                                                @endif
+                                            </td>
+                                        </tr>
+                                    @empty
+                                        <tr><td class="text-center text-muted py-3">No device groups yet.</td></tr>
+                                    @endforelse
+                                    </tbody>
+                                </table>
+                            </div>
+                            <small class="text-muted">Applies to every device in the checked groups that has no closer assignment.</small>
+                        @endif
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-light" wire:click="closeAssign">Cancel</button>
+                        <button type="button" class="btn btn-primary" wire:click="saveAssign">
+                            <span wire:loading.remove wire:target="saveAssign">Save Assignment</span>
+                            <span wire:loading wire:target="saveAssign">Saving…</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-backdrop fade show"></div>
+    @endif
+</div>

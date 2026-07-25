@@ -174,10 +174,10 @@ class AddressBookController extends Controller
         return response('', 200);
     }
 
-    /** POST /api/ab/tag/add/{guid} (§17). */
+    /** POST /api/ab/tag/add/{guid} (§17). Managing tags requires FULL (B4). */
     public function tagAdd(Request $request, string $guid): Response|JsonResponse
     {
-        $book = $this->bookOrFail($request, $guid, AddressBookRule::PERM_READ_WRITE);
+        $book = $this->bookOrFail($request, $guid, AddressBookRule::PERM_FULL);
         if ($book instanceof JsonResponse) {
             return $book;
         }
@@ -192,10 +192,10 @@ class AddressBookController extends Controller
         return response('', 200);
     }
 
-    /** PUT /api/ab/tag/rename/{guid} — {"old","new"} (§17). */
+    /** PUT /api/ab/tag/rename/{guid} — {"old","new"} (§17). Requires FULL (B4). */
     public function tagRename(Request $request, string $guid): Response|JsonResponse
     {
-        $book = $this->bookOrFail($request, $guid, AddressBookRule::PERM_READ_WRITE);
+        $book = $this->bookOrFail($request, $guid, AddressBookRule::PERM_FULL);
         if ($book instanceof JsonResponse) {
             return $book;
         }
@@ -211,10 +211,10 @@ class AddressBookController extends Controller
         return response('', 200);
     }
 
-    /** PUT /api/ab/tag/update/{guid} — color change (§17). */
+    /** PUT /api/ab/tag/update/{guid} — color change (§17). Requires FULL (B4). */
     public function tagUpdate(Request $request, string $guid): Response|JsonResponse
     {
-        $book = $this->bookOrFail($request, $guid, AddressBookRule::PERM_READ_WRITE);
+        $book = $this->bookOrFail($request, $guid, AddressBookRule::PERM_FULL);
         if ($book instanceof JsonResponse) {
             return $book;
         }
@@ -226,10 +226,10 @@ class AddressBookController extends Controller
         return response('', 200);
     }
 
-    /** DELETE /api/ab/tag/{guid} — body = JSON array of names (§17). */
+    /** DELETE /api/ab/tag/{guid} — body = JSON array of names (§17). Requires FULL (B4). */
     public function tagDelete(Request $request, string $guid): Response|JsonResponse
     {
-        $book = $this->bookOrFail($request, $guid, AddressBookRule::PERM_READ_WRITE);
+        $book = $this->bookOrFail($request, $guid, AddressBookRule::PERM_FULL);
         if ($book instanceof JsonResponse) {
             return $book;
         }
@@ -368,28 +368,14 @@ class AddressBookController extends Controller
             ->values();
     }
 
-    /** Effective permission of $user on $book: 0 = none, 1..3 per spec §13. */
+    /**
+     * Effective permission of $user on $book: 0 = none, 1..3 per spec §13.
+     * Delegates to AddressBook::permissionFor so the console and the client API
+     * share one ro / rw / full authority (PLAN B4).
+     */
     private function ruleFor(AddressBook $book, User $user): int
     {
-        if ($book->is_personal) {
-            return $book->owner_user_id === $user->id ? AddressBookRule::PERM_FULL : 0;
-        }
-
-        if ($book->owner_user_id === $user->id || $user->is_admin) {
-            return AddressBookRule::PERM_FULL;
-        }
-
-        return (int) $book->rules
-            ->filter(function (AddressBookRule $rule) use ($user) {
-                return match ($rule->subject_type) {
-                    'everyone' => true,
-                    'user' => (int) $rule->subject_id === $user->id,
-                    // Matches when the user belongs to ANY group with that id.
-                    'group' => $user->groups->pluck('id')->contains((int) $rule->subject_id),
-                    default => false,
-                };
-            })
-            ->max('permission');
+        return $book->permissionFor($user);
     }
 
     /** Resolve a book by guid and enforce the required permission level. */

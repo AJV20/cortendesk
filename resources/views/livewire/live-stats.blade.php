@@ -4,29 +4,15 @@
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center">
                     <div>
-                        <h4 class="mb-0">{{ $devices }}</h4>
-                        <p class="text-muted mb-0">Devices</p>
+                        <h4 class="mb-0">{{ $devices }} <span class="text-muted fw-normal fs-16">Devices</span></h4>
+                        <p class="mb-0 mt-1">
+                            <i class="ri-checkbox-blank-circle-fill text-success fs-10 me-1"></i>
+                            <span class="text-muted">{{ $online }} online now</span>
+                        </p>
                     </div>
                     <div class="avatar-sm">
                         <span class="avatar-title bg-primary-subtle text-primary rounded fs-22">
                             <i class="ri-computer-line"></i>
-                        </span>
-                    </div>
-                </div>
-            </div>
-        </a>
-    </div>
-    <div class="col-xxl-3 col-sm-6">
-        <a href="{{ route('devices', ['status' => 'online']) }}" class="card text-reset card-hover" title="View online devices">
-            <div class="card-body">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <h4 class="mb-0">{{ $online }}</h4>
-                        <p class="text-muted mb-0">Online now</p>
-                    </div>
-                    <div class="avatar-sm">
-                        <span class="avatar-title bg-success-subtle text-success rounded fs-22">
-                            <i class="ri-wifi-line"></i>
                         </span>
                     </div>
                 </div>

@@ -2,6 +2,7 @@
 
 namespace App\Livewire;
 
+use App\Livewire\Concerns\AuthorizesConsole;
 use App\Models\LoginLog;
 use Illuminate\Database\Eloquent\Builder;
 use Livewire\Attributes\Url;
@@ -11,7 +12,7 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class LoginLogList extends Component
 {
-    use WithPagination;
+    use AuthorizesConsole, WithPagination;
 
     protected string $paginationTheme = 'bootstrap';
 
@@ -25,6 +26,16 @@ class LoginLogList extends Component
     public string $dateTo = '';
 
     public int $perPage = 20;
+
+    /**
+     * Login history is part of the sensitive half of the audit area (PLAN D4).
+     * /livewire/update is reachable directly, so the component guards itself
+     * rather than trusting the route it happened to be rendered under.
+     */
+    public function mount(): void
+    {
+        $this->authorizeConsole('audit', 'rw');
+    }
 
     public function updatedSearch(): void
     {

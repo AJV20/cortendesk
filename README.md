@@ -15,6 +15,12 @@ Built on Laravel + Livewire with precompiled assets: **there is no frontend buil
 - **Users & access scoping** — admins see everything; regular users see only their own devices plus device groups granted to them or their user groups. The RustDesk client API is scoped with the same rules.
 - **Address books** — full support for the modern multi-address-book API *and* the legacy API: shared books, share rules (everyone / user / group), tags with colors.
 - **Audit logs** — connections, file transfers, console logins, and security alarms (brute-force/blocked-access events); filterable, exportable to CSV, with configurable retention and automatic nightly pruning.
+- **Single sign-on (OIDC)** — sign in with Keycloak, Authentik, Entra ID, Okta, Google Workspace or any OpenID Connect provider. Authorization-code flow with PKCE, verified ID tokens, just-in-time account creation with optional approval, an email-domain allowlist, and optional provider sign-out. Password sign-in can be switched off — and comes back automatically if the provider is unreachable, so a broken IdP can't lock you out.
+- **Device policies (strategies)** — push client settings to devices from the console: permissions, security and password rules, capture options. Assign to a device, a user or a device group, with the most specific assignment winning. Optionally enforced, so a local change is reverted on the next heartbeat.
+- **Two-factor authentication** — TOTP with single-use recovery codes, optionally required for everyone or for administrators only, with an administrator reset and a break-glass command.
+- **Delegated administration** — roles with a permission matrix over each console area, so you can grant someone the users screen without handing them the whole console.
+- **Automation API** — scoped bearer tokens and a REST API for users, devices, groups, address books and audit logs, plus support for the RustDesk client's `--assign` flag for unattended deployment.
+- **Email** — SMTP settings with a test send, user invitations by email, self-service password reset, and an optional emailed code when signing in from a new browser.
 - **Dashboard** — live stat tiles, active sessions, 14-day connection charts, platform and version breakdowns.
 - **Importer** — one artisan command migrates everything (users with passwords intact, devices, address books, audit history) from a `lejianwen/rustdesk-api` database.
 - **Mobile-first** — every screen works on a phone; wide tables degrade to card lists. Dark and light themes.
@@ -44,7 +50,7 @@ WebSocket bridge to your RustDesk server built in). Releases are published to
 GHCR — or build it yourself:
 
 ```bash
-docker pull ghcr.io/marcpope/cortendesk:0.8.0-beta.2   # or build locally:
+docker pull ghcr.io/marcpope/cortendesk:0.9.0   # or build locally:
 docker build -t cortendesk .
 docker run -d -p 8080:8080 -v cortendesk-data:/data \
   -e CORTENDESK_ID_SERVER=hbbs.example.com:21116 \

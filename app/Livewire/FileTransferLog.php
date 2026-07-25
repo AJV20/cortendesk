@@ -2,6 +2,7 @@
 
 namespace App\Livewire;
 
+use App\Livewire\Concerns\AuthorizesConsole;
 use App\Models\AuditFileTransfer;
 use App\Models\Device;
 use Illuminate\Database\Eloquent\Builder;
@@ -12,7 +13,7 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class FileTransferLog extends Component
 {
-    use WithPagination;
+    use AuthorizesConsole, WithPagination;
 
     protected string $paginationTheme = 'bootstrap';
 
@@ -26,6 +27,16 @@ class FileTransferLog extends Component
     public string $dateTo = '';
 
     public int $perPage = 20;
+
+    /**
+     * File transfers log is part of the operational log screens (PLAN D4).
+     * /livewire/update is reachable directly, so the component guards itself
+     * rather than trusting the route it happened to be rendered under.
+     */
+    public function mount(): void
+    {
+        $this->authorizeConsole('audit', 'r');
+    }
 
     public function updatedSearch(): void
     {

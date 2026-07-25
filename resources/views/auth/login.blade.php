@@ -15,10 +15,26 @@
 
         <div class="card-body p-4">
 
+            @php
+                $oidc = app(\App\Services\OidcService::class);
+                $ssoEnabled = $oidc->isEnabled();
+                $passwordDisabled = $oidc->localLoginDisabled();
+            @endphp
+
             <div class="text-center w-75 m-auto">
                 <h4 class="text-dark-50 text-center pb-0 fw-bold">Sign In</h4>
-                <p class="text-muted mb-4">Enter your username and password to access the console.</p>
+                <p class="text-muted mb-4">
+                    {{ $passwordDisabled
+                        ? 'Use your organisation account to access the console.'
+                        : 'Enter your username and password to access the console.' }}
+                </p>
             </div>
+
+            @if (session('status'))
+                <div class="alert alert-success" role="alert">
+                    {{ session('status') }}
+                </div>
+            @endif
 
             @if ($errors->any())
                 <div class="alert alert-danger" role="alert">
@@ -26,6 +42,23 @@
                 </div>
             @endif
 
+            @if ($ssoEnabled)
+                <div class="mb-3 d-grid">
+                    <a href="{{ route('login.oidc') }}" class="btn btn-outline-primary">
+                        <i class="ri-shield-user-line me-1"></i> {{ $oidc->buttonLabel() }}
+                    </a>
+                </div>
+
+                @unless ($passwordDisabled)
+                    <div class="d-flex align-items-center text-muted my-3">
+                        <hr class="flex-grow-1 my-0">
+                        <span class="px-2 fs-13">or</span>
+                        <hr class="flex-grow-1 my-0">
+                    </div>
+                @endunless
+            @endif
+
+            @unless ($passwordDisabled)
             <form method="POST" action="{{ route('login.attempt') }}">
                 @csrf
 
@@ -47,11 +80,15 @@
                     </div>
                 </div>
 
-                <div class="mb-3">
+                <div class="mb-3 d-flex justify-content-between align-items-center">
                     <div class="form-check">
                         <input type="checkbox" class="form-check-input" id="remember" name="remember" checked>
                         <label class="form-check-label" for="remember">Remember me</label>
                     </div>
+                    {{-- Only offered when a relay exists to deliver the link. --}}
+                    @if (app(\App\Services\MailSettings::class)->isEnabled())
+                        <a href="{{ route('password.request') }}" class="text-muted fs-13">Forgot password?</a>
+                    @endif
                 </div>
 
                 <div class="mb-3 mb-0 text-center">
@@ -60,6 +97,7 @@
                     </button>
                 </div>
             </form>
+            @endunless
         </div>
     </div>
 @endsection

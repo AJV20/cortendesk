@@ -11,6 +11,11 @@ class Device extends Model
 {
     use SoftDeletes;
 
+    /** Approval states for the deployment gate (PLAN B3). */
+    public const STATUS_ACTIVE = 'active';
+
+    public const STATUS_PENDING = 'pending';
+
     /** Fallback seconds without a heartbeat before a device counts as offline. */
     public const ONLINE_WINDOW = 60;
 
@@ -27,6 +32,7 @@ class Device extends Model
     protected $fillable = [
         'rustdesk_id',
         'uuid',
+        'status',
         'hostname',
         'os',
         'cpu',
@@ -45,7 +51,27 @@ class Device extends Model
     {
         return [
             'last_online_at' => 'datetime',
+            'strategy_options' => 'array',
+            'strategy_acked_options' => 'array',
+            'strategy_acked_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Keep the cached strategy resolution (PLAN C2) honest: it depends on the
+     * device's own assignment, its owner and its group, so any change to the
+     * latter two invalidates it. saveQuietly() writers (the heartbeat presence
+     * update) deliberately do not trigger this — they never touch either column.
+     */
+    protected static function booted(): void
+    {
+        static::created(fn (Device $device) => Strategy::syncResolvedFor($device));
+
+        static::updated(function (Device $device) {
+            if ($device->wasChanged(['user_id', 'device_group_id'])) {
+                Strategy::syncResolvedFor($device);
+            }
+        });
     }
 
     public function user(): BelongsTo
@@ -56,6 +82,41 @@ class Device extends Model
     public function group(): BelongsTo
     {
         return $this->belongsTo(DeviceGroup::class, 'device_group_id');
+    }
+
+    /** The strategy currently in force for this device (cached resolution). */
+    public function resolvedStrategy(): BelongsTo
+    {
+        return $this->belongsTo(Strategy::class, 'strategy_id_resolved');
+    }
+
+    /** The strategy assigned directly to this device, ignoring precedence. */
+    public function assignedStrategyId(): ?int
+    {
+        return Strategy::assignedStrategyId(Strategy::LEVEL_DEVICE, (int) $this->getKey());
+    }
+
+    /** Whether the deployment approval gate is currently enabled (PLAN B3). */
+    public static function approvalGateEnabled(): bool
+    {
+        return (bool) Setting::get('require_device_approval', '0');
+    }
+
+    public function isPending(): bool
+    {
+        return $this->status === self::STATUS_PENDING;
+    }
+
+    /** Approved (visible) devices only. */
+    public function scopeApproved(Builder $query): Builder
+    {
+        return $query->where('status', self::STATUS_ACTIVE);
+    }
+
+    /** Devices quarantined by the deployment gate, awaiting approval. */
+    public function scopePending(Builder $query): Builder
+    {
+        return $query->where('status', self::STATUS_PENDING);
     }
 
     public function isOnline(): bool
@@ -80,9 +141,23 @@ class Device extends Model
     /**
      * Restrict to devices a console user may see. Admins: everything.
      * Non-admins: devices in a granted device group OR that they own.
-     * This is the single source of truth for device visibility.
+     * This is the single source of truth for device visibility, and it also
+     * hides gate-quarantined (pending) devices everywhere it is used — the
+     * device list, group tab, address book, dashboards and stats. Pending
+     * devices only surface through scopeOwnershipVisibleTo() + scopePending()
+     * on the Devices "Pending" tab.
      */
     public function scopeVisibleTo(Builder $query, User $user): Builder
+    {
+        return $query->ownershipVisibleTo($user)->approved();
+    }
+
+    /**
+     * The ownership/group half of visibility, WITHOUT the approval filter.
+     * Use directly only for the pending-approval queue; everywhere else wants
+     * scopeVisibleTo so quarantined devices stay hidden.
+     */
+    public function scopeOwnershipVisibleTo(Builder $query, User $user): Builder
     {
         if ($user->seesAllDevices()) {
             return $query;

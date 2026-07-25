@@ -3,9 +3,29 @@
 use App\Livewire\AddressBookManager;
 use App\Models\AddressBook;
 use App\Models\AddressBookEntry;
+use App\Models\AddressBookRule;
 use App\Models\Tag;
 use App\Models\User;
 use Livewire\Livewire;
+
+/** A shared book owned by the beforeEach admin, shared with $member at a tier. */
+function sharedBookFor(User $owner, User $member, int $permission): AddressBook
+{
+    $book = AddressBook::create(['name' => 'Shared', 'owner_user_id' => $owner->id, 'is_personal' => false]);
+    $book->rules()->create(['subject_type' => 'user', 'subject_id' => $member->id, 'permission' => $permission]);
+
+    return $book;
+}
+
+function member(): User
+{
+    return User::create([
+        'username' => 'm-'.uniqid(),
+        'password' => 'secret-password',
+        'is_admin' => false,
+        'is_active' => true,
+    ]);
+}
 
 beforeEach(function () {
     $this->user = User::create([
@@ -153,6 +173,76 @@ it('does not allow deleting a personal address book', function () {
         ->call('deleteBook');
 
     expect(AddressBook::whereKey($personal->id)->exists())->toBeTrue();
+});
+
+/*
+|--------------------------------------------------------------------------
+| B4 — console enforces the same ro / rw / full tiers as the client API.
+|--------------------------------------------------------------------------
+*/
+
+it('blocks a READ-ONLY console member from adding entries, tags, or rules', function () {
+    $member = member();
+    $book = sharedBookFor($this->user, $member, AddressBookRule::PERM_READ);
+
+    $component = Livewire::actingAs($member)
+        ->test(AddressBookManager::class)
+        ->call('selectBook', $book->id)
+        ->assertSet('selectedBookId', $book->id);
+
+    // View exposes RO tier and hides the write affordances.
+    expect($component->instance()->permission())->toBe(AddressBookRule::PERM_READ)
+        ->and($component->instance()->canWriteEntries())->toBeFalse()
+        ->and($component->instance()->canManage())->toBeFalse();
+
+    $component->set('entryRustdeskId', '111222333')->call('saveEntry');
+    $component->set('tagName', 'nope')->set('tagColor', '#2563EB')->call('addTag');
+
+    expect($book->entries()->count())->toBe(0)
+        ->and($book->tags()->count())->toBe(0);
+});
+
+it('lets a READ/WRITE console member add entries but not tags', function () {
+    $member = member();
+    $book = sharedBookFor($this->user, $member, AddressBookRule::PERM_READ_WRITE);
+
+    $component = Livewire::actingAs($member)
+        ->test(AddressBookManager::class)
+        ->call('selectBook', $book->id);
+
+    expect($component->instance()->canWriteEntries())->toBeTrue()
+        ->and($component->instance()->canManage())->toBeFalse();
+
+    $component->call('openAddEntry')
+        ->set('entryRustdeskId', '111222333')
+        ->set('entryAlias', 'ok')
+        ->call('saveEntry')
+        ->assertHasNoErrors();
+
+    // Tag creation is a FULL-only operation and must be a no-op.
+    $component->set('tagName', 'nope')->set('tagColor', '#2563EB')->call('addTag');
+
+    expect($book->entries()->where('rustdesk_id', '111222333')->exists())->toBeTrue()
+        ->and($book->tags()->count())->toBe(0);
+});
+
+it('lets a FULL-control console member manage entries, tags, and rules', function () {
+    $member = member();
+    $book = sharedBookFor($this->user, $member, AddressBookRule::PERM_FULL);
+
+    $component = Livewire::actingAs($member)
+        ->test(AddressBookManager::class)
+        ->call('selectBook', $book->id);
+
+    expect($component->instance()->canManage())->toBeTrue();
+
+    $component->call('openAddTag')->set('tagName', 'urgent')->set('tagColor', '#E53935')->call('addTag')
+        ->assertHasNoErrors();
+    $component->call('openAddEntry')->set('entryRustdeskId', '555')->call('saveEntry')
+        ->assertHasNoErrors();
+
+    expect($book->tags()->pluck('name')->all())->toBe(['urgent'])
+        ->and($book->entries()->where('rustdesk_id', '555')->exists())->toBeTrue();
 });
 
 it('strips a deleted tag from entry tag_ids', function () {

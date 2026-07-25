@@ -2,6 +2,7 @@
 
 namespace App\Livewire;
 
+use App\Livewire\Concerns\AuthorizesConsole;
 use App\Models\ConsoleAudit;
 use Illuminate\Database\Eloquent\Builder;
 use Livewire\Attributes\Url;
@@ -11,7 +12,7 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class ConsoleAuditList extends Component
 {
-    use WithPagination;
+    use AuthorizesConsole, WithPagination;
 
     protected string $paginationTheme = 'bootstrap';
 
@@ -41,6 +42,11 @@ class ConsoleAuditList extends Component
         'address-book.rule-add' => 'Address book rule added',
         'address-book.rule-update' => 'Address book rule updated',
         'address-book.rule-delete' => 'Address book rule deleted',
+        'strategy.create' => 'Strategy created',
+        'strategy.update' => 'Strategy updated',
+        'strategy.toggle' => 'Strategy enabled/disabled',
+        'strategy.delete' => 'Strategy deleted',
+        'strategy.assign' => 'Strategy assigned',
         'settings.update' => 'Settings updated',
         'logs.prune' => 'Logs pruned',
     ];
@@ -58,6 +64,16 @@ class ConsoleAuditList extends Component
     public string $dateTo = '';
 
     public int $perPage = 20;
+
+    /**
+     * Console audit trail is part of the sensitive half of the audit area (PLAN D4).
+     * /livewire/update is reachable directly, so the component guards itself
+     * rather than trusting the route it happened to be rendered under.
+     */
+    public function mount(): void
+    {
+        $this->authorizeConsole('audit', 'rw');
+    }
 
     public function updatedSearch(): void
     {
