@@ -42,7 +42,8 @@ class OidcUserResolver
         }
 
         $email = strtolower(trim((string) ($claims['email'] ?? '')));
-        $emailVerified = $this->claimIsTrue($claims['email_verified'] ?? null);
+        $verification = $this->emailVerification($claims);
+        $emailVerified = $verification === 'verified';
 
         if (! $this->domainAllowed($email)) {
             return $this->deny('Your email domain is not permitted to sign in to this console.');
@@ -64,10 +65,7 @@ class OidcUserResolver
 
             if ($existing) {
                 if (! $emailVerified) {
-                    return $this->deny(
-                        'Your identity provider has not verified this email address, so it cannot be '
-                        .'linked to an existing account. Contact your administrator.'
-                    );
+                    return $this->deny($this->verificationRefusal($verification));
                 }
 
                 // Someone else already owns this account's SSO identity.
@@ -88,7 +86,7 @@ class OidcUserResolver
         }
 
         // 3. Just-in-time provisioning.
-        return $this->provision($iss, $sub, $email, $emailVerified, $claims);
+        return $this->provision($iss, $sub, $email, $verification, $claims);
     }
 
     /**
@@ -133,7 +131,7 @@ class OidcUserResolver
      * @param  array<string, mixed>  $claims
      * @return array{status: 'ok'|'pending'|'denied', user: ?User, message: string}
      */
-    private function provision(string $iss, string $sub, string $email, bool $emailVerified, array $claims): array
+    private function provision(string $iss, string $sub, string $email, string $verification, array $claims): array
     {
         $policy = Setting::get('oidc_new_user_policy', 'deny');
 
@@ -144,11 +142,8 @@ class OidcUserResolver
         // Provisioning writes an email onto a brand-new account, which becomes
         // the linking key for any future identity. Requiring verification here
         // stops an unverified address from being planted for later takeover.
-        if ($email !== '' && ! $emailVerified) {
-            return $this->deny(
-                'Your identity provider has not verified your email address, so an account cannot be '
-                .'created automatically. Contact your administrator.'
-            );
+        if ($email !== '' && $verification !== 'verified') {
+            return $this->deny($this->verificationRefusal($verification));
         }
 
         $status = $policy === 'pending' ? 'pending' : 'active';
@@ -241,13 +236,60 @@ class OidcUserResolver
         return in_array(Str::after($email, '@'), $domains, true);
     }
 
-    /** Providers send booleans as true, "true" or 1 — accept all three. */
-    private function claimIsTrue(mixed $value): bool
+    /**
+     * Did the provider assert this email is verified?
+     *
+     * THREE states, not two. "unknown" is not "unverified":
+     *
+     *  - verified   — the provider says yes.
+     *  - unverified — the provider explicitly says no. Always refused: an
+     *                 address the user set themselves is an account-takeover
+     *                 path, and no setting overrides that.
+     *  - unknown    — the provider never mentions the claim. Microsoft Entra ID
+     *                 does not emit email_verified at all, and it is optional in
+     *                 the spec, so treating silence as a denial locks out whole
+     *                 providers with an error nobody can act on. TRUSTED BY
+     *                 DEFAULT; an operator who federates with a provider that
+     *                 lets users choose their own address can tighten this with
+     *                 `oidc_trust_unverified_email` = 0.
+     *
+     * The residual risk of trusting "unknown" is confined to first-time LINKING:
+     * someone who can set an arbitrary address at the provider could claim an
+     * existing console account with that address. It needs a provider that both
+     * omits the claim and allows self-chosen addresses, which a corporate
+     * directory does not. The domain allowlist narrows it further.
+     *
+     * @param  array<string, mixed>  $claims
+     * @return 'verified'|'unverified'|'unknown'
+     */
+    private function emailVerification(array $claims): string
     {
-        return $value === true
+        if (! array_key_exists('email_verified', $claims) || $claims['email_verified'] === null) {
+            return Setting::get('oidc_trust_unverified_email', '1') === '1' ? 'verified' : 'unknown';
+        }
+
+        $value = $claims['email_verified'];
+
+        // Providers send booleans as true, "true" or 1 — accept all three.
+        $isTrue = $value === true
             || $value === 1
             || (is_string($value) && strtolower($value) === 'true')
             || $value === '1';
+
+        return $isTrue ? 'verified' : 'unverified';
+    }
+
+    /** Tell the operator what actually went wrong, and what to do about it. */
+    private function verificationRefusal(string $verification): string
+    {
+        if ($verification === 'unknown') {
+            return 'Your identity provider did not say whether this email address is verified, and '
+                .'this console is configured to require that. An administrator can relax it under '
+                .'Settings → SSO.';
+        }
+
+        return 'Your identity provider reports this email address as unverified. Verify it with '
+            .'the provider, then sign in again.';
     }
 
     /** @return array{status: 'denied', user: null, message: string} */

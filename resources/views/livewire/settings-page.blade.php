@@ -359,6 +359,21 @@
                                     </div>
                                 </div>
 
+                                <div class="mb-3">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" role="switch" id="oidcTrustUnverifiedEmail"
+                                               wire:model="oidcTrustUnverifiedEmail">
+                                        <label class="form-check-label" for="oidcTrustUnverifiedEmail">Trust email addresses this provider does not verify</label>
+                                    </div>
+                                    <div class="form-text">
+                                        Some providers — Microsoft Entra ID among them — never send an
+                                        <code>email_verified</code> claim, so this is on by default; without it their users
+                                        cannot be matched to an account at all. Turn it off only if you federate with a
+                                        provider that lets people choose their own address. Either way, a provider that
+                                        explicitly reports an address as <em>unverified</em> is always refused.
+                                    </div>
+                                </div>
+
                                 <div class="row">
                                     <div class="col-md-6 mb-3">
                                         <label class="form-label">Default group for new users</label>

@@ -28,7 +28,15 @@ return new class extends Migration
             $table->foreignId('invited_by')->nullable()->constrained('users')->nullOnDelete();
             // Stored, not derived: auditable, and a future per-install expiry
             // setting can change without retroactively voiding live invites.
-            $table->timestamp('expires_at');
+            // NOT NULL timestamps must carry an explicit default. MariaDB and any
+            // MySQL with explicit_defaults_for_timestamp=0 give a NOT NULL
+            // TIMESTAMP an implicit '0000-00-00 00:00:00' unless it is the
+            // table's FIRST timestamp column, and Laravel's strict mode adds
+            // NO_ZERO_DATE, which then rejects the CREATE TABLE outright:
+            //   SQLSTATE[42000]: 1067 Invalid default value for 'expires_at'
+            // useCurrent() is the portable fix; every row sets the real value
+            // on insert, so the default is never the one that survives.
+            $table->timestamp('expires_at')->useCurrent();
             $table->timestamp('accepted_at')->nullable();
             $table->foreignId('accepted_user_id')->nullable()->constrained('users')->nullOnDelete();
             $table->timestamps();

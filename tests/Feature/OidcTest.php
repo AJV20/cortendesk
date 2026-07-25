@@ -778,3 +778,65 @@ it('updates a linked profile from directory claims', function () {
 
     expect($user->name)->toBe('New Name')->and($user->email)->toBe('new@example.com');
 });
+
+// --- email_verified: missing is not the same as false ----------------------
+
+it('accepts a provider that never states verification, by default', function () {
+    // Reported as issue #6. Microsoft Entra ID does not emit email_verified at
+    // all, so treating its silence as a denial locked those users out with an
+    // error message nobody could act on.
+    configureOidc();
+    fakeProvider(['id_token' => oidcIdToken(['email_verified' => null])]);
+
+    $user = User::factory()->create(['email' => 'ssouser@example.com']);
+
+    callbackWith()->assertRedirect(route('overview'));
+
+    $this->assertAuthenticatedAs($user->fresh());
+});
+
+it('refuses a silent provider when the operator tightens it', function () {
+    configureOidc(['oidc_trust_unverified_email' => '0']);
+    fakeProvider(['id_token' => oidcIdToken(['email_verified' => null])]);
+
+    User::factory()->create(['email' => 'ssouser@example.com']);
+
+    callbackWith()->assertSessionHasErrors('username');
+
+    // The message must say the claim was ABSENT, not that it was denied.
+    expect(session('errors')->first('username'))->toContain('did not say whether');
+
+    $this->assertGuest();
+});
+
+it('still refuses an address the provider calls unverified, whatever the setting', function () {
+    // An explicit false is the account-takeover case and no setting overrides it.
+    configureOidc(['oidc_trust_unverified_email' => '1']);
+    fakeProvider(['id_token' => oidcIdToken(['email_verified' => false])]);
+
+    User::factory()->create(['email' => 'ssouser@example.com']);
+
+    callbackWith()->assertSessionHasErrors('username');
+
+    expect(session('errors')->first('username'))->toContain('reports this email address as unverified');
+
+    $this->assertGuest();
+});
+
+it('provisions from a silent provider by default', function () {
+    configureOidc(['oidc_new_user_policy' => 'active']);
+    fakeProvider(['id_token' => oidcIdToken(['email_verified' => null])]);
+
+    callbackWith()->assertRedirect(route('overview'));
+
+    expect(User::query()->first()->email)->toBe('ssouser@example.com');
+});
+
+it('does not provision from a silent provider when tightened', function () {
+    configureOidc(['oidc_new_user_policy' => 'active', 'oidc_trust_unverified_email' => '0']);
+    fakeProvider(['id_token' => oidcIdToken(['email_verified' => null])]);
+
+    callbackWith()->assertSessionHasErrors('username');
+
+    expect(User::query()->count())->toBe(0);
+});
