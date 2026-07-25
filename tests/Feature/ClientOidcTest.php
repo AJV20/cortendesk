@@ -264,7 +264,8 @@ it('reports a rejected identity to the polling client', function () {
 });
 
 it('refuses an unverified email for the client flow too', function () {
-    configureOidc(['oidc_new_user_policy' => 'active']);
+    // With the operator's opt-in requirement on; ignored by default.
+    configureOidc(['oidc_new_user_policy' => 'active', 'oidc_require_verified_email' => '1']);
     fakeProvider(['id_token' => oidcIdToken(['email_verified' => false])]);
     User::factory()->create(['email' => 'ssouser@example.com']);
 

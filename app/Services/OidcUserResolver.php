@@ -15,10 +15,10 @@ use Illuminate\Support\Str;
  *  1. `(iss, sub)` — the only pair an IdP promises is stable and unique. An
  *     account already linked to an identity is found this way and nothing about
  *     the email matters.
- *  2. A VERIFIED email, and only for first-time linking of a pre-existing local
- *     account. Trusting an unverified email would let anyone who can set their
- *     profile email at the IdP take over a console account, so an unverified
- *     address is refused outright rather than falling through to provisioning.
+ *  2. The email, and only for first-time linking of a pre-existing local
+ *     account. After that the account is pinned to (iss, sub) and the address
+ *     stops deciding anything. The provider's `email_verified` claim is NOT
+ *     consulted unless the operator opts in — see emailVerification().
  *  3. Just-in-time provisioning, subject to the operator's new-user policy.
  *
  * Linking never disables password login for an account that already had one:
@@ -237,35 +237,36 @@ class OidcUserResolver
     }
 
     /**
-     * Did the provider assert this email is verified?
+     * Should this sign-in be refused over the provider's email verification?
      *
-     * THREE states, not two. "unknown" is not "unverified":
+     * Normally no. `email_verified` is optional in OpenID Connect and the two
+     * most common self-hosted providers make it useless as a signal: Microsoft
+     * Entra ID never sends it, and Authentik deliberately sends `false` for
+     * everyone because it cannot confirm anyone owns their address. Refusing on
+     * it locked both out entirely.
      *
-     *  - verified   — the provider says yes.
-     *  - unverified — the provider explicitly says no. Always refused: an
-     *                 address the user set themselves is an account-takeover
-     *                 path, and no setting overrides that.
-     *  - unknown    — the provider never mentions the claim. Microsoft Entra ID
-     *                 does not emit email_verified at all, and it is optional in
-     *                 the spec, so treating silence as a denial locks out whole
-     *                 providers with an error nobody can act on. TRUSTED BY
-     *                 DEFAULT; an operator who federates with a provider that
-     *                 lets users choose their own address can tighten this with
-     *                 `oidc_trust_unverified_email` = 0.
+     * What actually protects an account here is the identity keying, not this
+     * claim. A console account is matched on `(iss, sub)` first and an email is
+     * consulted only for the ONE-TIME link; after that the account is pinned to
+     * the provider identity and the address no longer decides anything. The
+     * domain allowlist and the new-user policy cover the rest.
      *
-     * The residual risk of trusting "unknown" is confined to first-time LINKING:
-     * someone who can set an arbitrary address at the provider could claim an
-     * existing console account with that address. It needs a provider that both
-     * omits the claim and allows self-chosen addresses, which a corporate
-     * directory does not. The domain allowlist narrows it further.
+     * So the claim is ignored unless an operator opts into strictness, which is
+     * worth having only when federating with a provider whose users can choose
+     * their own address.
      *
      * @param  array<string, mixed>  $claims
      * @return 'verified'|'unverified'|'unknown'
      */
     private function emailVerification(array $claims): string
     {
+        // Not enforcing: nothing the provider says can refuse the sign-in.
+        if (Setting::get('oidc_require_verified_email', '0') !== '1') {
+            return 'verified';
+        }
+
         if (! array_key_exists('email_verified', $claims) || $claims['email_verified'] === null) {
-            return Setting::get('oidc_trust_unverified_email', '1') === '1' ? 'verified' : 'unknown';
+            return 'unknown';
         }
 
         $value = $claims['email_verified'];
@@ -284,12 +285,13 @@ class OidcUserResolver
     {
         if ($verification === 'unknown') {
             return 'Your identity provider did not say whether this email address is verified, and '
-                .'this console is configured to require that. An administrator can relax it under '
-                .'Settings → SSO.';
+                .'this console is set to require that. An administrator can turn the requirement off '
+                .'under Settings → SSO.';
         }
 
-        return 'Your identity provider reports this email address as unverified. Verify it with '
-            .'the provider, then sign in again.';
+        return 'Your identity provider reports this email address as unverified, and this console '
+            .'is set to require verification. Verify it with the provider, or ask an administrator '
+            .'to turn the requirement off under Settings → SSO.';
     }
 
     /** @return array{status: 'denied', user: null, message: string} */

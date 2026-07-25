@@ -1,6 +1,8 @@
 <?php
 
+use App\Http\Middleware\TrustConfiguredProxies;
 use App\Models\User;
+use Illuminate\Http\Request;
 
 it('generates https asset urls when behind a TLS-terminating proxy', function () {
     // Simulate the proxy hop: the container is reached over http, but the
@@ -52,4 +54,42 @@ it('treats a forwarded-https request as secure', function () {
         ->assertOk();
 
     expect(request()->isSecure())->toBeTrue();
+});
+
+/*
+|--------------------------------------------------------------------------
+| Reading the proxy list from config (#7)
+|--------------------------------------------------------------------------
+| The list used to be built with env() inside bootstrap/app.php. That closure
+| runs outside a config file, so once `php artisan config:cache` had run — as
+| deploy.sh and the Docker image both do — env() returned null and a
+| TRUSTED_PROXIES set in .env was silently ignored on every production install.
+*/
+
+it('reads the proxy list from config, so it survives config:cache', function () {
+    config()->set('trustedproxy.proxies', ['203.0.113.5']);
+
+    $middleware = new TrustConfiguredProxies;
+
+    expect((new ReflectionMethod($middleware, 'proxies'))->invoke($middleware))
+        ->toBe(['203.0.113.5']);
+});
+
+it('passes a bare * through as a string', function () {
+    // Laravel wants "trust any peer" as a string, not a one-element array.
+    config()->set('trustedproxy.proxies', ['*']);
+
+    $middleware = new TrustConfiguredProxies;
+
+    expect((new ReflectionMethod($middleware, 'proxies'))->invoke($middleware))
+        ->toBe('*');
+});
+
+it('keeps X-Forwarded-Host out of the trusted header set', function () {
+    // Belt and braces alongside the forged-XFH request test above.
+    $middleware = new TrustConfiguredProxies;
+    $headers = (new ReflectionMethod($middleware, 'headers'))->invoke($middleware);
+
+    expect($headers & Request::HEADER_X_FORWARDED_HOST)->toBe(0)
+        ->and($headers & Request::HEADER_X_FORWARDED_PROTO)->not->toBe(0);
 });

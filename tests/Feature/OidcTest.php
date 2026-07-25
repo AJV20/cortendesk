@@ -358,7 +358,9 @@ it('links an existing local account by verified email', function () {
 });
 
 it('refuses to link an account when the provider has not verified the email', function () {
-    configureOidc();
+    // Only when the operator has opted into requiring the claim — see the
+    // block at the end of this file for the default behaviour.
+    configureOidc(['oidc_require_verified_email' => '1']);
     fakeProvider(['id_token' => oidcIdToken(['email_verified' => false])]);
 
     $user = User::factory()->create(['username' => 'victim', 'email' => 'ssouser@example.com']);
@@ -472,7 +474,7 @@ it('avoids username collisions when provisioning', function () {
 });
 
 it('refuses to provision from an unverified email', function () {
-    configureOidc(['oidc_new_user_policy' => 'active']);
+    configureOidc(['oidc_new_user_policy' => 'active', 'oidc_require_verified_email' => '1']);
     fakeProvider(['id_token' => oidcIdToken(['email_verified' => false])]);
 
     callbackWith()->assertSessionHasErrors('username');
@@ -779,12 +781,10 @@ it('updates a linked profile from directory claims', function () {
     expect($user->name)->toBe('New Name')->and($user->email)->toBe('new@example.com');
 });
 
-// --- email_verified: missing is not the same as false ----------------------
+// --- email_verified: ignored unless the operator opts in -------------------
 
-it('accepts a provider that never states verification, by default', function () {
-    // Reported as issue #6. Microsoft Entra ID does not emit email_verified at
-    // all, so treating its silence as a denial locked those users out with an
-    // error message nobody could act on.
+it('admits a provider that never sends the claim', function () {
+    // Microsoft Entra ID does not emit email_verified at all (issue #6).
     configureOidc();
     fakeProvider(['id_token' => oidcIdToken(['email_verified' => null])]);
 
@@ -795,23 +795,31 @@ it('accepts a provider that never states verification, by default', function () 
     $this->assertAuthenticatedAs($user->fresh());
 });
 
-it('refuses a silent provider when the operator tightens it', function () {
-    configureOidc(['oidc_trust_unverified_email' => '0']);
-    fakeProvider(['id_token' => oidcIdToken(['email_verified' => null])]);
+it('admits a provider that sends false', function () {
+    // Authentik sends email_verified: false for every user by design, because
+    // it cannot confirm anyone owns their address. Refusing on that locked out
+    // the whole provider.
+    configureOidc();
+    fakeProvider(['id_token' => oidcIdToken(['email_verified' => false])]);
 
-    User::factory()->create(['email' => 'ssouser@example.com']);
+    $user = User::factory()->create(['email' => 'ssouser@example.com']);
 
-    callbackWith()->assertSessionHasErrors('username');
+    callbackWith()->assertRedirect(route('overview'));
 
-    // The message must say the claim was ABSENT, not that it was denied.
-    expect(session('errors')->first('username'))->toContain('did not say whether');
-
-    $this->assertGuest();
+    $this->assertAuthenticatedAs($user->fresh());
 });
 
-it('still refuses an address the provider calls unverified, whatever the setting', function () {
-    // An explicit false is the account-takeover case and no setting overrides it.
-    configureOidc(['oidc_trust_unverified_email' => '1']);
+it('provisions from a provider that sends false', function () {
+    configureOidc(['oidc_new_user_policy' => 'active']);
+    fakeProvider(['id_token' => oidcIdToken(['email_verified' => false])]);
+
+    callbackWith()->assertRedirect(route('overview'));
+
+    expect(User::query()->first()->email)->toBe('ssouser@example.com');
+});
+
+it('refuses an unverified address once the operator requires verification', function () {
+    configureOidc(['oidc_require_verified_email' => '1']);
     fakeProvider(['id_token' => oidcIdToken(['email_verified' => false])]);
 
     User::factory()->create(['email' => 'ssouser@example.com']);
@@ -823,20 +831,40 @@ it('still refuses an address the provider calls unverified, whatever the setting
     $this->assertGuest();
 });
 
-it('provisions from a silent provider by default', function () {
-    configureOidc(['oidc_new_user_policy' => 'active']);
+it('refuses a silent provider once the operator requires verification', function () {
+    configureOidc(['oidc_require_verified_email' => '1']);
     fakeProvider(['id_token' => oidcIdToken(['email_verified' => null])]);
 
-    callbackWith()->assertRedirect(route('overview'));
-
-    expect(User::query()->first()->email)->toBe('ssouser@example.com');
-});
-
-it('does not provision from a silent provider when tightened', function () {
-    configureOidc(['oidc_new_user_policy' => 'active', 'oidc_trust_unverified_email' => '0']);
-    fakeProvider(['id_token' => oidcIdToken(['email_verified' => null])]);
+    User::factory()->create(['email' => 'ssouser@example.com']);
 
     callbackWith()->assertSessionHasErrors('username');
 
-    expect(User::query()->count())->toBe(0);
+    expect(session('errors')->first('username'))->toContain('did not say whether');
+
+    $this->assertGuest();
+});
+
+it('still admits a verified address when verification is required', function () {
+    configureOidc(['oidc_require_verified_email' => '1']);
+    fakeProvider();
+
+    $user = User::factory()->create(['email' => 'ssouser@example.com']);
+
+    callbackWith()->assertRedirect(route('overview'));
+
+    $this->assertAuthenticatedAs($user->fresh());
+});
+
+it('keys identity on issuer and subject, not the address', function () {
+    // The protection that actually matters, and the reason the email claim can
+    // be ignored: once linked, the address decides nothing.
+    configureOidc();
+    fakeProvider(['id_token' => oidcIdToken(['email' => 'moved@example.com', 'email_verified' => false])]);
+
+    $user = User::factory()->create(['email' => 'old@example.com']);
+    $user->forceFill(['oidc_iss' => OIDC_ISSUER, 'oidc_sub' => 'subject-abc-123'])->save();
+
+    callbackWith()->assertRedirect(route('overview'));
+
+    $this->assertAuthenticatedAs($user->fresh());
 });

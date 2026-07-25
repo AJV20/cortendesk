@@ -72,8 +72,8 @@ class SettingsPage extends Component
 
     public string $oidcAllowedDomains = '';
 
-    /** Trust the email when the provider never states verification (Entra ID). */
-    public bool $oidcTrustUnverifiedEmail = true;
+    /** Opt-in strictness: refuse unless the provider asserts email_verified. */
+    public bool $oidcRequireVerifiedEmail = false;
 
     public bool $oidcLogoutEnabled = false;
 
@@ -151,7 +151,7 @@ class SettingsPage extends Component
         $this->oidcDefaultAdmin = Setting::get('oidc_default_admin', '0') === '1';
         $this->oidcDefaultGroupId = (int) (Setting::get('oidc_default_group_id', '0') ?: 0);
         $this->oidcAllowedDomains = Setting::get('oidc_allowed_domains', '') ?? '';
-        $this->oidcTrustUnverifiedEmail = Setting::get('oidc_trust_unverified_email', '1') === '1';
+        $this->oidcRequireVerifiedEmail = Setting::get('oidc_require_verified_email', '0') === '1';
         $this->oidcLogoutEnabled = Setting::get('oidc_logout_enabled', '0') === '1';
         $this->oidcDisableLocalLogin = Setting::get('oidc_disable_local_login', '0') === '1';
 
@@ -274,7 +274,7 @@ class SettingsPage extends Component
         Setting::put('oidc_default_admin', $this->oidcDefaultAdmin ? '1' : '0');
         Setting::put('oidc_default_group_id', (string) $this->oidcDefaultGroupId);
         Setting::put('oidc_allowed_domains', trim($this->oidcAllowedDomains));
-        Setting::put('oidc_trust_unverified_email', $this->oidcTrustUnverifiedEmail ? '1' : '0');
+        Setting::put('oidc_require_verified_email', $this->oidcRequireVerifiedEmail ? '1' : '0');
         Setting::put('oidc_logout_enabled', $this->oidcLogoutEnabled ? '1' : '0');
         Setting::put('oidc_disable_local_login', $this->oidcDisableLocalLogin ? '1' : '0');
 
