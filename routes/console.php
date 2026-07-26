@@ -14,3 +14,7 @@ Schedule::command('cortendesk:prune-logs')->dailyAt('04:10');
 // Hygiene: dead invitation links and expired device trust (PLAN D1). Separate
 // from prune-logs, which no-ops when log retention is 0.
 Schedule::command('cortendesk:prune-invitations')->dailyAt('04:20');
+
+// Sessions on devices that have gone silent (issue #10). Frequent, not nightly:
+// this drives what the dashboard reports as happening right now.
+Schedule::command('cortendesk:close-stale-sessions')->everyFiveMinutes()->withoutOverlapping();

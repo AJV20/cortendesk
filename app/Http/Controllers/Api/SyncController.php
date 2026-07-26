@@ -65,6 +65,19 @@ class SyncController extends Controller
             $response['sysinfo'] = 1;
         }
 
+        // Reconcile Active sessions against what the device says is actually
+        // live (issue #10). Until now a session was only ever closed by the
+        // client posting action=close on the audit endpoint, so any end that
+        // skipped that post — reboot, crash, network drop, service stopped —
+        // left the row open forever and the console showed it as Active.
+        //
+        // `conns` is the device's own list of live incoming connections and is
+        // authoritative. It is OMITTED ENTIRELY when empty (docs/client-api.md
+        // §8), so the absent case is the important one: it means "nothing is
+        // live here", which is exactly what a rebooted machine reports.
+        $live = array_map('intval', (array) $request->input('conns', []));
+        AuditConnection::reconcileFor($id, $live);
+
         // Operator-requested session termination (docs/client-api.md §8). The
         // client closes each listed connection; this is the only channel the
         // console has for reaching a live session, which runs peer-to-peer and
