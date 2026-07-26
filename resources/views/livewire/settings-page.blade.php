@@ -16,8 +16,11 @@
         <div class="alert alert-danger">
             <i class="ri-mail-close-line me-1"></i><strong>Email is failing.</strong>
             {{ session('mail_broken') ?: 'Nobody else can sign in while sign-in verification is enabled. Fix the settings below and send a test message.' }}
+            {{-- SMTP errors routinely carry a long unbroken token (a host, a URL, a
+                 certificate subject). .rd-mono breaks anywhere, so it cannot set a
+                 min-content wider than the phone and drag the body sideways. --}}
             @if ($mailError = $mailSvc->lastError())
-                <div class="mt-2 fs-13 font-monospace">{{ $mailError }}</div>
+                <div class="mt-2 rd-mono">{{ $mailError }}</div>
             @endif
         </div>
     @endif
@@ -39,12 +42,18 @@
             'maintenance' => ['ri-database-2-line', 'Maintenance'],
         ];
     @endphp
-    <ul class="nav nav-tabs nav-bordered mb-3">
+    {{-- The label stays visible at every width. Six tabs do not fit across a
+         390px screen, but .rd-tabbar is a horizontal scroller (section 17 of
+         cortendesk.css) so the strip slides instead of wrapping — and six
+         unlabelled icons, two of them shields, are not a navigation. Livewire
+         morphs this list rather than replacing it, so the scroll position
+         survives a tab change. --}}
+    <ul class="nav nav-tabs nav-bordered rd-tabbar mb-3">
         @foreach ($tabs as $key => [$icon, $label])
             <li class="nav-item">
                 <a href="#" wire:click.prevent="$set('tab', '{{ $key }}')"
                    class="nav-link {{ $tab === $key ? 'active' : '' }}">
-                    <i class="{{ $icon }} me-1"></i><span class="d-none d-sm-inline">{{ $label }}</span>
+                    <i class="{{ $icon }} me-1"></i><span>{{ $label }}</span>
                 </a>
             </li>
         @endforeach
@@ -58,7 +67,7 @@
                 <div class="col-lg-7">
                     <div class="card">
                         <div class="card-header">
-                            <h5 class="card-title mb-0"><i class="ri-server-line me-1"></i>RustDesk Server</h5>
+                            <h5 class="card-title mb-0">RustDesk Server</h5>
                         </div>
                         <div class="card-body">
                             <form wire:submit="save">
@@ -73,7 +82,7 @@
                                 </div>
                                 <div class="mb-3">
                                     <label class="form-label">Public Key</label>
-                                    <input type="text" class="form-control font-monospace" wire:model="publicKey" placeholder="contents of id_ed25519.pub">
+                                    <input type="text" class="form-control rd-mono" wire:model="publicKey" placeholder="contents of id_ed25519.pub">
                                     <div class="form-text">The server's ed25519 public key — clients need it when <code>ENCRYPTED_ONLY</code> is enabled.</div>
                                 </div>
                                 <div class="mb-3">
@@ -105,7 +114,7 @@
 
                     <div class="card">
                         <div class="card-header">
-                            <h5 class="card-title mb-0"><i class="ri-router-line me-1"></i>Relay Servers</h5>
+                            <h5 class="card-title mb-0">Relay Servers</h5>
                         </div>
                         <div class="card-body">
                             <p class="text-muted fs-13 mb-3">The relay pool (hbbr) your rendezvous server hands to clients. Relay
@@ -114,19 +123,25 @@
                                 use the single <strong>Relay Server (hbbr)</strong> above as the fallback.</p>
 
                             <form wire:submit="save">
+                                {{-- Address takes the whole first line on a phone; the geo tag and
+                                     the remove button share the second. The old split put the button
+                                     in a col-1, which is a 17px content box at 390px against the
+                                     ~45px a button needs — it wrapped under the inputs. col-sm-auto
+                                     sizes the button to itself instead of to a twelfth of the row,
+                                     so it stays honest at every width. --}}
                                 @forelse ($relayServers as $i => $relay)
                                     <div class="row g-2 mb-2 align-items-start" wire:key="relay-{{ $i }}">
-                                        <div class="col-7 col-sm-8">
+                                        <div class="col-12 col-sm">
                                             <input type="text" class="form-control @error('relayServers.'.$i.'.address') is-invalid @enderror"
                                                    wire:model="relayServers.{{ $i }}.address" placeholder="relay.example.com:21117">
                                             @error('relayServers.'.$i.'.address') <div class="invalid-feedback">{{ $message }}</div> @enderror
                                         </div>
-                                        <div class="col-4 col-sm-3">
+                                        <div class="col-8 col-sm-4">
                                             <input type="text" class="form-control @error('relayServers.'.$i.'.geo') is-invalid @enderror"
                                                    wire:model="relayServers.{{ $i }}.geo" placeholder="Geo tag">
                                             @error('relayServers.'.$i.'.geo') <div class="invalid-feedback">{{ $message }}</div> @enderror
                                         </div>
-                                        <div class="col-1 d-grid">
+                                        <div class="col-4 col-sm-auto d-grid">
                                             <button type="button" class="btn btn-light text-danger" wire:click="removeRelay({{ $i }})"
                                                     title="Remove relay" @disabled(! $canManageSettings)><i class="ri-close-line"></i></button>
                                         </div>
@@ -154,7 +169,7 @@
                 <div class="col-lg-6">
                     <div class="card">
                         <div class="card-header">
-                            <h5 class="card-title mb-0"><i class="ri-download-2-line me-1"></i>Client Setup</h5>
+                            <h5 class="card-title mb-0">Client Setup</h5>
                         </div>
                         <div class="card-body">
                             <p class="text-muted fs-13">Point RustDesk clients at this console under
@@ -162,25 +177,25 @@
 
                             <label class="form-label fs-13 text-muted mb-0">ID Server</label>
                             <div class="input-group input-group-sm mb-2">
-                                <input type="text" class="form-control font-monospace" readonly value="{{ $idServer }}">
+                                <input type="text" class="form-control rd-mono" readonly value="{{ $idServer }}">
                                 <button class="btn btn-light" type="button" onclick="navigator.clipboard.writeText(this.previousElementSibling.value)"><i class="ri-file-copy-line"></i></button>
                             </div>
 
                             <label class="form-label fs-13 text-muted mb-0">Relay Server</label>
                             <div class="input-group input-group-sm mb-2">
-                                <input type="text" class="form-control font-monospace" readonly value="{{ $relayServer }}">
+                                <input type="text" class="form-control rd-mono" readonly value="{{ $relayServer }}">
                                 <button class="btn btn-light" type="button" onclick="navigator.clipboard.writeText(this.previousElementSibling.value)"><i class="ri-file-copy-line"></i></button>
                             </div>
 
                             <label class="form-label fs-13 text-muted mb-0">API Server</label>
                             <div class="input-group input-group-sm mb-2">
-                                <input type="text" class="form-control font-monospace" readonly value="{{ $apiUrl }}">
+                                <input type="text" class="form-control rd-mono" readonly value="{{ $apiUrl }}">
                                 <button class="btn btn-light" type="button" onclick="navigator.clipboard.writeText(this.previousElementSibling.value)"><i class="ri-file-copy-line"></i></button>
                             </div>
 
                             <label class="form-label fs-13 text-muted mb-0">Key</label>
                             <div class="input-group input-group-sm">
-                                <input type="text" class="form-control font-monospace" readonly value="{{ $publicKey }}">
+                                <input type="text" class="form-control rd-mono" readonly value="{{ $publicKey }}">
                                 <button class="btn btn-light" type="button" onclick="navigator.clipboard.writeText(this.previousElementSibling.value)"><i class="ri-file-copy-line"></i></button>
                             </div>
                         </div>
@@ -195,7 +210,7 @@
                 <div class="col-lg-7">
                     <div class="card">
                         <div class="card-header">
-                            <h5 class="card-title mb-0"><i class="ri-shield-keyhole-line me-1"></i>Two-Factor Authentication</h5>
+                            <h5 class="card-title mb-0">Two-Factor Authentication</h5>
                         </div>
                         <div class="card-body">
                             <form wire:submit="save">
@@ -277,7 +292,7 @@
                 <div class="col-lg-8">
                     <div class="card">
                         <div class="card-header d-flex justify-content-between align-items-center">
-                            <h5 class="card-title mb-0"><i class="ri-shield-user-line me-1"></i>Single Sign-On (OIDC)</h5>
+                            <h5 class="card-title mb-0">Single Sign-On (OIDC)</h5>
                             @if ($oidcEnabled)
                                 <span class="badge bg-success-subtle text-success">Enabled</span>
                             @else
@@ -291,7 +306,7 @@
                                 Register this callback URL with your provider:
                             </p>
                             <div class="mb-3">
-                                <input type="text" class="form-control form-control-sm font-monospace"
+                                <input type="text" class="form-control form-control-sm rd-mono"
                                        value="{{ $oidcCallbackUrl }}" readonly onfocus="this.select()">
                             </div>
 
@@ -455,7 +470,7 @@
                 <div class="col-lg-7">
                     <div class="card">
                         <div class="card-header d-flex justify-content-between align-items-center">
-                            <h5 class="card-title mb-0"><i class="ri-mail-send-line me-1"></i>Outbound Email (SMTP)</h5>
+                            <h5 class="card-title mb-0">Outbound Email (SMTP)</h5>
                             @if ($smtpEnabled)
                                 <span class="badge bg-success-subtle text-success">Enabled</span>
                             @else
@@ -577,7 +592,7 @@
                 <div class="col-lg-5">
                     <div class="card">
                         <div class="card-header">
-                            <h5 class="card-title mb-0"><i class="ri-database-2-line me-1"></i>Log Retention</h5>
+                            <h5 class="card-title mb-0">Log Retention</h5>
                         </div>
                         <div class="card-body">
                             <div class="mb-3">
@@ -596,25 +611,23 @@
                                 </button>
                             </div>
                             @if ($pruneResult)
-                                <div class="alert alert-info py-2 mt-2 mb-0 font-monospace fs-13" style="white-space: pre-line;">{{ $pruneResult }}</div>
+                                {{-- pre-line keeps the line breaks the pruner emits; rd-mono adds the
+                                     break-anywhere guard, since the counts are printed per table name. --}}
+                                <div class="alert alert-info py-2 mt-2 mb-0 rd-mono" style="white-space: pre-line;">{{ $pruneResult }}</div>
                             @endif
                         </div>
                     </div>
 
                     <div class="card">
                         <div class="card-header">
-                            <h5 class="card-title mb-0"><i class="ri-information-line me-1"></i>About</h5>
+                            <h5 class="card-title mb-0">About</h5>
                         </div>
-                        <div class="card-body fs-13 text-muted">
-                            <div class="d-flex justify-content-between mb-1">
-                                <span>CortenDesk</span><span class="font-monospace">v{{ config('cortendesk.api_version') }}</span>
-                            </div>
-                            <div class="d-flex justify-content-between mb-1">
-                                <span>Laravel</span><span class="font-monospace">{{ app()->version() }}</span>
-                            </div>
-                            <div class="d-flex justify-content-between">
-                                <span>PHP</span><span class="font-monospace">{{ PHP_VERSION }}</span>
-                            </div>
+                        <div class="card-body">
+                            <dl class="rd-deflist">
+                                <div class="rd-def"><dt>CortenDesk</dt><dd class="rd-mono">v{{ config('cortendesk.api_version') }}</dd></div>
+                                <div class="rd-def"><dt>Laravel</dt><dd class="rd-mono">{{ app()->version() }}</dd></div>
+                                <div class="rd-def"><dt>PHP</dt><dd class="rd-mono">{{ PHP_VERSION }}</dd></div>
+                            </dl>
                         </div>
                     </div>
                 </div>

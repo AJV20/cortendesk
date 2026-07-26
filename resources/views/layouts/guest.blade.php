@@ -23,7 +23,7 @@
                     @yield('content')
 
                     <div class="text-center mt-3">
-                        <p class="text-muted fs-13">CortenDesk — self-hosted RustDesk console</p>
+                        <p class="rd-auth-note">CortenDesk — self-hosted RustDesk console</p>
                     </div>
                 </div>
             </div>

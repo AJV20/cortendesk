@@ -12,21 +12,25 @@
     @endphp
 
     <div class="card">
-        <div class="card-header d-flex justify-content-between align-items-center">
-            <h5 class="card-title mb-0"><i class="ri-key-2-line me-1"></i>API Tokens</h5>
+        <div class="card-header d-flex justify-content-between align-items-center gap-2 flex-wrap">
+            <div>
+                <h4 class="header-title">API Tokens</h4>
+                <p class="rd-card-sub mb-0">Scoped Bearer tokens for the automation REST API (<code>/api/v1/…</code>).
+                    Grant each token only the resources your scripts need. See <code>docs/admin-api.md</code>.</p>
+            </div>
             @if (auth()->user()?->consoleAllows('token', 'rw'))
-                <button type="button" class="btn btn-primary btn-sm" wire:click="create">
-                    <i class="ri-add-line me-1"></i>New Token
-                </button>
+                <div class="rd-card-actions">
+                    <button type="button" class="btn btn-primary" wire:click="create">
+                        <i class="ri-add-line"></i>New Token
+                    </button>
+                </div>
             @endif
         </div>
-        <div class="card-body">
-            <p class="text-muted fs-13">Scoped Bearer tokens for the automation REST API (<code>/api/v1/…</code>).
-                Grant each token only the resources your scripts need. See <code>docs/admin-api.md</code>.</p>
 
             {{-- One-time plaintext reveal --}}
             @if ($plaintext)
-                <div class="alert alert-success">
+                <div class="rd-toolbar">
+                <div class="alert alert-success mb-0 w-100">
                     <div class="d-flex justify-content-between align-items-start">
                         <div class="me-2">
                             <strong><i class="ri-check-line me-1"></i>Token created.</strong>
@@ -41,6 +45,7 @@
                             <i class="ri-file-copy-line"></i>
                         </button>
                     </div>
+                </div>
                 </div>
             @endif
 
@@ -61,8 +66,13 @@
                     @forelse ($tokens as $token)
                         <tr wire:key="t{{ $token->id }}">
                             <td>
-                                <span class="fw-semibold d-block">{{ $token->name }}</span>
-                                <small class="text-muted font-monospace">{{ $token->token_prefix }}…</small>
+                                <div class="rd-cell rd-tone-amber">
+                                    <span class="rd-avatar"><i class="ri-key-2-line"></i></span>
+                                    <div class="min-width-0">
+                                        <span class="rd-cell-title">{{ $token->name }}</span>
+                                        <span class="rd-cell-sub rd-mono">{{ $token->token_prefix }}…</span>
+                                    </div>
+                                </div>
                             </td>
                             <td>
                                 @foreach ($token->permissions as $res => $lvl)
@@ -90,7 +100,7 @@
                                     <span class="text-muted">Never</span>
                                 @endif
                             </td>
-                            <td class="text-end">
+                            <td class="text-end rd-rowact">
                                 @if (auth()->user()?->consoleAllows('token', 'rw'))
                                     <a href="javascript:void(0);" class="text-danger"
                                        wire:click="revoke({{ $token->id }})"
@@ -100,7 +110,16 @@
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="6" class="text-center text-muted py-4">No API tokens yet.</td>
+                            <td colspan="6" class="rd-empty-cell">
+                                <div class="rd-empty">
+                                    <div class="rd-empty-icon"><i class="ri-key-2-line"></i></div>
+                                    <p class="rd-empty-title">No API tokens yet.</p>
+                                    <p class="rd-empty-text">A token lets a script talk to the console API without a password.</p>
+                                    @if (auth()->user()?->consoleAllows('token', 'rw'))
+                                        <button type="button" class="btn btn-sm btn-outline-light" wire:click="create">New Token</button>
+                                    @endif
+                                </div>
+                            </td>
                         </tr>
                     @endforelse
                     </tbody>
@@ -108,24 +127,23 @@
             </div>
 
             {{-- Mobile card list --}}
-            <div class="d-md-none">
+            <div class="d-md-none rd-cardlist">
                 @forelse ($tokens as $token)
-                    <div class="card border mb-2" wire:key="mt{{ $token->id }}">
-                        <div class="card-body p-2">
-                            <div class="d-flex justify-content-between align-items-start gap-2">
+                    <div class="rd-mini" wire:key="mt{{ $token->id }}">
+                            <div class="rd-mini-head">
                                 <div class="min-width-0">
-                                    <span class="fw-semibold d-block text-truncate">{{ $token->name }}</span>
-                                    <small class="text-muted font-monospace">{{ $token->token_prefix }}…</small>
+                                    <span class="rd-mini-title text-truncate">{{ $token->name }}</span>
+                                    <span class="rd-mini-sub rd-mono">{{ $token->token_prefix }}…</span>
                                 </div>
                                 @if (auth()->user()?->consoleAllows('token', 'rw'))
-                                    <a href="javascript:void(0);" class="btn btn-sm btn-light text-danger flex-shrink-0"
+                                    <a href="javascript:void(0);" class="rd-iconbtn text-danger flex-shrink-0" title="Revoke"
                                        wire:click="revoke({{ $token->id }})"
                                        wire:confirm="Revoke token “{{ $token->name }}”? Any script using it stops working immediately.">
                                         <i class="ri-delete-bin-line"></i>
                                     </a>
                                 @endif
                             </div>
-                            <div class="mt-1">
+                            <div class="mt-2">
                                 @foreach ($token->permissions as $res => $lvl)
                                     @if ($lvl !== 'none')
                                         <span class="badge {{ $lvl === 'rw' ? 'bg-primary-subtle text-primary' : 'bg-secondary-subtle text-secondary' }}">
@@ -134,17 +152,21 @@
                                     @endif
                                 @endforeach
                             </div>
-                            <small class="text-muted d-block mt-1">
+                            <span class="rd-mini-sub mt-2">
                                 Last used: {{ $token->last_used_at ? $token->last_used_at->diffForHumans() : 'never' }} ·
                                 Expires: {{ $token->expires_at ? $token->expires_at->format('Y-m-d') : 'never' }}
-                            </small>
-                        </div>
+                            </span>
                     </div>
                 @empty
-                    <p class="text-center text-muted py-4 mb-0">No API tokens yet.</p>
+                    <div class="rd-empty">
+                        <div class="rd-empty-icon"><i class="ri-key-2-line"></i></div>
+                        <p class="rd-empty-title">No API tokens yet.</p>
+                        @if (auth()->user()?->consoleAllows('token', 'rw'))
+                            <button type="button" class="btn btn-sm btn-outline-light" wire:click="create">New Token</button>
+                        @endif
+                    </div>
                 @endforelse
             </div>
-        </div>
     </div>
 
     {{-- Create modal --}}
@@ -180,7 +202,8 @@
                                     anything above your own level is reduced when the token is created.</div>
                             @endunless
                             @error('permissions') <div class="text-danger fs-13 mb-1">{{ $message }}</div> @enderror
-                            <div class="table-responsive">
+                            {{-- Desktop: radio grid --}}
+                            <div class="table-responsive d-none d-md-block">
                                 <table class="table table-sm table-centered mb-0">
                                     <thead>
                                     <tr>
@@ -197,6 +220,7 @@
                                             @foreach ($levels as $lvl)
                                                 <td class="text-center">
                                                     <input class="form-check-input" type="radio"
+                                                           aria-label="{{ ($resourceLabels[$res] ?? $res).' '.($levelLabels[$lvl] ?? $lvl) }}"
                                                            wire:model="permissions.{{ $res }}" value="{{ $lvl }}">
                                                 </td>
                                             @endforeach
@@ -204,6 +228,20 @@
                                     @endforeach
                                     </tbody>
                                 </table>
+                            </div>
+
+                            {{-- Mobile: one select per resource (four radio columns do not fit 390px) --}}
+                            <div class="d-md-none">
+                                @foreach ($resources as $res)
+                                    <div class="mb-2" wire:key="mperm-{{ $res }}">
+                                        <label class="form-label mb-1" for="at-perm-{{ $res }}">{{ $resourceLabels[$res] ?? $res }}</label>
+                                        <select id="at-perm-{{ $res }}" class="form-select" wire:model="permissions.{{ $res }}">
+                                            @foreach ($levels as $lvl)
+                                                <option value="{{ $lvl }}">{{ $levelLabels[$lvl] ?? $lvl }}</option>
+                                            @endforeach
+                                        </select>
+                                    </div>
+                                @endforeach
                             </div>
                         </div>
                         <div class="modal-footer">

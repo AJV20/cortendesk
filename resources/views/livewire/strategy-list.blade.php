@@ -1,21 +1,24 @@
 <div>
     <div class="card">
-        <div class="card-body">
 
             {{-- Toolbar --}}
-            <div class="d-flex justify-content-between align-items-center gap-2 mb-3">
+            <div class="rd-toolbar">
                 <div>
-                    <h5 class="mb-0">Strategies</h5>
-                    <small class="text-muted">Client settings pushed to devices on their next heartbeat.</small>
+                    <h4 class="header-title">Strategies</h4>
+                    <p class="rd-card-sub mb-0">Client settings pushed to devices on their next heartbeat.</p>
                 </div>
-                <button type="button" class="btn btn-primary flex-shrink-0" wire:click="create">
-                    <i class="ri-add-line me-1"></i>Add Strategy
-                </button>
+                <div class="rd-toolbar-actions">
+                    <button type="button" class="btn btn-primary" wire:click="create">
+                        <i class="ri-add-line"></i>Add Strategy
+                    </button>
+                </div>
             </div>
 
             @if ($strategies->isNotEmpty() && $strategies->firstWhere('is_default', true) === null)
-                <div class="alert alert-secondary py-2 fs-13">
-                    <i class="ri-information-line me-1"></i>No default strategy. Devices with no assignment of their own keep whatever settings they already have.
+                <div class="rd-toolbar">
+                    <div class="alert alert-secondary py-2 mb-0 w-100">
+                        <i class="ri-information-line me-1"></i>No default strategy. Devices with no assignment of their own keep whatever settings they already have.
+                    </div>
                 </div>
             @endif
 
@@ -36,7 +39,7 @@
                     @forelse ($strategies as $strategy)
                         <tr wire:key="s{{ $strategy->id }}">
                             <td>
-                                <span class="fw-semibold">{{ $strategy->name }}</span>
+                                <span class="rd-cell-title d-inline">{{ $strategy->name }}</span>
                                 @if ($strategy->is_default)
                                     <span class="badge bg-primary-subtle text-primary ms-1">Default</span>
                                 @endif
@@ -73,9 +76,9 @@
                                     <label class="form-check-label visually-hidden" for="strategy-enabled-{{ $strategy->id }}">Enabled</label>
                                 </div>
                             </td>
-                            <td class="text-end">
-                                <a href="javascript:void(0);" class="text-primary me-2" wire:click="openAssign({{ $strategy->id }})">Assign</a>
-                                <a href="javascript:void(0);" class="text-primary me-2" wire:click="edit({{ $strategy->id }})">Edit</a>
+                            <td class="text-end rd-rowact">
+                                <a href="javascript:void(0);" class="rd-act me-2" wire:click="openAssign({{ $strategy->id }})">Assign</a>
+                                <a href="javascript:void(0);" class="rd-act me-2" wire:click="edit({{ $strategy->id }})">Edit</a>
                                 <a href="javascript:void(0);" class="text-danger"
                                    wire:click="deleteStrategy({{ $strategy->id }})"
                                    wire:confirm="Delete strategy {{ $strategy->name }}? Devices assigned to it fall back to the default strategy, and the options it pushed are reset to the client defaults on the next heartbeat.">Delete</a>
@@ -83,8 +86,13 @@
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="6" class="text-center text-muted py-4">
-                                No strategies yet. Click "Add Strategy" to create one.
+                            <td colspan="6" class="rd-empty-cell">
+                                <div class="rd-empty">
+                                    <div class="rd-empty-icon"><i class="ri-settings-3-line"></i></div>
+                                    <p class="rd-empty-title">No strategies yet. Click "Add Strategy" to create one.</p>
+                                    <p class="rd-empty-text">A strategy is a set of client options the server pushes out — permissions, defaults, whatever you want held steady across a fleet.</p>
+                                    <button type="button" class="btn btn-sm btn-outline-light" wire:click="create">Add Strategy</button>
+                                </div>
                             </td>
                         </tr>
                     @endforelse
@@ -93,14 +101,13 @@
             </div>
 
             {{-- Mobile card list (below md) --}}
-            <div class="d-md-none">
+            <div class="d-md-none rd-cardlist">
                 @forelse ($strategies as $strategy)
-                    <div class="card border mb-2" wire:key="ms{{ $strategy->id }}">
-                        <div class="card-body p-2">
-                            <div class="d-flex justify-content-between align-items-start gap-2">
-                                <div class="lh-sm min-width-0">
-                                    <span class="fw-semibold d-block text-truncate">{{ $strategy->name }}</span>
-                                    <small class="text-muted d-block text-truncate">{{ $strategy->note ?: count($strategy->optionMap()).' option(s)' }}</small>
+                    <div class="rd-mini" wire:key="ms{{ $strategy->id }}">
+                            <div class="rd-mini-head">
+                                <div class="min-width-0">
+                                    <span class="rd-mini-title text-truncate">{{ $strategy->name }}</span>
+                                    <span class="rd-mini-sub text-truncate">{{ $strategy->note ?: count($strategy->optionMap()).' option(s)' }}</span>
                                 </div>
                                 <div class="form-check form-switch mb-0 flex-shrink-0">
                                     <input class="form-check-input" type="checkbox" role="switch"
@@ -110,7 +117,7 @@
                                     <label class="form-check-label visually-hidden" for="m-strategy-enabled-{{ $strategy->id }}">Enabled</label>
                                 </div>
                             </div>
-                            <div class="mt-1">
+                            <div class="mt-2">
                                 @if ($strategy->is_default)
                                     <span class="badge bg-primary-subtle text-primary">Default</span>
                                 @endif
@@ -119,35 +126,37 @@
                                 @endif
                                 <span class="badge bg-info-subtle text-info">{{ $strategy->resolved_devices_count }} in force</span>
                             </div>
-                            <div class="d-flex justify-content-between align-items-center gap-2 mt-1">
-                                <small class="text-muted text-nowrap">
+                            <div class="rd-mini-foot">
+                                <span class="rd-mini-sub text-nowrap">
                                     <i class="ri-computer-line me-1"></i>{{ $strategy->devices_count }}
                                     <i class="ri-user-line ms-2 me-1"></i>{{ $strategy->users_count }}
                                     <i class="ri-folder-line ms-2 me-1"></i>{{ $strategy->device_groups_count }}
-                                </small>
-                                <div class="d-flex flex-nowrap gap-1 flex-shrink-0">
-                                    <a href="javascript:void(0);" class="btn btn-sm btn-light" title="Assign"
+                                </span>
+                                <div class="rd-mini-acts">
+                                    <a href="javascript:void(0);" class="rd-iconbtn" title="Assign"
                                        wire:click="openAssign({{ $strategy->id }})"><i class="ri-links-line"></i></a>
-                                    <a href="javascript:void(0);" class="btn btn-sm btn-light" title="Edit"
+                                    <a href="javascript:void(0);" class="rd-iconbtn" title="Edit"
                                        wire:click="edit({{ $strategy->id }})"><i class="ri-pencil-line"></i></a>
-                                    <a href="javascript:void(0);" class="btn btn-sm btn-light text-danger" title="Delete"
+                                    <a href="javascript:void(0);" class="rd-iconbtn text-danger" title="Delete"
                                        wire:click="deleteStrategy({{ $strategy->id }})"
                                        wire:confirm="Delete strategy {{ $strategy->name }}? Devices assigned to it fall back to the default strategy."><i class="ri-delete-bin-line"></i></a>
                                 </div>
                             </div>
-                        </div>
                     </div>
                 @empty
-                    <p class="text-center text-muted py-4 mb-0">No strategies yet. Tap "Add Strategy" to create one.</p>
+                    <div class="rd-empty">
+                        <div class="rd-empty-icon"><i class="ri-settings-3-line"></i></div>
+                        <p class="rd-empty-title">No strategies yet. Tap "Add Strategy" to create one.</p>
+                        <button type="button" class="btn btn-sm btn-outline-light" wire:click="create">Add Strategy</button>
+                    </div>
                 @endforelse
             </div>
-        </div>
     </div>
 
     {{-- Create / edit modal --}}
     @if ($editingId !== null)
         <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true"
-             style="background: rgba(0,0,0,.5);" wire:key="strategy-editor">
+             style="background: rgba(0,0,0,.6);" wire:key="strategy-editor">
             <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
                 <div class="modal-content">
                     <form wire:submit="save">
@@ -250,7 +259,7 @@
     {{-- Assignment modal --}}
     @if ($assigning)
         <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true"
-             style="background: rgba(0,0,0,.5);" wire:key="strategy-assign">
+             style="background: rgba(0,0,0,.6);" wire:key="strategy-assign">
             <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
                 <div class="modal-content">
                     <div class="modal-header">
@@ -290,21 +299,25 @@
                         @if ($assignTab === 'devices')
                             <input type="search" class="form-control mb-2" placeholder="Search ID, alias, hostname…"
                                    wire:model.live.debounce.300ms="assignSearch">
-                            <div class="border rounded" style="max-height: 340px; overflow-y: auto;">
+                            <div class="rd-scrollbox" style="max-height: 340px; overflow-y: auto;">
                                 <table class="table table-sm table-hover mb-0">
                                     <tbody>
                                     @forelse ($assignDevices as $d)
                                         <tr wire:key="ad{{ $d->id }}">
                                             <td style="width:38px;">
-                                                <input class="form-check-input" type="checkbox"
+                                                <input class="form-check-input" type="checkbox" id="sa-dev-{{ $d->id }}"
                                                        value="{{ $d->id }}" wire:model="assignDeviceIds"
                                                        aria-label="Assign device {{ $d->rustdesk_id }}">
                                             </td>
                                             <td>
-                                                <span class="fw-semibold">{{ $d->rustdesk_id }}</span>
-                                                @if ($d->alias || $d->hostname)
-                                                    <small class="text-muted d-block">{{ $d->alias ?: $d->hostname }}</small>
-                                                @endif
+                                                {{-- The label is the tap target: a 14px checkbox is not one, and
+                                                     `for` makes the whole cell toggle it without a second binding. --}}
+                                                <label class="rd-picklabel" for="sa-dev-{{ $d->id }}">
+                                                    <span class="fw-semibold">{{ $d->rustdesk_id }}</span>
+                                                    @if ($d->alias || $d->hostname)
+                                                        <small class="text-muted d-block">{{ $d->alias ?: $d->hostname }}</small>
+                                                    @endif
+                                                </label>
                                             </td>
                                             <td class="text-end">
                                                 @if (($assignTaken['devices'][$d->id] ?? null) && $assignTaken['devices'][$d->id] !== $assigning->name)
@@ -323,21 +336,23 @@
                                 @if ($assignDevices->count() >= 200) · showing first 200, refine with search @endif
                             </small>
                         @elseif ($assignTab === 'users')
-                            <div class="border rounded" style="max-height: 340px; overflow-y: auto;">
+                            <div class="rd-scrollbox" style="max-height: 340px; overflow-y: auto;">
                                 <table class="table table-sm table-hover mb-0">
                                     <tbody>
                                     @forelse ($assignUsers as $u)
                                         <tr wire:key="au{{ $u->id }}">
                                             <td style="width:38px;">
-                                                <input class="form-check-input" type="checkbox"
+                                                <input class="form-check-input" type="checkbox" id="sa-usr-{{ $u->id }}"
                                                        value="{{ $u->id }}" wire:model="assignUserIds"
                                                        aria-label="Assign user {{ $u->username }}">
                                             </td>
                                             <td>
-                                                <span class="fw-semibold">{{ $u->username }}</span>
-                                                @if ($u->name)
-                                                    <small class="text-muted d-block">{{ $u->name }}</small>
-                                                @endif
+                                                <label class="rd-picklabel" for="sa-usr-{{ $u->id }}">
+                                                    <span class="fw-semibold">{{ $u->username }}</span>
+                                                    @if ($u->name)
+                                                        <small class="text-muted d-block">{{ $u->name }}</small>
+                                                    @endif
+                                                </label>
                                             </td>
                                             <td class="text-end">
                                                 @if (($assignTaken['users'][$u->id] ?? null) && $assignTaken['users'][$u->id] !== $assigning->name)
@@ -353,17 +368,21 @@
                             </div>
                             <small class="text-muted">Applies to every device owned by the checked users.</small>
                         @else
-                            <div class="border rounded" style="max-height: 340px; overflow-y: auto;">
+                            <div class="rd-scrollbox" style="max-height: 340px; overflow-y: auto;">
                                 <table class="table table-sm table-hover mb-0">
                                     <tbody>
                                     @forelse ($assignGroups as $g)
                                         <tr wire:key="ag{{ $g->id }}">
                                             <td style="width:38px;">
-                                                <input class="form-check-input" type="checkbox"
+                                                <input class="form-check-input" type="checkbox" id="sa-grp-{{ $g->id }}"
                                                        value="{{ $g->id }}" wire:model="assignGroupIds"
                                                        aria-label="Assign device group {{ $g->name }}">
                                             </td>
-                                            <td><span class="fw-semibold">{{ $g->name }}</span></td>
+                                            <td>
+                                                <label class="rd-picklabel" for="sa-grp-{{ $g->id }}">
+                                                    <span class="fw-semibold">{{ $g->name }}</span>
+                                                </label>
+                                            </td>
                                             <td class="text-end">
                                                 @if (($assignTaken['groups'][$g->id] ?? null) && $assignTaken['groups'][$g->id] !== $assigning->name)
                                                     <span class="badge bg-secondary-subtle text-secondary">{{ $assignTaken['groups'][$g->id] }}</span>

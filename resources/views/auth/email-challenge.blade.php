@@ -5,8 +5,7 @@
 @section('content')
     <div class="card">
 
-        <div class="card-header py-3 text-center d-flex align-items-center justify-content-center"
-             style="background:radial-gradient(120% 140% at 50% 0%,#233149 0%,#141c2b 60%,#0f1622 100%);border-bottom:2px solid #e2652e;">
+        <div class="card-header rd-auth-head py-3 text-center d-flex align-items-center justify-content-center">
             <a href="{{ url('/') }}" class="auth-brand mb-0">
                 <img src="{{ asset('assets/images/cortendesk-sm.svg') }}" alt="CortenDesk" width="60" height="60" class="auth-brand-logo">
                 <span class="auth-brand-wordmark">Corten<span>Desk</span></span>
@@ -15,14 +14,10 @@
 
         <div class="card-body p-4">
 
-            <div class="text-center w-75 m-auto">
-                <h4 class="text-dark-50 text-center pb-0 fw-bold">Check your email</h4>
-                <p class="text-muted mb-4">
-                    This browser is new to the console, so we emailed a 6-digit code
-                    @if ($sentTo)
-                        to <span class="font-monospace">{{ $sentTo }}</span>
-                    @endif
-                    . Enter it below.
+            <div class="text-center mb-4">
+                <h4 class="rd-auth-title">Check your email</h4>
+                <p class="rd-auth-sub">
+                    This browser is new to the console, so we emailed a 6-digit code@if ($sentTo) to <span class="rd-mono">{{ $sentTo }}</span>@endif. Enter it below.
                 </p>
             </div>
 
@@ -41,30 +36,29 @@
 
                 <div class="mb-3">
                     <label for="code" class="form-label">Verification code</label>
-                    <input class="form-control form-control-lg text-center font-monospace" type="text" id="code" name="code"
+                    <input class="form-control rd-code-input rd-mono" type="text" id="code" name="code"
                            required autofocus autocomplete="one-time-code" inputmode="numeric" maxlength="6"
                            placeholder="123456">
                 </div>
 
-                <div class="mb-3 mb-0 text-center">
-                    <button class="btn btn-primary w-100" type="submit">
+                <div class="mb-0 d-grid">
+                    <button class="btn btn-primary" type="submit">
                         <i class="ri-mail-check-line me-1"></i> Verify
                     </button>
                 </div>
             </form>
 
-            <form method="POST" action="{{ route('login.email.resend') }}" class="text-center mt-3">
-                @csrf
-                <button type="submit" class="btn btn-link btn-sm text-muted p-0">Send a new code</button>
-            </form>
-
-            <div class="text-center mt-2">
-                <a href="{{ route('login') }}" class="btn btn-link btn-sm text-muted p-0">Cancel and sign in as someone else</a>
+            <div class="rd-auth-foot">
+                <form method="POST" action="{{ route('login.email.resend') }}" class="d-inline">
+                    @csrf
+                    <button type="submit" class="btn btn-link btn-sm p-0">Send a new code</button>
+                </form>
+                <span class="mx-1">·</span>
+                <a href="{{ route('login') }}">Sign in as someone else</a>
+                <span class="rd-auth-foot-note">
+                    Once verified, this browser is remembered for {{ \App\Models\TrustedDevice::trustDays() }} days.
+                </span>
             </div>
-
-            <p class="text-muted fs-13 text-center mt-3 mb-0">
-                Once verified, this browser is remembered for {{ \App\Models\TrustedDevice::trustDays() }} days.
-            </p>
         </div>
     </div>
 @endsection

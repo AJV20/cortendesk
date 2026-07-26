@@ -63,7 +63,6 @@
                 <li class="side-nav-item {{ request()->routeIs('devices') ? 'menuitem-active' : '' }}">
                     <a href="{{ route('devices') }}" class="side-nav-link {{ request()->routeIs('devices') ? 'active' : '' }}">
                         <i class="ri-computer-line"></i>
-                        <span class="badge bg-success float-end" id="sidebar-online-count"></span>
                         <span> Devices </span>
                     </a>
                 </li>
@@ -183,15 +182,34 @@
     </div>
 
     @if ($canSettings)
-        @php $rdUpgrade = \App\Support\UpdateChecker::upgradeAvailable(); @endphp
+        @php
+            $rdUpgrade = \App\Support\UpdateChecker::upgradeAvailable();
+            // The console has no health probe of its own, so the status line
+            // reports the one signal that is real — the release check — and
+            // says so rather than claiming anything about the servers.
+            $rdChecked = \App\Support\UpdateChecker::latestVersion() !== null;
+        @endphp
         <div class="rd-sidebar-version">
+            <span class="rd-sidebar-status {{ $rdUpgrade ? 'rd-sidebar-status-warn' : ($rdChecked ? 'rd-sidebar-status-ok' : 'rd-sidebar-status-unknown') }}"
+                  title="CortenDesk compares the running version against the latest published release.">
+                <i class="rd-dot rd-dot-lg"></i>
+                <span class="rd-sidebar-status-label">
+                    @if ($rdUpgrade)
+                        Update available
+                    @elseif ($rdChecked)
+                        Running the latest release
+                    @else
+                        Release check unavailable
+                    @endif
+                </span>
+            </span>
             <span class="rd-sidebar-version-num">v{{ config('cortendesk.api_version') }}</span>
+            {{-- The badge only appears when it carries something the status
+                 line above does not: the way to act on an upgrade. --}}
             @if ($rdUpgrade)
                 <a href="{{ \App\Support\UpdateChecker::UPGRADE_DOC }}" target="_blank" rel="noopener"
-                   class="badge bg-warning-subtle text-warning text-decoration-none"
+                   class="rd-shell-badge"
                    title="Version {{ $rdUpgrade }} is available">Upgrade Available</a>
-            @else
-                <span class="badge bg-success-subtle text-success">Up-to-Date</span>
             @endif
         </div>
     @endif

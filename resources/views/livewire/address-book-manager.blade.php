@@ -52,25 +52,30 @@
             {{-- Desktop: list group --}}
             <div class="card d-none d-lg-block">
                 <div class="card-header d-flex justify-content-between align-items-center">
-                    <h5 class="card-title mb-0">Address Books</h5>
+                    <h4 class="header-title">Address Books</h4>
                     @if (auth()->user()?->consoleAllows('address_book', 'rw'))
-                        <button type="button" class="btn btn-sm btn-primary" wire:click="openNewBook">
-                            <i class="ri-add-line me-1"></i>New shared
-                        </button>
+                        <div class="rd-card-actions">
+                            <button type="button" class="btn btn-primary" wire:click="openNewBook">
+                                <i class="ri-add-line"></i>New shared
+                            </button>
+                        </div>
                     @endif
                 </div>
-                <div class="list-group list-group-flush">
+                <div class="list-group list-group-flush rd-masterlist">
                     @forelse ($books as $b)
                         <a href="javascript:void(0);" wire:key="book{{ $b->id }}" wire:click="selectBook({{ $b->id }})"
                            class="list-group-item list-group-item-action {{ $b->id === $selectedBookId ? 'active' : '' }}">
-                            <span class="fw-semibold text-truncate d-block">
+                            <span class="rd-cell-title text-truncate">
                                 @if ($tab === 'personal')
                                     <i class="ri-user-line me-1"></i>{{ $b->owner?->username ?? 'unknown' }}
                                 @else
                                     <i class="ri-contacts-book-2-line me-1"></i>{{ $b->name }}
                                 @endif
                             </span>
-                            <small class="{{ $b->id === $selectedBookId ? 'text-white-50' : 'text-muted' }}">
+                            {{-- No text-muted: the active row's colour comes from the
+                                 list group's own --ct-list-group-active-color, and a
+                                 hard-coded grey here would flatten the selection. --}}
+                            <small class="rd-cell-sub">
                                 @if ($tab === 'personal')
                                     @unless ($isDefaultBookName($b)) {{ $b->name }} · @endunless
                                 @else
@@ -81,8 +86,11 @@
                             </small>
                         </a>
                     @empty
-                        <div class="list-group-item text-muted text-center py-4">
-                            No {{ $tab }} address books yet.
+                        <div class="list-group-item">
+                            <div class="rd-empty">
+                                <div class="rd-empty-icon"><i class="ri-contacts-book-2-line"></i></div>
+                                <p class="rd-empty-title">No {{ $tab }} address books yet.</p>
+                            </div>
                         </div>
                     @endforelse
                 </div>
@@ -93,12 +101,10 @@
         <div class="col-12 col-lg-8">
             @if ($book)
                 <div class="card">
-                    <div class="card-body">
-
                         {{-- Header --}}
-                        <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-1">
+                        <div class="card-header d-flex justify-content-between align-items-start flex-wrap gap-2">
                             <div>
-                                <h4 class="mb-1 d-flex align-items-center gap-2 flex-wrap">
+                                <h4 class="header-title d-flex align-items-center gap-2 flex-wrap">
                                     {{ $book->name }}
                                     @if ($book->is_personal)
                                         <span class="badge bg-info-subtle text-info">Personal</span>
@@ -106,7 +112,7 @@
                                         <span class="badge bg-primary-subtle text-primary">Shared</span>
                                     @endif
                                 </h4>
-                                <p class="text-muted mb-0">
+                                <p class="rd-card-sub mb-0">
                                     <i class="ri-user-line me-1"></i>{{ $book->owner?->username ?? 'unknown' }}
                                     @if ($book->note)
                                         <span class="ms-2">{{ $book->note }}</span>
@@ -131,10 +137,8 @@
                             @endif
                         </div>
 
-                        <hr class="my-3">
-
                         {{-- Tags row --}}
-                        <div class="d-flex align-items-center flex-wrap gap-2 mb-3">
+                        <div class="rd-toolbar">
                             <span class="text-muted fw-semibold me-1"><i class="ri-price-tag-3-line me-1"></i>Tags:</span>
                             @forelse ($tags as $tag)
                                 @php $hex = ABM::colorToHex($tag->color); @endphp
@@ -159,13 +163,26 @@
                         </div>
 
                         {{-- Entries toolbar --}}
-                        <div class="d-flex justify-content-between align-items-center mb-2">
-                            <h5 class="mb-0">Entries</h5>
+                        <div class="rd-toolbar">
+                            <h4 class="header-title">Entries</h4>
                             @if ($canWriteEntries)
-                                <button type="button" class="btn btn-sm btn-primary" wire:click="openAddEntry">
-                                    <i class="ri-add-line me-1"></i>Add entry
-                                </button>
+                                <div class="rd-toolbar-actions">
+                                    <button type="button" class="btn btn-primary" wire:click="openAddEntry">
+                                        <i class="ri-add-line"></i>Add entry
+                                    </button>
+                                </div>
                             @endif
+                        </div>
+
+                        {{-- Filter: matches machine name as well as id, since an entry
+                             with no alias is otherwise just a number (#5). --}}
+                        <div class="mb-3">
+                            <div class="input-group" style="max-width: 320px;">
+                                <span class="input-group-text"><i class="ri-search-line"></i></span>
+                                <input type="search" class="form-control"
+                                       placeholder="Search device, ID or alias…"
+                                       wire:model.live.debounce.300ms="entrySearch">
+                            </div>
                         </div>
 
                         {{-- Desktop entries table (md and up) --}}
@@ -173,7 +190,7 @@
                             <table class="table table-hover table-centered mb-0">
                                 <thead>
                                 <tr>
-                                    <th>ID</th>
+                                    <th>Device</th>
                                     <th>Alias</th>
                                     <th>User</th>
                                     <th>Tags</th>
@@ -185,9 +202,17 @@
                                 @forelse ($entries as $entry)
                                     <tr wire:key="e{{ $entry->id }}">
                                         <td>
-                                            <x-platform-icon :platform="$entry->platform ?: 'unknown'" class="me-1"/>
-                                            <a href="rustdesk://{{ $entry->rustdesk_id }}" class="fw-semibold"
-                                               title="Connect with RustDesk">{{ $entry->rustdesk_id }}</a>
+                                            <div class="rd-cell">
+                                                <x-platform-icon :platform="$entry->platform ?: 'unknown'" size="fs-20"/>
+                                                <div class="min-width-0">
+                                                    <a href="rustdesk://{{ $entry->rustdesk_id }}"
+                                                       class="rd-cell-title text-truncate"
+                                                       title="Connect with RustDesk">{{ $entry->hostname ?: $entry->rustdesk_id }}</a>
+                                                    <span class="rd-cell-sub">
+                                                        {{ $entry->rustdesk_id }}@if ($entry->platform) · {{ ucfirst($entry->platform) }}@endif
+                                                    </span>
+                                                </div>
+                                            </div>
                                         </td>
                                         <td>{{ $entry->alias ?: '—' }}</td>
                                         <td>{{ $entry->username ?: '—' }}</td>
@@ -200,9 +225,9 @@
                                             @endforelse
                                         </td>
                                         <td><span title="{{ $entry->created_at }}">{{ $entry->created_at?->diffForHumans() ?? '—' }}</span></td>
-                                        <td class="text-end">
+                                        <td class="text-end rd-rowact">
                                             @if ($canWriteEntries)
-                                                <a href="javascript:void(0);" class="text-primary me-2" wire:click="openEditEntry({{ $entry->id }})">Edit</a>
+                                                <a href="javascript:void(0);" class="rd-act me-2" wire:click="openEditEntry({{ $entry->id }})">Edit</a>
                                                 <a href="javascript:void(0);" class="text-danger"
                                                    wire:click="deleteEntry({{ $entry->id }})"
                                                    wire:confirm="Remove {{ $entry->rustdesk_id }} from this address book?">Remove</a>
@@ -213,7 +238,16 @@
                                     </tr>
                                 @empty
                                     <tr>
-                                        <td colspan="6" class="text-center text-muted py-4">No entries in this address book.</td>
+                                        <td colspan="6" class="rd-empty-cell">
+                                            <div class="rd-empty">
+                                                <div class="rd-empty-icon"><i class="ri-contacts-book-2-line"></i></div>
+                                                <p class="rd-empty-title">No entries in this address book.</p>
+                                                <p class="rd-empty-text">Entries are the machines a user keeps to hand — they sync straight into the RustDesk client.</p>
+                                                @if ($canWriteEntries)
+                                                    <button type="button" class="btn btn-sm btn-outline-light" wire:click="openAddEntry">Add entry</button>
+                                                @endif
+                                            </div>
+                                        </td>
                                     </tr>
                                 @endforelse
                                 </tbody>
@@ -221,65 +255,70 @@
                         </div>
 
                         {{-- Mobile entries card list (below md) --}}
-                        <div class="d-md-none">
+                        <div class="d-md-none rd-cardlist">
                             @forelse ($entries as $entry)
-                                <div class="card border mb-2" wire:key="me{{ $entry->id }}">
-                                    <div class="card-body p-3">
-                                        <div class="d-flex justify-content-between align-items-start">
-                                            <div class="d-flex align-items-center gap-2">
+                                <div class="rd-mini" wire:key="me{{ $entry->id }}">
+                                        <div class="rd-mini-head">
+                                            <div class="d-flex align-items-center gap-2 min-width-0">
                                                 <x-platform-icon :platform="$entry->platform ?: 'unknown'" size="fs-22"/>
-                                                <div>
-                                                    <a href="rustdesk://{{ $entry->rustdesk_id }}" class="fw-semibold d-block"
-                                                       title="Connect with RustDesk">{{ $entry->rustdesk_id }}</a>
-                                                    <small class="text-muted">{{ $entry->alias ?: ($entry->username ?: '—') }}</small>
+                                                <div class="min-width-0">
+                                                    <a href="rustdesk://{{ $entry->rustdesk_id }}" class="rd-mini-title text-truncate"
+                                                       title="Connect with RustDesk">{{ $entry->hostname ?: $entry->rustdesk_id }}</a>
+                                                    <span class="rd-mini-sub text-truncate">
+                                                        {{ $entry->rustdesk_id }}@if ($entry->alias) · {{ $entry->alias }}@endif
+                                                    </span>
                                                 </div>
                                             </div>
                                             @if ($canWriteEntries)
-                                                <div>
-                                                    <a href="javascript:void(0);" class="btn btn-sm btn-light me-1" wire:click="openEditEntry({{ $entry->id }})"><i class="ri-pencil-line"></i></a>
-                                                    <a href="javascript:void(0);" class="btn btn-sm btn-light text-danger"
+                                                <div class="rd-mini-acts">
+                                                    <a href="javascript:void(0);" class="rd-iconbtn" title="Edit" wire:click="openEditEntry({{ $entry->id }})"><i class="ri-pencil-line"></i></a>
+                                                    <a href="javascript:void(0);" class="rd-iconbtn text-danger" title="Remove"
                                                        wire:click="deleteEntry({{ $entry->id }})"
                                                        wire:confirm="Remove {{ $entry->rustdesk_id }} from this address book?"><i class="ri-delete-bin-line"></i></a>
                                                 </div>
                                             @endif
                                         </div>
-                                        <div class="mt-2 d-flex flex-wrap gap-1">
+                                        <div class="mt-2 d-flex flex-wrap gap-1 align-items-center">
                                             @foreach (collect($entry->tag_ids ?? [])->map(fn ($id) => $tagMap->get((int) $id))->filter() as $t)
                                                 @php $hex = ABM::colorToHex($t->color); @endphp
                                                 <span class="badge {{ ABM::chipTextClass($hex) }}" style="background-color: {{ $hex }};">{{ $t->name }}</span>
                                             @endforeach
                                             <small class="text-muted ms-auto">{{ $entry->created_at?->diffForHumans(short: true) ?? '' }}</small>
                                         </div>
-                                    </div>
                                 </div>
                             @empty
-                                <p class="text-center text-muted py-4 mb-0">No entries in this address book.</p>
+                                <div class="rd-empty">
+                                    <div class="rd-empty-icon"><i class="ri-contacts-book-2-line"></i></div>
+                                    <p class="rd-empty-title">No entries in this address book.</p>
+                                    @if ($canWriteEntries)
+                                        <button type="button" class="btn btn-sm btn-outline-light" wire:click="openAddEntry">Add entry</button>
+                                    @endif
+                                </div>
                             @endforelse
                         </div>
 
                         @if ($entries && $entries->hasPages())
-                            <div class="d-flex justify-content-between align-items-center mt-3 flex-wrap gap-2">
-                                <small class="text-muted">
-                                    Showing {{ $entries->firstItem() ?? 0 }}–{{ $entries->lastItem() ?? 0 }} of {{ $entries->total() }}
-                                </small>
+                            <div class="rd-tablefoot">
+                                <span>Showing {{ $entries->firstItem() ?? 0 }}–{{ $entries->lastItem() ?? 0 }} of {{ $entries->total() }}</span>
                                 {{ $entries->links() }}
                             </div>
                         @endif
-                    </div>
                 </div>
 
                 {{-- Sharing rules (shared books, FULL control only) --}}
                 @if (! $book->is_personal && $canManage)
                     <div class="card">
-                        <div class="card-body">
-                            <div class="d-flex justify-content-between align-items-center mb-2">
-                                <h5 class="mb-0"><i class="ri-share-line me-1"></i>Sharing rules</h5>
-                                <button type="button" class="btn btn-sm btn-primary" wire:click="openAddRule">
-                                    <i class="ri-add-line me-1"></i>Add rule
+                        <div class="card-header d-flex justify-content-between align-items-center gap-2 flex-wrap">
+                            <h4 class="header-title">Sharing rules</h4>
+                            <div class="rd-card-actions">
+                                <button type="button" class="btn btn-primary" wire:click="openAddRule">
+                                    <i class="ri-add-line"></i>Add rule
                                 </button>
                             </div>
+                        </div>
+                        <div class="card-body">
                             @forelse ($bookRules as $rule)
-                                <div class="d-flex align-items-center gap-2 border rounded p-2 mb-2 flex-wrap" wire:key="rule{{ $rule->id }}">
+                                <div class="d-flex align-items-center gap-2 rd-inset mb-2 flex-wrap" wire:key="rule{{ $rule->id }}">
                                     <span class="flex-grow-1 text-truncate">
                                         @if ($rule->subject_type === 'everyone')
                                             <i class="ri-global-line me-1 text-muted"></i>Everyone
@@ -295,23 +334,31 @@
                                             <option value="{{ $value }}" @selected($rule->permission === $value)>{{ $label }}</option>
                                         @endforeach
                                     </select>
-                                    <button type="button" class="btn btn-sm btn-light text-danger"
+                                    <button type="button" class="rd-iconbtn text-danger"
                                             wire:click="deleteRule({{ $rule->id }})"
-                                            wire:confirm="Delete this sharing rule?">
+                                            wire:confirm="Delete this sharing rule?" title="Delete rule">
                                         <i class="ri-delete-bin-line"></i>
                                     </button>
                                 </div>
                             @empty
-                                <p class="text-muted mb-0">Not shared with anyone yet. Add a rule to share this address book.</p>
+                                <div class="rd-empty">
+                                    <div class="rd-empty-icon"><i class="ri-share-line"></i></div>
+                                    <p class="rd-empty-title">Not shared with anyone yet.</p>
+                                    <p class="rd-empty-text">Add a rule to share this address book with a person, a user group, or everyone.</p>
+                                    <button type="button" class="btn btn-sm btn-outline-light" wire:click="openAddRule">Add rule</button>
+                                </div>
                             @endforelse
                         </div>
                     </div>
                 @endif
             @else
                 <div class="card">
-                    <div class="card-body text-center text-muted py-5">
-                        <i class="ri-contacts-book-2-line fs-36 d-block mb-2"></i>
-                        Select an address book to view its entries.
+                    <div class="card-body">
+                        <div class="rd-empty">
+                            <div class="rd-empty-icon"><i class="ri-contacts-book-2-line"></i></div>
+                            <p class="rd-empty-title">Select an address book to view its entries.</p>
+                            <p class="rd-empty-text">Personal books belong to one user; shared books are handed out by rule.</p>
+                        </div>
                     </div>
                 </div>
             @endif

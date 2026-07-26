@@ -1,24 +1,28 @@
 <div>
     <div class="card">
-        <div class="card-header d-flex justify-content-between align-items-center">
-            <h5 class="card-title mb-0"><i class="ri-mail-send-line me-1"></i>Invitations</h5>
-            <button type="button" class="btn btn-primary btn-sm" wire:click="create">
-                <i class="ri-user-add-line me-1"></i>Invite User
-            </button>
+        <div class="card-header d-flex justify-content-between align-items-center gap-2 flex-wrap">
+            <div>
+                <h4 class="header-title">Invitations</h4>
+                <p class="rd-card-sub mb-0">
+                    Invite someone by email: they pick their own password and land straight in the console with exactly the
+                    role and groups you choose here.
+                    @unless ($mailEnabled)
+                        <span class="text-warning">Email is not configured, so nothing is sent — copy the link below and
+                        pass it on yourself (<a href="{{ route('settings') }}?tab=email">Settings &rarr; Email</a>).</span>
+                    @endunless
+                </p>
+            </div>
+            <div class="rd-card-actions">
+                <button type="button" class="btn btn-primary" wire:click="create">
+                    <i class="ri-user-add-line"></i>Invite User
+                </button>
+            </div>
         </div>
-        <div class="card-body">
-            <p class="text-muted fs-13">
-                Invite someone by email: they pick their own password and land straight in the console with exactly the
-                role and groups you choose here.
-                @unless ($mailEnabled)
-                    <span class="text-warning">Email is not configured, so nothing is sent — copy the link below and
-                    pass it on yourself (<a href="{{ route('settings') }}?tab=email">Settings &rarr; Email</a>).</span>
-                @endunless
-            </p>
 
             {{-- The plaintext token is unrecoverable, so the link is shown once. --}}
             @if ($inviteUrl)
-                <div class="alert {{ $mailSent ? 'alert-success' : 'alert-warning' }}">
+                <div class="rd-toolbar">
+                <div class="alert {{ $mailSent ? 'alert-success' : 'alert-warning' }} mb-0 w-100">
                     <div class="d-flex justify-content-between align-items-start">
                         <div class="me-2">
                             <strong>
@@ -36,6 +40,7 @@
                             <i class="ri-file-copy-line"></i>
                         </button>
                     </div>
+                </div>
                 </div>
             @endif
 
@@ -73,9 +78,9 @@
                                           title="{{ $invite->expires_at }}">{{ $invite->expires_at->diffForHumans() }}</span>
                                 @endif
                             </td>
-                            <td class="text-end">
+                            <td class="text-end rd-rowact">
                                 @if (in_array($invite->id, $manageableIds, true))
-                                    <a href="javascript:void(0);" class="me-2" wire:click="resend({{ $invite->id }})"
+                                    <a href="javascript:void(0);" class="rd-act me-2" wire:click="resend({{ $invite->id }})"
                                        wire:confirm="Re-send this invitation? The previous link stops working.">Resend</a>
                                     <a href="javascript:void(0);" class="text-danger" wire:click="revoke({{ $invite->id }})"
                                        wire:confirm="Revoke the invitation for {{ $invite->email }}?">Revoke</a>
@@ -86,7 +91,13 @@
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="6" class="text-center text-muted py-4">No pending invitations.</td>
+                            <td colspan="6" class="rd-empty-cell">
+                                <div class="rd-empty">
+                                    <div class="rd-empty-icon"><i class="ri-mail-send-line"></i></div>
+                                    <p class="rd-empty-title">No pending invitations.</p>
+                                    <p class="rd-empty-text">An invitation lets someone set their own password without you ever handling it.</p>
+                                </div>
+                            </td>
                         </tr>
                     @endforelse
                     </tbody>
@@ -94,24 +105,23 @@
             </div>
 
             {{-- Mobile card list --}}
-            <div class="d-md-none">
+            <div class="d-md-none rd-cardlist">
                 @forelse ($invitations as $invite)
-                    <div class="card border mb-2" wire:key="minv{{ $invite->id }}">
-                        <div class="card-body p-2">
-                            <div class="d-flex justify-content-between align-items-start gap-2">
+                    <div class="rd-mini" wire:key="minv{{ $invite->id }}">
+                            <div class="rd-mini-head">
                                 <div class="min-width-0">
-                                    <span class="fw-semibold d-block text-truncate">{{ $invite->email }}</span>
-                                    <small class="text-muted font-monospace">{{ $invite->username }}</small>
+                                    <span class="rd-mini-title text-truncate">{{ $invite->email }}</span>
+                                    <span class="rd-mini-sub rd-mono">{{ $invite->username }}</span>
                                 </div>
                                 @if (in_array($invite->id, $manageableIds, true))
-                                    <a href="javascript:void(0);" class="btn btn-sm btn-light text-danger flex-shrink-0"
+                                    <a href="javascript:void(0);" class="rd-iconbtn text-danger flex-shrink-0" title="Revoke"
                                        wire:click="revoke({{ $invite->id }})"
                                        wire:confirm="Revoke the invitation for {{ $invite->email }}?">
                                         <i class="ri-delete-bin-line"></i>
                                     </a>
                                 @endif
                             </div>
-                            <div class="mt-1">
+                            <div class="mt-2">
                                 @if ($invite->is_admin)
                                     <span class="badge bg-danger-subtle text-danger">Administrator</span>
                                 @else
@@ -123,20 +133,25 @@
                                     <span class="badge bg-warning-subtle text-warning">{{ $invite->expires_at->diffForHumans() }}</span>
                                 @endif
                             </div>
-                            <div class="d-flex justify-content-between align-items-center mt-1">
-                                <small class="text-muted">Invited by {{ $invite->inviter?->username ?? '—' }}</small>
+                            <div class="rd-mini-foot">
+                                <span class="rd-mini-sub">Invited by {{ $invite->inviter?->username ?? '—' }}</span>
+                                {{-- A bare text link is an 18px-tall target. Resend is the one action
+                                     this card offers besides Revoke, so it gets button chrome and,
+                                     with it, the 40px minimum height phones are held to. --}}
                                 @if (in_array($invite->id, $manageableIds, true))
-                                    <a href="javascript:void(0);" class="fs-13" wire:click="resend({{ $invite->id }})"
+                                    <a href="javascript:void(0);" class="btn btn-sm btn-outline-light flex-shrink-0"
+                                       wire:click="resend({{ $invite->id }})"
                                        wire:confirm="Re-send this invitation? The previous link stops working.">Resend</a>
                                 @endif
                             </div>
-                        </div>
                     </div>
                 @empty
-                    <p class="text-center text-muted py-4 mb-0">No pending invitations.</p>
+                    <div class="rd-empty">
+                        <div class="rd-empty-icon"><i class="ri-mail-send-line"></i></div>
+                        <p class="rd-empty-title">No pending invitations.</p>
+                    </div>
                 @endforelse
             </div>
-        </div>
     </div>
 
     {{-- Invite modal --}}

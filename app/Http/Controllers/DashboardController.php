@@ -2,14 +2,19 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\AlarmLog;
 use App\Models\AuditConnection;
 use App\Models\Device;
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\View\View;
 
 class DashboardController extends Controller
 {
+    /** Ranges the connections chart offers, in days. */
+    private const RANGES = [14, 30, 90];
+
     public function index(Request $request): View
     {
         $user = $request->user();
@@ -20,22 +25,36 @@ class DashboardController extends Controller
             ? null
             : Device::query()->visibleTo($user)->pluck('rustdesk_id')->all();
 
+        // Anything but one of the offered windows (including ?range[]=…) falls
+        // back to the default rather than 500ing or querying an odd span.
+        $requested = $request->query('range');
+        $range = is_scalar($requested) && in_array((int) $requested, self::RANGES, true)
+            ? (int) $requested
+            : self::RANGES[0];
+
         return view('overview', [
-            'connectionSeries' => $this->connectionSeries($visibleIds),
+            'range' => $range,
+            'ranges' => self::RANGES,
+            'connectionSeries' => $this->connectionSeries($visibleIds, $range),
             'platformMix' => $this->platformMix($user),
             'versionCounts' => $this->versionCounts($user),
+            // Alarm detail is an audit screen; the count tile is fleet-level but
+            // the rows name devices, so this panel is gated. null = not allowed.
+            'recentAlarms' => $user->consoleAllows('audit', 'r')
+                ? $this->recentAlarms($visibleIds)
+                : null,
         ]);
     }
 
     /**
-     * Daily connection counts for the last 14 days, split by type:
+     * Daily connection counts for the requested window, split by type:
      * Remote Control (0), File Transfer (1), Other (port forward, camera, terminal).
      *
      * @param  array<int,string>|null  $visibleIds  null = all devices (admin)
      */
-    private function connectionSeries(?array $visibleIds): array
+    private function connectionSeries(?array $visibleIds, int $days): array
     {
-        $from = now()->subDays(13)->startOfDay();
+        $from = now()->subDays($days - 1)->startOfDay();
 
         $rows = AuditConnection::query()
             ->when($visibleIds !== null, fn ($q) => $q->whereIn('rustdesk_id', $visibleIds))
@@ -50,7 +69,7 @@ class DashboardController extends Controller
         $file = [];
         $other = [];
 
-        for ($i = 0; $i < 14; $i++) {
+        for ($i = 0; $i < $days; $i++) {
             $date = $from->copy()->addDays($i);
             $key = $date->toDateString();
             $labels[] = $date->format('M j');
@@ -119,5 +138,23 @@ class DashboardController extends Controller
             'labels' => $rows->pluck('v')->all(),
             'values' => $rows->pluck('c')->map(fn ($c) => (int) $c)->all(),
         ];
+    }
+
+    /**
+     * The five most recent alarms of the last 24 hours. Scoping a non-admin to
+     * their visible device ids also drops console-raised alarms, which carry
+     * the 'console' sentinel id — the same rule the alarm log screen applies.
+     *
+     * @param  array<int,string>|null  $visibleIds  null = all devices (admin)
+     * @return Collection<int, AlarmLog>
+     */
+    private function recentAlarms(?array $visibleIds): Collection
+    {
+        return AlarmLog::query()
+            ->when($visibleIds !== null, fn ($q) => $q->whereIn('rustdesk_id', $visibleIds))
+            ->where('created_at', '>=', now()->subDay())
+            ->latest('id')
+            ->limit(5)
+            ->get();
     }
 }

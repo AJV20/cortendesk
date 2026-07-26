@@ -1,294 +1,290 @@
 <div wire:poll.15s>
 
     {{-- Summary chips --}}
-    <div class="row row-cols-2 row-cols-md-3 g-2 g-md-3 mb-3">
-        <div class="col">
-            <div class="card mb-0">
-                <div class="card-body py-2 px-3 d-flex align-items-center gap-2">
-                    <i class="ri-computer-line fs-22 text-primary"></i>
-                    <div>
-                        <span class="fw-bold fs-16">{{ $totalCount }}</span>
-                        <span class="text-muted fs-13 d-block d-sm-inline ms-sm-1">Devices</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="col">
-            <div class="card mb-0">
-                <div class="card-body py-2 px-3 d-flex align-items-center gap-2">
-                    <i class="ri-checkbox-blank-circle-fill fs-14 text-success"></i>
-                    <div>
-                        <span class="fw-bold fs-16">{{ $onlineCount }}</span>
-                        <span class="text-muted fs-13 d-block d-sm-inline ms-sm-1">Online</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="col">
-            <div class="card mb-0">
-                <div class="card-body py-2 px-3 d-flex align-items-center gap-2">
-                    <i class="ri-checkbox-blank-circle-fill fs-14 text-secondary"></i>
-                    <div>
-                        <span class="fw-bold fs-16">{{ $totalCount - $onlineCount }}</span>
-                        <span class="text-muted fs-13 d-block d-sm-inline ms-sm-1">Offline</span>
-                    </div>
-                </div>
-            </div>
-        </div>
+    <div class="rd-chiprow">
+        <span class="rd-chip rd-tone-blue">
+            <i class="ri-computer-line rd-chip-icon"></i>
+            <span class="rd-chip-value">{{ $totalCount }}</span>
+            <span class="rd-chip-label">Devices</span>
+        </span>
+        <span class="rd-chip rd-tone-green">
+            <span class="rd-chip-dot"></span>
+            <span class="rd-chip-value">{{ $onlineCount }}</span>
+            <span class="rd-chip-label">Online</span>
+        </span>
+        <span class="rd-chip rd-tone-muted">
+            <span class="rd-chip-dot"></span>
+            <span class="rd-chip-value">{{ $totalCount - $onlineCount }}</span>
+            <span class="rd-chip-label">Offline</span>
+        </span>
     </div>
 
     <div class="card">
-        <div class="card-body">
 
-            {{-- Toolbar --}}
-            <div class="row g-2 mb-3 align-items-center">
-                <div class="col-12 col-md-4">
-                    <div class="input-group">
-                        <span class="input-group-text"><i class="ri-search-line"></i></span>
-                        <input type="search" class="form-control" placeholder="Search ID, alias, hostname, user, IP…"
-                               wire:model.live.debounce.300ms="search">
-                    </div>
-                </div>
-                <div class="col-6 col-md-2">
-                    <select class="form-select" wire:model.live="status" @disabled($trashed)>
-                        <option value="all">All statuses</option>
-                        <option value="online">Online</option>
-                        <option value="offline">Offline</option>
-                    </select>
-                </div>
-                <div class="col-6 col-md-2">
-                    <select class="form-select" wire:model.live="group">
-                        <option value="0">All groups</option>
-                        @foreach ($groups as $g)
-                            <option value="{{ $g->id }}">{{ $g->name }}</option>
-                        @endforeach
-                    </select>
-                </div>
-                @if (auth()->user()?->is_admin)
-                    <div class="col-6 col-md-2">
-                        <select class="form-select" wire:model.live="owner">
-                            <option value="0">All owners</option>
-                            <option value="-1">Unassigned</option>
-                            @foreach ($users as $u)
-                                <option value="{{ $u->id }}">{{ $u->username }}</option>
-                            @endforeach
-                        </select>
-                    </div>
-                @endif
-                <div class="col-6 col-md-2">
-                    <button type="button" class="btn btn-light w-100" wire:click="resetFilters">Reset</button>
-                </div>
-                <div class="col-6 col-md-2 text-md-end">
-                    @if ($trashed)
-                        <button type="button" class="btn btn-secondary w-100" wire:click="$set('trashed', false)">
-                            <i class="ri-arrow-left-line me-1"></i>Back to Devices
-                        </button>
-                    @elseif (auth()->user()?->consoleAllows('device', 'rw'))
-                        <button type="button" class="btn btn-primary w-100" wire:click="create">
-                            <i class="ri-add-line me-1"></i>Add Device
-                        </button>
-                    @endif
+        {{-- Toolbar --}}
+        <div class="rd-toolbar">
+            <div class="rd-toolbar-search">
+                <div class="input-group">
+                    <span class="input-group-text"><i class="ri-search-line"></i></span>
+                    <input type="search" class="form-control" placeholder="Search ID, alias, hostname, user, IP…"
+                           wire:model.live.debounce.300ms="search">
                 </div>
             </div>
+            <select class="form-select rd-toolbar-filter" wire:model.live="status" @disabled($trashed)>
+                <option value="all">All statuses</option>
+                <option value="online">Online</option>
+                <option value="offline">Offline</option>
+            </select>
+            <select class="form-select rd-toolbar-filter" wire:model.live="group">
+                <option value="0">All groups</option>
+                @foreach ($groups as $g)
+                    <option value="{{ $g->id }}">{{ $g->name }}</option>
+                @endforeach
+            </select>
+            @if (auth()->user()?->is_admin)
+                <select class="form-select rd-toolbar-filter" wire:model.live="owner">
+                    <option value="0">All owners</option>
+                    <option value="-1">Unassigned</option>
+                    @foreach ($users as $u)
+                        <option value="{{ $u->id }}">{{ $u->username }}</option>
+                    @endforeach
+                </select>
+            @endif
+            <div class="rd-toolbar-actions">
+                <button type="button" class="btn btn-outline-light" wire:click="resetFilters">Reset</button>
+                @if ($trashed)
+                    <button type="button" class="btn btn-light" wire:click="$set('trashed', false)">
+                        <i class="ri-arrow-left-line"></i>Back to Devices
+                    </button>
+                @elseif (auth()->user()?->consoleAllows('device', 'rw'))
+                    <button type="button" class="btn btn-primary" wire:click="create">
+                        <i class="ri-add-line"></i>Add Device
+                    </button>
+                @endif
+            </div>
+        </div>
 
-            @unless ($trashed)
-                <div class="mb-2 d-flex justify-content-between align-items-center flex-wrap gap-2">
-                    <div>
-                        @if ($pendingCount > 0)
-                            <a href="javascript:void(0);" class="fs-13 text-warning fw-semibold" wire:click="$set('pendingTab', true)">
-                                <i class="ri-time-line me-1"></i>Pending approval
-                                <span class="badge bg-warning-subtle text-warning ms-1">{{ $pendingCount }}</span>
-                            </a>
-                        @endif
-                    </div>
-                    <a href="javascript:void(0);" class="fs-13 text-muted" wire:click="$set('trashed', true)">
-                        <i class="ri-delete-bin-line me-1"></i>Recycle Bin ({{ $trashedCount }})
+        @unless ($trashed)
+            <div class="rd-toolbar">
+                @if ($pendingCount > 0)
+                    <a href="javascript:void(0);" class="fs-13 text-warning fw-semibold" wire:click="$set('pendingTab', true)">
+                        <i class="ri-time-line me-1"></i>Pending approval
+                        <span class="badge bg-warning-subtle text-warning ms-1">{{ $pendingCount }}</span>
                     </a>
-                </div>
-            @else
-                <div class="alert alert-warning py-2 fs-13">
+                @endif
+                <a href="javascript:void(0);" class="fs-13 text-muted ms-auto" wire:click="$set('trashed', true)">
+                    <i class="ri-delete-bin-line me-1"></i>Recycle Bin ({{ $trashedCount }})
+                </a>
+            </div>
+        @else
+            <div class="rd-toolbar">
+                <div class="alert alert-warning py-2 mb-0 w-100">
                     <i class="ri-delete-bin-line me-1"></i>Recycle bin — devices here are hidden from the console and API but not destroyed.
                 </div>
-            @endunless
+            </div>
+        @endunless
 
-            {{-- Desktop table (md and up) --}}
-            <div class="table-responsive d-none d-md-block">
-                <table class="table table-hover table-centered mb-0">
-                    <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Device</th>
-                        <th>Alias</th>
-                        <th>Group</th>
-                        @if (auth()->user()?->is_admin)<th>Owner</th>@endif
-                        <th>Version</th>
-                        <th>Last Seen</th>
-                        <th>Status</th>
-                        <th class="text-end">Action</th>
-                    </tr>
-                    </thead>
-                    <tbody>
-                    @forelse ($devices as $device)
-                        <tr wire:key="d{{ $device->id }}">
+        {{-- Desktop table (md and up) --}}
+        <div class="table-responsive d-none d-md-block">
+            <table class="table table-hover table-centered mb-0">
+                <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Device</th>
+                    <th>Alias</th>
+                    <th>Group</th>
+                    @if (auth()->user()?->is_admin)<th>Owner</th>@endif
+                    <th>Version</th>
+                    <th>Last Seen</th>
+                    <th>Status</th>
+                    <th class="text-end">Action</th>
+                </tr>
+                </thead>
+                <tbody>
+                @forelse ($devices as $device)
+                    <tr wire:key="d{{ $device->id }}">
+                        <td>
+                            <x-platform-icon :platform="$device->platform()" class="me-1"/>
+                            @if ($trashed)
+                                <span class="fw-semibold">{{ $device->rustdesk_id }}</span>
+                            @else
+                                <a href="rustdesk://{{ $device->rustdesk_id }}" class="fw-semibold"
+                                   title="Connect with RustDesk">{{ $device->rustdesk_id }}</a>
+                            @endif
+                        </td>
+                        <td>
+                            <span class="rd-cell-title">{{ $device->hostname ?: '—' }}</span>
+                            <span class="rd-cell-sub">
+                                {{ $device->os ? \Illuminate\Support\Str::limit($device->os, 28) : 'unknown OS' }}@if ($device->username) · {{ $device->username }}@endif
+                            </span>
+                        </td>
+                        <td>{{ $device->alias ?: '—' }}</td>
+                        <td>{{ $device->group?->name ?: '—' }}</td>
+                        @if (auth()->user()?->is_admin)
                             <td>
-                                <x-platform-icon :platform="$device->platform()" class="me-1"/>
-                                @if ($trashed)
-                                    <span class="fw-semibold">{{ $device->rustdesk_id }}</span>
+                                @if ($device->user)
+                                    <span class="badge bg-info-subtle text-info">{{ $device->user->username }}</span>
                                 @else
-                                    <a href="rustdesk://{{ $device->rustdesk_id }}" class="fw-semibold"
+                                    <span class="text-muted">—</span>
+                                @endif
+                            </td>
+                        @endif
+                        <td><span class="badge bg-secondary-subtle text-secondary">{{ $device->version ?: '?' }}</span></td>
+                        <td>
+                            <span title="{{ $device->last_online_at }}">
+                                {{ $device->last_online_at?->diffForHumans() ?? 'never' }}
+                            </span>
+                        </td>
+                        <td>
+                            @if ($trashed)
+                                <span class="badge bg-warning-subtle text-warning">Deleted</span>
+                            @elseif ($device->isOnline())
+                                <span class="badge bg-success-subtle text-success"><i class="rd-dot"></i>Online</span>
+                            @else
+                                <span class="badge bg-secondary-subtle text-secondary"><i class="rd-dot"></i>Offline</span>
+                            @endif
+                        </td>
+                        <td class="text-end rd-rowact">
+                            @if ($trashed)
+                                @if (auth()->user()?->consoleAllows('device', 'rw'))
+                                    <a href="javascript:void(0);" class="text-success me-2" wire:click="restoreDevice({{ $device->id }})">Restore</a>
+                                    <a href="javascript:void(0);" class="text-danger"
+                                       wire:click="forceDeleteDevice({{ $device->id }})"
+                                       wire:confirm="PERMANENTLY delete device {{ $device->rustdesk_id }}? This cannot be undone.">Destroy</a>
+                                @endif
+                            @else
+                                {{-- Row actions are neutral; only the destructive one
+                                     takes a colour. Two full-colour ordinary actions
+                                     side by side read louder than Edit and make this
+                                     the only cell in the console with four colours. --}}
+                                @if (config('cortendesk.native_webclient'))
+                                    <a href="{{ route('webclient') }}?id={{ $device->rustdesk_id }}"
+                                       target="cortendesk-webclient" rel="noopener" class="rd-act me-2"
+                                       title="Connect in the browser (native client)"><i class="ri-remote-control-line me-1"></i>Connect</a>
+                                @endif
+                                @if (config('cortendesk.webclient_url'))
+                                    <a href="{{ config('cortendesk.webclient_url') }}?id={{ $device->rustdesk_id }}"
+                                       target="cortendesk-webclient" rel="noopener" class="rd-act me-2"
+                                       title="Connect in the browser">Web Client</a>
+                                @endif
+                                @if (auth()->user()?->consoleAllows('device', 'rw'))
+                                    <a href="javascript:void(0);" class="rd-act me-2" wire:click="edit({{ $device->id }})">Edit</a>
+                                    <a href="javascript:void(0);" class="text-danger"
+                                       wire:click="deleteDevice({{ $device->id }})"
+                                       wire:confirm="Move device {{ $device->rustdesk_id }} to the recycle bin?">Delete</a>
+                                @endif
+                            @endif
+                        </td>
+                    </tr>
+                @empty
+                    <tr>
+                        <td colspan="{{ auth()->user()?->is_admin ? 9 : 8 }}" class="rd-empty-cell">
+                            <div class="rd-empty">
+                                <div class="rd-empty-icon"><i class="{{ $trashed ? 'ri-delete-bin-line' : 'ri-computer-line' }}"></i></div>
+                                <p class="rd-empty-title">{{ $trashed ? 'Recycle bin is empty.' : 'No devices match your filters.' }}</p>
+                                <p class="rd-empty-text">
+                                    {{ $trashed
+                                        ? 'Deleted devices land here until they are destroyed for good.'
+                                        : 'Devices register themselves the first time a RustDesk client signs in to this server.' }}
+                                </p>
+                                @unless ($trashed)
+                                    <button type="button" class="btn btn-sm btn-outline-light" wire:click="resetFilters">Clear filters</button>
+                                @endunless
+                            </div>
+                        </td>
+                    </tr>
+                @endforelse
+                </tbody>
+            </table>
+        </div>
+
+        {{-- Mobile card list (below md) --}}
+        <div class="d-md-none rd-cardlist">
+            @forelse ($devices as $device)
+                <div class="rd-mini" wire:key="m{{ $device->id }}">
+                    <div class="rd-mini-head">
+                        <div class="d-flex align-items-center gap-2 min-width-0">
+                            <x-platform-icon :platform="$device->platform()" size="fs-22"/>
+                            <div class="min-width-0">
+                                @if ($trashed)
+                                    <span class="rd-mini-title text-truncate">{{ $device->rustdesk_id }}</span>
+                                @else
+                                    <a href="rustdesk://{{ $device->rustdesk_id }}" class="rd-mini-title text-truncate"
                                        title="Connect with RustDesk">{{ $device->rustdesk_id }}</a>
                                 @endif
-                            </td>
-                            <td>
-                                <span class="d-block">{{ $device->hostname ?: '—' }}</span>
-                                <small class="text-muted">{{ $device->username }}</small>
-                            </td>
-                            <td>{{ $device->alias ?: '—' }}</td>
-                            <td>{{ $device->group?->name ?: '—' }}</td>
-                            @if (auth()->user()?->is_admin)
-                                <td>
-                                    @if ($device->user)
-                                        <span class="badge bg-info-subtle text-info">{{ $device->user->username }}</span>
-                                    @else
-                                        <span class="text-muted">—</span>
-                                    @endif
-                                </td>
-                            @endif
-                            <td><span class="badge bg-secondary-subtle text-secondary">{{ $device->version ?: '?' }}</span></td>
-                            <td>
-                                <span title="{{ $device->last_online_at }}">
-                                    {{ $device->last_online_at?->diffForHumans() ?? 'never' }}
-                                </span>
-                            </td>
-                            <td>
-                                @if ($trashed)
-                                    <span class="badge bg-warning-subtle text-warning">Deleted</span>
-                                @elseif ($device->isOnline())
-                                    <span class="badge bg-success-subtle text-success"><i class="ri-checkbox-blank-circle-fill fs-10 me-1"></i>Online</span>
-                                @else
-                                    <span class="badge bg-secondary-subtle text-secondary"><i class="ri-checkbox-blank-circle-fill fs-10 me-1"></i>Offline</span>
-                                @endif
-                            </td>
-                            <td class="text-end">
-                                @if ($trashed)
-                                    @if (auth()->user()?->consoleAllows('device', 'rw'))
-                                        <a href="javascript:void(0);" class="text-success me-2" wire:click="restoreDevice({{ $device->id }})">Restore</a>
-                                        <a href="javascript:void(0);" class="text-danger"
-                                           wire:click="forceDeleteDevice({{ $device->id }})"
-                                           wire:confirm="PERMANENTLY delete device {{ $device->rustdesk_id }}? This cannot be undone.">Destroy</a>
-                                    @endif
-                                @else
-                                    @if (config('cortendesk.native_webclient'))
-                                        <a href="{{ route('webclient') }}?id={{ $device->rustdesk_id }}"
-                                           target="cortendesk-webclient" rel="noopener" class="text-primary me-2"
-                                           title="Connect in the browser (native client)"><i class="ri-remote-control-line me-1"></i>Connect</a>
-                                    @endif
-                                    @if (config('cortendesk.webclient_url'))
-                                        <a href="{{ config('cortendesk.webclient_url') }}?id={{ $device->rustdesk_id }}"
-                                           target="cortendesk-webclient" rel="noopener" class="text-info me-2"
-                                           title="Connect in the browser">Web Client</a>
-                                    @endif
-                                    @if (auth()->user()?->consoleAllows('device', 'rw'))
-                                        <a href="javascript:void(0);" class="text-primary me-2" wire:click="edit({{ $device->id }})">Edit</a>
-                                        <a href="javascript:void(0);" class="text-danger"
-                                           wire:click="deleteDevice({{ $device->id }})"
-                                           wire:confirm="Move device {{ $device->rustdesk_id }} to the recycle bin?">Delete</a>
-                                    @endif
-                                @endif
-                            </td>
-                        </tr>
-                    @empty
-                        <tr>
-                            <td colspan="{{ auth()->user()?->is_admin ? 9 : 8 }}" class="text-center text-muted py-4">
-                                {{ $trashed ? 'Recycle bin is empty.' : 'No devices match your filters.' }}
-                            </td>
-                        </tr>
-                    @endforelse
-                    </tbody>
-                </table>
-            </div>
-
-            {{-- Mobile card list (below md) --}}
-            <div class="d-md-none">
-                @forelse ($devices as $device)
-                    <div class="card border mb-2" wire:key="m{{ $device->id }}">
-                        <div class="card-body p-2">
-                            <div class="d-flex justify-content-between align-items-start gap-2">
-                                <div class="d-flex align-items-center gap-2 min-width-0">
-                                    <x-platform-icon :platform="$device->platform()" size="fs-22"/>
-                                    <div class="lh-sm min-width-0">
-                                        @if ($trashed)
-                                            <span class="fw-semibold d-block text-truncate">{{ $device->rustdesk_id }}</span>
-                                        @else
-                                            <a href="rustdesk://{{ $device->rustdesk_id }}" class="fw-semibold d-block text-truncate"
-                                               title="Connect with RustDesk">{{ $device->rustdesk_id }}</a>
-                                        @endif
-                                        <small class="text-muted d-block text-truncate">{{ $device->alias ?: $device->hostname }}</small>
-                                    </div>
-                                </div>
-                                @if ($trashed)
-                                    <span class="badge bg-warning-subtle text-warning flex-shrink-0">Deleted</span>
-                                @elseif ($device->isOnline())
-                                    <span class="badge bg-success-subtle text-success flex-shrink-0">Online</span>
-                                @else
-                                    <span class="badge bg-secondary-subtle text-secondary flex-shrink-0">Offline</span>
-                                @endif
-                            </div>
-                            <div class="d-flex justify-content-between align-items-center gap-2 mt-1">
-                                <small class="text-muted min-width-0">
-                                    {{ $device->username }} · v{{ $device->version ?: '?' }} ·
-                                    <span class="text-nowrap">{{ $device->last_online_at?->diffForHumans(short: true) ?? 'never' }}</span>
-                                </small>
-                                <div class="d-flex flex-nowrap gap-1 flex-shrink-0">
-                                    @if ($trashed)
-                                        @if (auth()->user()?->consoleAllows('device', 'rw'))
-                                            <a href="javascript:void(0);" class="btn btn-sm btn-light text-success" wire:click="restoreDevice({{ $device->id }})"><i class="ri-arrow-go-back-line"></i></a>
-                                            <a href="javascript:void(0);" class="btn btn-sm btn-light text-danger"
-                                               wire:click="forceDeleteDevice({{ $device->id }})"
-                                               wire:confirm="PERMANENTLY delete device {{ $device->rustdesk_id }}?"><i class="ri-close-circle-line"></i></a>
-                                        @endif
-                                    @else
-                                        @if (config('cortendesk.native_webclient'))
-                                            <a href="{{ route('webclient') }}?id={{ $device->rustdesk_id }}"
-                                               target="cortendesk-webclient" rel="noopener" class="btn btn-sm btn-light text-primary"
-                                               title="Connect in the browser (native client)"><i class="ri-remote-control-line"></i></a>
-                                        @endif
-                                        @if (config('cortendesk.webclient_url'))
-                                            <a href="{{ config('cortendesk.webclient_url') }}?id={{ $device->rustdesk_id }}"
-                                               target="cortendesk-webclient" rel="noopener" class="btn btn-sm btn-light text-info"
-                                               title="Connect in the browser"><i class="ri-global-line"></i></a>
-                                        @endif
-                                        @if (auth()->user()?->consoleAllows('device', 'rw'))
-                                            <a href="javascript:void(0);" class="btn btn-sm btn-light" wire:click="edit({{ $device->id }})"><i class="ri-pencil-line"></i></a>
-                                            <a href="javascript:void(0);" class="btn btn-sm btn-light text-danger"
-                                               wire:click="deleteDevice({{ $device->id }})"
-                                               wire:confirm="Move device {{ $device->rustdesk_id }} to the recycle bin?"><i class="ri-delete-bin-line"></i></a>
-                                        @endif
-                                    @endif
-                                </div>
+                                <span class="rd-mini-sub text-truncate">{{ $device->alias ?: $device->hostname }}</span>
                             </div>
                         </div>
+                        @if ($trashed)
+                            <span class="badge bg-warning-subtle text-warning flex-shrink-0">Deleted</span>
+                        @elseif ($device->isOnline())
+                            <span class="badge bg-success-subtle text-success flex-shrink-0">Online</span>
+                        @else
+                            <span class="badge bg-secondary-subtle text-secondary flex-shrink-0">Offline</span>
+                        @endif
                     </div>
-                @empty
-                    <p class="text-center text-muted py-4 mb-0">
-                        {{ $trashed ? 'Recycle bin is empty.' : 'No devices match your filters.' }}
+                    <div class="rd-mini-foot">
+                        <span class="rd-mini-sub min-width-0">
+                            {{ $device->username }} · v{{ $device->version ?: '?' }} ·
+                            <span class="text-nowrap">{{ $device->last_online_at?->diffForHumans(short: true) ?? 'never' }}</span>
+                        </span>
+                        <div class="rd-mini-acts">
+                            @if ($trashed)
+                                @if (auth()->user()?->consoleAllows('device', 'rw'))
+                                    <a href="javascript:void(0);" class="rd-iconbtn text-success" title="Restore" wire:click="restoreDevice({{ $device->id }})"><i class="ri-arrow-go-back-line"></i></a>
+                                    <a href="javascript:void(0);" class="rd-iconbtn text-danger" title="Destroy"
+                                       wire:click="forceDeleteDevice({{ $device->id }})"
+                                       wire:confirm="PERMANENTLY delete device {{ $device->rustdesk_id }}?"><i class="ri-close-circle-line"></i></a>
+                                @endif
+                            @else
+                                @if (config('cortendesk.native_webclient'))
+                                    <a href="{{ route('webclient') }}?id={{ $device->rustdesk_id }}"
+                                       target="cortendesk-webclient" rel="noopener" class="rd-iconbtn"
+                                       title="Connect in the browser (native client)"><i class="ri-remote-control-line"></i></a>
+                                @endif
+                                @if (config('cortendesk.webclient_url'))
+                                    <a href="{{ config('cortendesk.webclient_url') }}?id={{ $device->rustdesk_id }}"
+                                       target="cortendesk-webclient" rel="noopener" class="rd-iconbtn"
+                                       title="Connect in the browser"><i class="ri-global-line"></i></a>
+                                @endif
+                                @if (auth()->user()?->consoleAllows('device', 'rw'))
+                                    <a href="javascript:void(0);" class="rd-iconbtn" title="Edit" wire:click="edit({{ $device->id }})"><i class="ri-pencil-line"></i></a>
+                                    <a href="javascript:void(0);" class="rd-iconbtn text-danger" title="Delete"
+                                       wire:click="deleteDevice({{ $device->id }})"
+                                       wire:confirm="Move device {{ $device->rustdesk_id }} to the recycle bin?"><i class="ri-delete-bin-line"></i></a>
+                                @endif
+                            @endif
+                        </div>
+                    </div>
+                </div>
+            @empty
+                <div class="rd-empty">
+                    <div class="rd-empty-icon"><i class="{{ $trashed ? 'ri-delete-bin-line' : 'ri-computer-line' }}"></i></div>
+                    <p class="rd-empty-title">{{ $trashed ? 'Recycle bin is empty.' : 'No devices match your filters.' }}</p>
+                    <p class="rd-empty-text">
+                        {{ $trashed
+                            ? 'Deleted devices land here until they are destroyed for good.'
+                            : 'Devices register themselves the first time a RustDesk client signs in to this server.' }}
                     </p>
-                @endforelse
-            </div>
+                    @unless ($trashed)
+                        <button type="button" class="btn btn-sm btn-outline-light" wire:click="resetFilters">Clear filters</button>
+                    @endunless
+                </div>
+            @endforelse
+        </div>
 
-            <div class="d-flex justify-content-between align-items-center mt-3 flex-wrap gap-2">
-                <small class="text-muted">
-                    Showing {{ $devices->firstItem() ?? 0 }}–{{ $devices->lastItem() ?? 0 }} of {{ $devices->total() }}
-                </small>
-                {{ $devices->links() }}
-            </div>
+        <div class="rd-tablefoot">
+            <span>Showing {{ $devices->firstItem() ?? 0 }}–{{ $devices->lastItem() ?? 0 }} of {{ $devices->total() }}</span>
+            {{ $devices->links() }}
         </div>
     </div>
 
     {{-- Add / Edit modal --}}
     @if ($editingId !== null)
-        <div class="modal fade show d-block" tabindex="-1" style="background: rgba(0,0,0,.5);" wire:keydown.escape="closeModal">
-            <div class="modal-dialog modal-dialog-centered">
+        {{-- Scrollable: with the strategy inspector open this form is taller than a
+             390px screen, and an unbounded body puts "Save Changes" out of reach. --}}
+        <div class="modal fade show d-block" tabindex="-1" style="background: rgba(0,0,0,.6);" wire:keydown.escape="closeModal">
+            <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
                 <div class="modal-content">
                     <form wire:submit="save">
                         <div class="modal-header">
@@ -348,7 +344,7 @@
                                 </select>
                                 <div class="form-text">A strategy set here wins over the owner's, the group's and the default.</div>
 
-                                <div class="mt-2 p-2 border rounded bg-light-subtle">
+                                <div class="mt-2 rd-inset">
                                     <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap">
                                         <span class="fs-13 text-muted">In force now</span>
                                         @if ($strategyExplain['resolved'])

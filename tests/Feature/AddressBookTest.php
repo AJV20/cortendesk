@@ -6,6 +6,7 @@ use App\Models\AddressBookEntry;
 use App\Models\AddressBookRule;
 use App\Models\Tag;
 use App\Models\User;
+use Illuminate\Support\Str;
 use Livewire\Livewire;
 
 /** A shared book owned by the beforeEach admin, shared with $member at a tier. */
@@ -263,4 +264,60 @@ it('strips a deleted tag from entry tag_ids', function () {
 
     expect(Tag::whereKey($doomed->id)->exists())->toBeFalse()
         ->and($entry->refresh()->tag_ids)->toEqual([$kept->id]);
+});
+
+// --- Entries identify the machine, not just the id (#5) --------------------
+
+it('shows the machine name on an entry, not only the id', function () {
+    // Entries already store hostname and platform from the client; they simply
+    // were not rendered, so an entry with no alias read as a bare number.
+    $admin = User::factory()->create(['is_admin' => true]);
+    $book = AddressBook::create(['guid' => (string) Str::uuid(), 'name' => 'Ops', 'owner_user_id' => $admin->id]);
+    $book->entries()->create([
+        'rustdesk_id' => '910000123',
+        'hostname' => 'RECEPTION-PC',
+        'platform' => 'windows',
+        'alias' => '',
+    ]);
+
+    Livewire::actingAs($admin)->test(\App\Livewire\AddressBookManager::class)
+        ->set('selectedBookId', $book->id)
+        ->assertSee('RECEPTION-PC')
+        ->assertSee('910000123');
+});
+
+it('finds an entry by machine name', function () {
+    $admin = User::factory()->create(['is_admin' => true]);
+    $book = AddressBook::create(['guid' => (string) Str::uuid(), 'name' => 'Ops', 'owner_user_id' => $admin->id]);
+    $book->entries()->create(['rustdesk_id' => '910000123', 'hostname' => 'RECEPTION-PC']);
+    $book->entries()->create(['rustdesk_id' => '910000456', 'hostname' => 'WAREHOUSE-01']);
+
+    Livewire::actingAs($admin)->test(\App\Livewire\AddressBookManager::class)
+        ->set('selectedBookId', $book->id)
+        ->set('entrySearch', 'warehouse')
+        ->assertSee('WAREHOUSE-01')
+        ->assertDontSee('RECEPTION-PC');
+});
+
+it('still finds an entry by id', function () {
+    $admin = User::factory()->create(['is_admin' => true]);
+    $book = AddressBook::create(['guid' => (string) Str::uuid(), 'name' => 'Ops', 'owner_user_id' => $admin->id]);
+    $book->entries()->create(['rustdesk_id' => '910000123', 'hostname' => 'RECEPTION-PC']);
+    $book->entries()->create(['rustdesk_id' => '910000456', 'hostname' => 'WAREHOUSE-01']);
+
+    Livewire::actingAs($admin)->test(\App\Livewire\AddressBookManager::class)
+        ->set('selectedBookId', $book->id)
+        ->set('entrySearch', '910000456')
+        ->assertSee('WAREHOUSE-01')
+        ->assertDontSee('RECEPTION-PC');
+});
+
+it('falls back to the id when an entry has no hostname', function () {
+    $admin = User::factory()->create(['is_admin' => true]);
+    $book = AddressBook::create(['guid' => (string) Str::uuid(), 'name' => 'Ops', 'owner_user_id' => $admin->id]);
+    $book->entries()->create(['rustdesk_id' => '910000789', 'hostname' => null]);
+
+    Livewire::actingAs($admin)->test(\App\Livewire\AddressBookManager::class)
+        ->set('selectedBookId', $book->id)
+        ->assertSee('910000789');
 });

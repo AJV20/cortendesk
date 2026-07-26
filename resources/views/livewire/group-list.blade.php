@@ -1,9 +1,8 @@
 <div>
     <div class="card">
-        <div class="card-body">
 
             {{-- Tabs --}}
-            <ul class="nav nav-tabs nav-bordered mb-3">
+            <ul class="nav nav-tabs nav-bordered rd-tabbar">
                 <li class="nav-item">
                     <a href="javascript:void(0);" class="nav-link {{ $tab === 'devices' ? 'active' : '' }}"
                        wire:click="setTab('devices')">
@@ -29,11 +28,20 @@
             @endphp
 
             {{-- Toolbar --}}
-            <div class="d-flex justify-content-between align-items-center mb-3">
-                <h5 class="mb-0">{{ $tab === 'users' ? 'User Groups' : 'Device Groups' }}</h5>
-                <button type="button" class="btn btn-primary" wire:click="create('{{ $tab }}')">
-                    <i class="ri-add-line me-1"></i>Add Group
-                </button>
+            <div class="rd-toolbar">
+                <div>
+                    <h4 class="header-title">{{ $tab === 'users' ? 'User Groups' : 'Device Groups' }}</h4>
+                    <p class="rd-card-sub mb-0">
+                        {{ $tab === 'users'
+                            ? 'Groups of people. Membership drives address-book sharing and device-group access.'
+                            : 'Folders of machines. A device belongs to at most one.' }}
+                    </p>
+                </div>
+                <div class="rd-toolbar-actions">
+                    <button type="button" class="btn btn-primary" wire:click="create('{{ $tab }}')">
+                        <i class="ri-add-line"></i>Add Group
+                    </button>
+                </div>
             </div>
 
             {{-- Desktop table (md and up) --}}
@@ -73,8 +81,8 @@
                             <td>
                                 <span title="{{ $group->created_at }}">{{ $group->created_at?->format('Y-m-d') }}</span>
                             </td>
-                            <td class="text-end">
-                                <a href="javascript:void(0);" class="text-primary me-2"
+                            <td class="text-end rd-rowact">
+                                <a href="javascript:void(0);" class="rd-act me-2"
                                    wire:click="edit('{{ $tab }}', {{ $group->id }})">Edit</a>
                                 <a href="javascript:void(0);" class="text-danger"
                                    wire:click="deleteGroup('{{ $tab }}', {{ $group->id }})"
@@ -83,8 +91,19 @@
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="{{ $tab === 'users' ? 6 : 5 }}" class="text-center text-muted py-4">
-                                No {{ $tab === 'users' ? 'user' : 'device' }} groups yet. Click "Add Group" to create one.
+                            <td colspan="{{ $tab === 'users' ? 6 : 5 }}" class="rd-empty-cell">
+                                <div class="rd-empty">
+                                    <div class="rd-empty-icon"><i class="{{ $tab === 'users' ? 'ri-group-line' : 'ri-folders-line' }}"></i></div>
+                                    <p class="rd-empty-title">
+                                        No {{ $tab === 'users' ? 'user' : 'device' }} groups yet. Click "Add Group" to create one.
+                                    </p>
+                                    <p class="rd-empty-text">
+                                        {{ $tab === 'users'
+                                            ? 'User groups decide who can see whose machines and address books.'
+                                            : 'Device groups keep machines organised and can be granted to a whole user group at once.' }}
+                                    </p>
+                                    <button type="button" class="btn btn-sm btn-outline-light" wire:click="create('{{ $tab }}')">Add Group</button>
+                                </div>
                             </td>
                         </tr>
                     @endforelse
@@ -93,14 +112,13 @@
             </div>
 
             {{-- Mobile card list (below md) --}}
-            <div class="d-md-none">
+            <div class="d-md-none rd-cardlist">
                 @forelse ($current as $group)
-                    <div class="card border mb-2" wire:key="mg-{{ $tab }}-{{ $group->id }}">
-                        <div class="card-body p-3">
-                            <div class="d-flex justify-content-between align-items-start">
-                                <div>
-                                    <span class="fw-semibold d-block">{{ $group->name }}</span>
-                                    <small class="text-muted">{{ $group->note ?: 'No note' }}</small>
+                    <div class="rd-mini" wire:key="mg-{{ $tab }}-{{ $group->id }}">
+                            <div class="rd-mini-head">
+                                <div class="min-width-0">
+                                    <span class="rd-mini-title">{{ $group->name }}</span>
+                                    <span class="rd-mini-sub">{{ $group->note ?: 'No note' }}</span>
                                 </div>
                                 <span class="badge bg-secondary-subtle text-secondary">
                                     {{ $tab === 'users' ? $group->users_count : $group->devices_count }}
@@ -114,31 +132,35 @@
                                     @endforeach
                                 </div>
                             @endif
-                            <div class="d-flex justify-content-between align-items-center mt-2">
-                                <small class="text-muted">Created {{ $group->created_at?->format('Y-m-d') }}</small>
-                                <div>
-                                    <a href="javascript:void(0);" class="btn btn-sm btn-light me-1"
+                            <div class="rd-mini-foot">
+                                <span class="rd-mini-sub">Created {{ $group->created_at?->format('Y-m-d') }}</span>
+                                <div class="rd-mini-acts">
+                                    <a href="javascript:void(0);" class="rd-iconbtn" title="Edit"
                                        wire:click="edit('{{ $tab }}', {{ $group->id }})"><i class="ri-pencil-line"></i></a>
-                                    <a href="javascript:void(0);" class="btn btn-sm btn-light text-danger"
+                                    <a href="javascript:void(0);" class="rd-iconbtn text-danger" title="Delete"
                                        wire:click="deleteGroup('{{ $tab }}', {{ $group->id }})"
                                        wire:confirm="{{ $deleteConfirm }}"><i class="ri-delete-bin-line"></i></a>
                                 </div>
                             </div>
-                        </div>
                     </div>
                 @empty
-                    <p class="text-center text-muted py-4 mb-0">
-                        No {{ $tab === 'users' ? 'user' : 'device' }} groups yet. Tap "Add Group" to create one.
-                    </p>
+                    <div class="rd-empty">
+                        <div class="rd-empty-icon"><i class="{{ $tab === 'users' ? 'ri-group-line' : 'ri-folders-line' }}"></i></div>
+                        <p class="rd-empty-title">
+                            No {{ $tab === 'users' ? 'user' : 'device' }} groups yet. Tap "Add Group" to create one.
+                        </p>
+                        <button type="button" class="btn btn-sm btn-outline-light" wire:click="create('{{ $tab }}')">Add Group</button>
+                    </div>
                 @endforelse
             </div>
-        </div>
     </div>
 
     {{-- Create / Edit modal (plain Bootstrap markup, toggled by Livewire) --}}
     @if ($showModal)
+        {{-- Scrollable: the two checkbox blocks below grow with the number of groups,
+             and without a bounded body "Create Group" is pushed off a 390px screen. --}}
         <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true">
-            <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
                 <div class="modal-content">
                     <form wire:submit="save">
                         <div class="modal-header">

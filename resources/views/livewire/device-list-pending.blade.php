@@ -1,124 +1,132 @@
 <div wire:poll.15s>
     <div class="card">
-        <div class="card-body">
 
-            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
-                <div>
-                    <h5 class="mb-0"><i class="ri-time-line me-1 text-warning"></i>Pending approval
-                        <span class="badge bg-warning-subtle text-warning ms-1">{{ $pendingCount }}</span>
-                    </h5>
-                    <small class="text-muted">New devices held by the deployment gate. Approve to make them visible, or reject to remove.</small>
-                </div>
-                <button type="button" class="btn btn-secondary" wire:click="$set('pendingTab', false)">
+        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div>
+                <h4 class="header-title">Pending approval
+                    <span class="badge bg-warning-subtle text-warning ms-1">{{ $pendingCount }}</span>
+                </h4>
+                <p class="rd-card-sub mb-0">New devices held by the deployment gate. Approve to make them visible, or reject to remove.</p>
+            </div>
+            <div class="rd-card-actions">
+                <button type="button" class="btn btn-light" wire:click="$set('pendingTab', false)">
                     <i class="ri-arrow-left-line me-1"></i>Back to Devices
                 </button>
             </div>
+        </div>
 
-            <div class="row g-2 mb-3">
-                <div class="col-12 col-md-4">
-                    <div class="input-group">
-                        <span class="input-group-text"><i class="ri-search-line"></i></span>
-                        <input type="search" class="form-control" placeholder="Search ID, hostname, user, IP…"
-                               wire:model.live.debounce.300ms="search">
-                    </div>
+        <div class="rd-toolbar">
+            <div class="rd-toolbar-search">
+                <div class="input-group">
+                    <span class="input-group-text"><i class="ri-search-line"></i></span>
+                    <input type="search" class="form-control" placeholder="Search ID, hostname, user, IP…"
+                           wire:model.live.debounce.300ms="search">
                 </div>
             </div>
+        </div>
 
-            {{-- Desktop table (md and up) --}}
-            <div class="table-responsive d-none d-md-block">
-                <table class="table table-hover table-centered mb-0">
-                    <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Device</th>
-                        <th>OS</th>
-                        <th>Version</th>
-                        <th>First Seen</th>
-                        <th>IP</th>
-                        <th class="text-end">Action</th>
-                    </tr>
-                    </thead>
-                    <tbody>
-                    @forelse ($devices as $device)
-                        <tr wire:key="p{{ $device->id }}">
-                            <td>
-                                <x-platform-icon :platform="$device->platform()" class="me-1"/>
-                                <span class="fw-semibold">{{ $device->rustdesk_id }}</span>
-                            </td>
-                            <td>
-                                <span class="d-block">{{ $device->hostname ?: '—' }}</span>
-                                <small class="text-muted">{{ $device->username }}</small>
-                            </td>
-                            <td>{{ $device->os ?: '—' }}</td>
-                            <td><span class="badge bg-secondary-subtle text-secondary">{{ $device->version ?: '?' }}</span></td>
-                            <td><span title="{{ $device->created_at }}">{{ $device->created_at?->diffForHumans() ?? '—' }}</span></td>
-                            <td>{{ $device->last_online_ip ?: '—' }}</td>
-                            <td class="text-end">
-                                @if (auth()->user()?->consoleAllows('device', 'rw'))
-                                    <a href="javascript:void(0);" class="text-success me-2" wire:click="approveDevice({{ $device->id }})">
-                                        <i class="ri-check-line me-1"></i>Approve
-                                    </a>
-                                    <a href="javascript:void(0);" class="text-danger"
-                                       wire:click="rejectDevice({{ $device->id }})"
-                                       wire:confirm="Reject device {{ $device->rustdesk_id }}? It will be removed from the console.">
-                                        <i class="ri-close-line me-1"></i>Reject
-                                    </a>
-                                @else
-                                    <span class="text-muted">View only</span>
-                                @endif
-                            </td>
-                        </tr>
-                    @empty
-                        <tr>
-                            <td colspan="7" class="text-center text-muted py-4">No devices are awaiting approval.</td>
-                        </tr>
-                    @endforelse
-                    </tbody>
-                </table>
-            </div>
-
-            {{-- Mobile card list (below md) --}}
-            <div class="d-md-none">
+        {{-- Desktop table (md and up) --}}
+        <div class="table-responsive d-none d-md-block">
+            <table class="table table-hover table-centered mb-0">
+                <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Device</th>
+                    <th>OS</th>
+                    <th>Version</th>
+                    <th>First Seen</th>
+                    <th>IP</th>
+                    <th class="text-end">Action</th>
+                </tr>
+                </thead>
+                <tbody>
                 @forelse ($devices as $device)
-                    <div class="card border mb-2" wire:key="pm{{ $device->id }}">
-                        <div class="card-body p-2">
-                            <div class="d-flex justify-content-between align-items-start gap-2">
-                                <div class="d-flex align-items-center gap-2 min-width-0">
-                                    <x-platform-icon :platform="$device->platform()" size="fs-22"/>
-                                    <div class="lh-sm min-width-0">
-                                        <span class="fw-semibold d-block text-truncate">{{ $device->rustdesk_id }}</span>
-                                        <small class="text-muted d-block text-truncate">{{ $device->hostname ?: $device->os }}</small>
-                                    </div>
-                                </div>
-                                <span class="badge bg-warning-subtle text-warning flex-shrink-0">Pending</span>
+                    <tr wire:key="p{{ $device->id }}">
+                        <td>
+                            <x-platform-icon :platform="$device->platform()" class="me-1"/>
+                            <span class="fw-semibold">{{ $device->rustdesk_id }}</span>
+                        </td>
+                        <td>
+                            <span class="rd-cell-title">{{ $device->hostname ?: '—' }}</span>
+                            <span class="rd-cell-sub">{{ $device->username }}</span>
+                        </td>
+                        <td>{{ $device->os ?: '—' }}</td>
+                        <td><span class="badge bg-secondary-subtle text-secondary">{{ $device->version ?: '?' }}</span></td>
+                        <td><span title="{{ $device->created_at }}">{{ $device->created_at?->diffForHumans() ?? '—' }}</span></td>
+                        <td class="rd-mono">{{ $device->last_online_ip ?: '—' }}</td>
+                        <td class="text-end rd-rowact">
+                            @if (auth()->user()?->consoleAllows('device', 'rw'))
+                                <a href="javascript:void(0);" class="text-success me-2" wire:click="approveDevice({{ $device->id }})">
+                                    <i class="ri-check-line me-1"></i>Approve
+                                </a>
+                                <a href="javascript:void(0);" class="text-danger"
+                                   wire:click="rejectDevice({{ $device->id }})"
+                                   wire:confirm="Reject device {{ $device->rustdesk_id }}? It will be removed from the console.">
+                                    <i class="ri-close-line me-1"></i>Reject
+                                </a>
+                            @else
+                                <span class="text-muted">View only</span>
+                            @endif
+                        </td>
+                    </tr>
+                @empty
+                    <tr>
+                        <td colspan="7" class="rd-empty-cell">
+                            <div class="rd-empty">
+                                <div class="rd-empty-icon"><i class="ri-shield-check-line"></i></div>
+                                <p class="rd-empty-title">No devices are awaiting approval.</p>
+                                <p class="rd-empty-text">Everything the deployment gate has held has been dealt with.</p>
+                                <button type="button" class="btn btn-sm btn-outline-light" wire:click="$set('pendingTab', false)">Back to Devices</button>
                             </div>
-                            <div class="d-flex justify-content-between align-items-center gap-2 mt-2">
-                                <small class="text-muted min-width-0">
-                                    {{ $device->username }} · v{{ $device->version ?: '?' }} ·
-                                    <span class="text-nowrap">{{ $device->created_at?->diffForHumans(short: true) ?? '—' }}</span>
-                                </small>
-                                <div class="d-flex flex-nowrap gap-1 flex-shrink-0">
-                                    @if (auth()->user()?->consoleAllows('device', 'rw'))
-                                        <a href="javascript:void(0);" class="btn btn-sm btn-light text-success" wire:click="approveDevice({{ $device->id }})"><i class="ri-check-line"></i></a>
-                                        <a href="javascript:void(0);" class="btn btn-sm btn-light text-danger"
-                                           wire:click="rejectDevice({{ $device->id }})"
-                                           wire:confirm="Reject device {{ $device->rustdesk_id }}?"><i class="ri-close-line"></i></a>
-                                    @endif
-                                </div>
+                        </td>
+                    </tr>
+                @endforelse
+                </tbody>
+            </table>
+        </div>
+
+        {{-- Mobile card list (below md) --}}
+        <div class="d-md-none rd-cardlist">
+            @forelse ($devices as $device)
+                <div class="rd-mini" wire:key="pm{{ $device->id }}">
+                    <div class="rd-mini-head">
+                        <div class="d-flex align-items-center gap-2 min-width-0">
+                            <x-platform-icon :platform="$device->platform()" size="fs-22"/>
+                            <div class="min-width-0">
+                                <span class="rd-mini-title text-truncate">{{ $device->rustdesk_id }}</span>
+                                <span class="rd-mini-sub text-truncate">{{ $device->hostname ?: $device->os }}</span>
                             </div>
                         </div>
+                        <span class="badge bg-warning-subtle text-warning flex-shrink-0">Pending</span>
                     </div>
-                @empty
-                    <p class="text-center text-muted py-4 mb-0">No devices are awaiting approval.</p>
-                @endforelse
-            </div>
+                    <div class="rd-mini-foot">
+                        <span class="rd-mini-sub min-width-0">
+                            {{ $device->username }} · v{{ $device->version ?: '?' }} ·
+                            <span class="text-nowrap">{{ $device->created_at?->diffForHumans(short: true) ?? '—' }}</span>
+                        </span>
+                        <div class="rd-mini-acts">
+                            @if (auth()->user()?->consoleAllows('device', 'rw'))
+                                <a href="javascript:void(0);" class="rd-iconbtn text-success" title="Approve" wire:click="approveDevice({{ $device->id }})"><i class="ri-check-line"></i></a>
+                                <a href="javascript:void(0);" class="rd-iconbtn text-danger" title="Reject"
+                                   wire:click="rejectDevice({{ $device->id }})"
+                                   wire:confirm="Reject device {{ $device->rustdesk_id }}?"><i class="ri-close-line"></i></a>
+                            @endif
+                        </div>
+                    </div>
+                </div>
+            @empty
+                <div class="rd-empty">
+                    <div class="rd-empty-icon"><i class="ri-shield-check-line"></i></div>
+                    <p class="rd-empty-title">No devices are awaiting approval.</p>
+                    <p class="rd-empty-text">Everything the deployment gate has held has been dealt with.</p>
+                    <button type="button" class="btn btn-sm btn-outline-light" wire:click="$set('pendingTab', false)">Back to Devices</button>
+                </div>
+            @endforelse
+        </div>
 
-            <div class="d-flex justify-content-between align-items-center mt-3 flex-wrap gap-2">
-                <small class="text-muted">
-                    Showing {{ $devices->firstItem() ?? 0 }}–{{ $devices->lastItem() ?? 0 }} of {{ $devices->total() }}
-                </small>
-                {{ $devices->links() }}
-            </div>
+        <div class="rd-tablefoot">
+            <span>Showing {{ $devices->firstItem() ?? 0 }}–{{ $devices->lastItem() ?? 0 }} of {{ $devices->total() }}</span>
+            {{ $devices->links() }}
         </div>
     </div>
 </div>

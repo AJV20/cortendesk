@@ -47,6 +47,9 @@ class AddressBookManager extends Component
 
     public string $entryAlias = '';
 
+    /** Filters the entry list. Matches the machine name, not just the ID (#5). */
+    public string $entrySearch = '';
+
     /** @var array<int, int|string> tag ids checked in the entry modal */
     public array $entryTagIds = [];
 
@@ -514,6 +517,11 @@ class AddressBookManager extends Component
         return $book;
     }
 
+    public function updatedEntrySearch(): void
+    {
+        $this->resetPage();
+    }
+
     public function render()
     {
         $allBooks = self::orderedBooks()
@@ -531,7 +539,23 @@ class AddressBookManager extends Component
 
         $book = $this->book()?->load('owner');
         $tags = $book ? $book->tags()->orderBy('name')->get() : collect();
-        $entries = $book ? $book->entries()->orderBy('rustdesk_id')->paginate(15) : null;
+        // Entries carry the machine name and platform the client reported, so the
+        // filter matches those as well as the id — an entry with no alias is just
+        // a nine-digit number otherwise (#5).
+        $entries = $book
+            ? $book->entries()
+                ->when($this->entrySearch !== '', function ($q) {
+                    $term = '%'.trim($this->entrySearch).'%';
+                    $q->where(fn ($w) => $w->where('rustdesk_id', 'like', $term)
+                        ->orWhere('hostname', 'like', $term)
+                        ->orWhere('alias', 'like', $term)
+                        ->orWhere('username', 'like', $term));
+                })
+                ->orderByRaw('CASE WHEN hostname IS NULL OR hostname = "" THEN 1 ELSE 0 END')
+                ->orderBy('hostname')
+                ->orderBy('rustdesk_id')
+                ->paginate(15)
+            : null;
         $rules = ($book && ! $book->is_personal) ? $book->rules()->orderBy('id')->get() : collect();
 
         // Effective tier of the current user on the selected book (PLAN B4) —

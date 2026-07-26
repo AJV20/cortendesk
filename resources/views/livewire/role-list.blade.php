@@ -1,18 +1,21 @@
 <div>
     <div class="card">
-        <div class="card-header d-flex justify-content-between align-items-center">
-            <h5 class="card-title mb-0"><i class="ri-shield-user-line me-1"></i>Roles</h5>
-            <button type="button" class="btn btn-primary btn-sm" wire:click="create">
-                <i class="ri-add-line me-1"></i>New Role
-            </button>
+        <div class="card-header d-flex justify-content-between align-items-center gap-2 flex-wrap">
+            <div>
+                <h4 class="header-title">Roles</h4>
+                <p class="rd-card-sub mb-0">
+                    A role opens console sections for a non-administrator. It never widens which
+                    devices or address books a user can see — that stays with their device-group
+                    and sharing grants, so a role can only ever narrow what they already had.
+                    Administrators are unaffected: they always see everything.
+                </p>
+            </div>
+            <div class="rd-card-actions">
+                <button type="button" class="btn btn-primary" wire:click="create">
+                    <i class="ri-add-line"></i>New Role
+                </button>
+            </div>
         </div>
-        <div class="card-body">
-            <p class="text-muted fs-13">
-                A role opens console sections for a non-administrator. It never widens which
-                devices or address books a user can see — that stays with their device-group
-                and sharing grants, so a role can only ever narrow what they already had.
-                Administrators are unaffected: they always see everything.
-            </p>
 
             {{-- Desktop table (md and up) --}}
             <div class="table-responsive d-none d-md-block">
@@ -30,8 +33,13 @@
                     @forelse ($roles as $role)
                         <tr wire:key="r{{ $role->id }}">
                             <td>
-                                <span class="fw-semibold d-block">{{ $role->name }}</span>
-                                <small class="text-muted">{{ $role->description ?: '—' }}</small>
+                                <div class="rd-cell rd-tone-teal">
+                                    <span class="rd-avatar"><i class="ri-shield-user-line"></i></span>
+                                    <div class="min-width-0">
+                                        <span class="rd-cell-title">{{ $role->name }}</span>
+                                        <span class="rd-cell-sub">{{ $role->description ?: '—' }}</span>
+                                    </div>
+                                </div>
                             </td>
                             <td>
                                 @php $granted = collect($resources)->filter(fn ($r) => $role->levelFor($r) !== 'none'); @endphp
@@ -51,8 +59,8 @@
                                 @endif
                             </td>
                             <td>{{ $role->users_count }}</td>
-                            <td class="text-end">
-                                <a href="javascript:void(0);" class="text-primary me-2" wire:click="edit({{ $role->id }})">Edit</a>
+                            <td class="text-end rd-rowact">
+                                <a href="javascript:void(0);" class="rd-act me-2" wire:click="edit({{ $role->id }})">Edit</a>
                                 <a href="javascript:void(0);" class="text-danger"
                                    wire:click="deleteRole({{ $role->id }})"
                                    wire:confirm="Delete this role? {{ $role->users_count }} user(s) will revert to standard user access.">Delete</a>
@@ -60,8 +68,15 @@
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="5" class="text-center text-muted py-4">
-                                No roles yet. Every non-administrator has standard user access.
+                            <td colspan="5" class="rd-empty-cell">
+                                <div class="rd-empty">
+                                    <div class="rd-empty-icon"><i class="ri-shield-user-line"></i></div>
+                                    <p class="rd-empty-title">
+                                        No roles yet. Every non-administrator has standard user access.
+                                    </p>
+                                    <p class="rd-empty-text">Create one to let a colleague run the helpdesk without handing over the whole console.</p>
+                                    <button type="button" class="btn btn-sm btn-outline-light" wire:click="create">New Role</button>
+                                </div>
                             </td>
                         </tr>
                     @endforelse
@@ -70,20 +85,19 @@
             </div>
 
             {{-- Mobile card list (below md) --}}
-            <div class="d-md-none">
+            <div class="d-md-none rd-cardlist">
                 @forelse ($roles as $role)
-                    <div class="card border mb-2" wire:key="mr{{ $role->id }}">
-                        <div class="card-body p-2">
-                            <div class="d-flex justify-content-between align-items-start gap-2">
-                                <div class="min-width-0 lh-sm">
-                                    <span class="fw-semibold d-block text-truncate">{{ $role->name }}</span>
-                                    <small class="text-muted d-block text-truncate">{{ $role->description ?: '—' }}</small>
+                    <div class="rd-mini" wire:key="mr{{ $role->id }}">
+                            <div class="rd-mini-head">
+                                <div class="min-width-0">
+                                    <span class="rd-mini-title text-truncate">{{ $role->name }}</span>
+                                    <span class="rd-mini-sub text-truncate">{{ $role->description ?: '—' }}</span>
                                 </div>
                                 <span class="badge bg-secondary-subtle text-secondary flex-shrink-0">
                                     {{ $role->users_count }} {{ Str::plural('user', $role->users_count) }}
                                 </span>
                             </div>
-                            <div class="mt-1">
+                            <div class="mt-2">
                                 @php $granted = collect($resources)->filter(fn ($r) => $role->levelFor($r) !== 'none'); @endphp
                                 @forelse ($granted as $res)
                                     <span class="badge {{ $role->levelFor($res) === 'rw' ? 'bg-primary-subtle text-primary' : 'bg-secondary-subtle text-secondary' }}">
@@ -96,21 +110,23 @@
                                     <span class="badge bg-info-subtle text-info"><i class="ri-shield-keyhole-line"></i> 2FA</span>
                                 @endif
                             </div>
-                            <div class="d-flex flex-nowrap justify-content-end gap-1 mt-1">
-                                <a href="javascript:void(0);" class="btn btn-sm btn-light" wire:click="edit({{ $role->id }})"><i class="ri-pencil-line"></i></a>
-                                <a href="javascript:void(0);" class="btn btn-sm btn-light text-danger"
+                            <div class="rd-mini-acts justify-content-end mt-2">
+                                <a href="javascript:void(0);" class="rd-iconbtn" title="Edit" wire:click="edit({{ $role->id }})"><i class="ri-pencil-line"></i></a>
+                                <a href="javascript:void(0);" class="rd-iconbtn text-danger" title="Delete"
                                    wire:click="deleteRole({{ $role->id }})"
                                    wire:confirm="Delete this role? {{ $role->users_count }} user(s) will revert to standard user access."><i class="ri-delete-bin-line"></i></a>
                             </div>
-                        </div>
                     </div>
                 @empty
-                    <p class="text-center text-muted py-4 mb-0">
-                        No roles yet. Every non-administrator has standard user access.
-                    </p>
+                    <div class="rd-empty">
+                        <div class="rd-empty-icon"><i class="ri-shield-user-line"></i></div>
+                        <p class="rd-empty-title">
+                            No roles yet. Every non-administrator has standard user access.
+                        </p>
+                        <button type="button" class="btn btn-sm btn-outline-light" wire:click="create">New Role</button>
+                    </div>
                 @endforelse
             </div>
-        </div>
     </div>
 
     {{-- Create / Edit modal --}}

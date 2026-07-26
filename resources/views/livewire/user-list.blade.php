@@ -7,38 +7,31 @@
     @endphp
 
     <div class="card">
-        <div class="card-body">
 
             {{-- Toolbar --}}
-            <div class="row g-2 mb-3 align-items-center">
-                <div class="col-12 col-md-4">
+            <div class="rd-toolbar">
+                <div class="rd-toolbar-search">
                     <div class="input-group">
                         <span class="input-group-text"><i class="ri-search-line"></i></span>
                         <input type="search" class="form-control" placeholder="Search username, name, email…"
                                wire:model.live.debounce.300ms="search">
                     </div>
                 </div>
-                <div class="col-6 col-md-2">
-                    <select class="form-select" wire:model.live="role">
-                        <option value="all">All roles</option>
-                        <option value="admin">Administrators</option>
-                        <option value="user">Users</option>
-                    </select>
-                </div>
-                <div class="col-6 col-md-2">
-                    <select class="form-select" wire:model.live="status">
-                        <option value="all">All statuses</option>
-                        <option value="active">Active</option>
-                        <option value="disabled">Disabled</option>
-                    </select>
-                </div>
-                <div class="col-6 col-md-2">
-                    <button type="button" class="btn btn-light w-100" wire:click="resetFilters">Reset</button>
-                </div>
-                <div class="col-6 col-md-2 text-md-end">
+                <select class="form-select rd-toolbar-filter" wire:model.live="role" aria-label="Role">
+                    <option value="all">All roles</option>
+                    <option value="admin">Administrators</option>
+                    <option value="user">Users</option>
+                </select>
+                <select class="form-select rd-toolbar-filter" wire:model.live="status" aria-label="Status">
+                    <option value="all">All statuses</option>
+                    <option value="active">Active</option>
+                    <option value="disabled">Disabled</option>
+                </select>
+                <div class="rd-toolbar-actions">
+                    <button type="button" class="btn btn-outline-light" wire:click="resetFilters">Reset</button>
                     @if ($canManageUsers)
-                        <button type="button" class="btn btn-primary w-100" wire:click="create">
-                            <i class="ri-add-line me-1"></i>Add User
+                        <button type="button" class="btn btn-primary" wire:click="create">
+                            <i class="ri-add-line"></i>Add User
                         </button>
                     @endif
                 </div>
@@ -67,14 +60,11 @@
                         @endphp
                         <tr wire:key="u{{ $user->id }}">
                             <td>
-                                <div class="d-flex align-items-center gap-2">
-                                    <span class="d-inline-flex align-items-center justify-content-center rounded-circle bg-primary-subtle text-primary flex-shrink-0"
-                                          style="width:32px;height:32px;font-weight:600;">
-                                        {{ strtoupper(substr($user->username, 0, 1)) }}
-                                    </span>
-                                    <div>
-                                        <span class="fw-semibold d-block">{{ $user->username }}</span>
-                                        <small class="text-muted">{{ $user->name ?: '—' }}</small>
+                                <div class="rd-cell {{ $user->is_admin ? 'rd-tone-accent' : 'rd-tone-purple' }}">
+                                    <span class="rd-avatar">{{ strtoupper(substr($user->username, 0, 1)) }}</span>
+                                    <div class="min-width-0">
+                                        <span class="rd-cell-title">{{ $user->username }}</span>
+                                        <span class="rd-cell-sub">{{ $user->name ?: '—' }}</span>
                                     </div>
                                 </div>
                             </td>
@@ -107,25 +97,25 @@
                             </td>
                             <td>{{ $user->devices_count }}</td>
                             <td>
-                                <span title="{{ $user->created_at }}">{{ $user->created_at?->format('Y-m-d') }}</span>
+                                <span class="text-nowrap" title="{{ $user->created_at }}">{{ $user->created_at?->format('Y-m-d') }}</span>
                             </td>
-                            <td class="text-end">
+                            <td class="text-end rd-rowact">
                                 @unless ($canTouch)
                                     <span class="text-muted">—</span>
                                 @endunless
                                 @if ($canTouch)
-                                <a href="javascript:void(0);" class="text-primary me-2" wire:click="edit({{ $user->id }})">Edit</a>
-                                <a href="javascript:void(0);" class="text-primary me-2" wire:click="openAssign({{ $user->id }})">Devices</a>
+                                <a href="javascript:void(0);" class="rd-act me-2" wire:click="edit({{ $user->id }})">Edit</a>
+                                <a href="javascript:void(0);" class="rd-act me-2" wire:click="openAssign({{ $user->id }})">Devices</a>
                                 @if ($user->id === auth()->id())
                                     <span class="text-muted me-2" title="You cannot disable your own account" style="cursor:not-allowed;">
                                         {{ $user->is_active ? 'Disable' : 'Enable' }}
                                     </span>
                                     <span class="text-muted" title="You cannot delete your own account" style="cursor:not-allowed;">Delete</span>
                                 @else
-                                    <a href="javascript:void(0);" class="text-warning me-2" wire:click="toggleActive({{ $user->id }})">
+                                    <a href="javascript:void(0);" class="rd-act me-2" wire:click="toggleActive({{ $user->id }})">
                                         {{ $user->is_active ? 'Disable' : 'Enable' }}
                                     </a>
-                                    <a href="javascript:void(0);" class="text-secondary me-2"
+                                    <a href="javascript:void(0);" class="rd-act me-2"
                                        wire:click="forceLogout({{ $user->id }})"
                                        wire:confirm="Force {{ $user->username }} to log out everywhere? This signs out their RustDesk clients and console sessions.">Log out</a>
                                     @if ($user->totp_enabled)
@@ -142,7 +132,14 @@
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="8" class="text-center text-muted py-4">No users match your filters.</td>
+                            <td colspan="8" class="rd-empty-cell">
+                                <div class="rd-empty">
+                                    <div class="rd-empty-icon"><i class="ri-user-line"></i></div>
+                                    <p class="rd-empty-title">No users match your filters.</p>
+                                    <p class="rd-empty-text">Console accounts sign in with a username, not an email address.</p>
+                                    <button type="button" class="btn btn-sm btn-outline-light" wire:click="resetFilters">Clear filters</button>
+                                </div>
+                            </td>
                         </tr>
                     @endforelse
                     </tbody>
@@ -150,23 +147,19 @@
             </div>
 
             {{-- Mobile card list (below md) --}}
-            <div class="d-md-none">
+            <div class="d-md-none rd-cardlist">
                 @forelse ($users as $user)
                     @php
                         $canTouch = $canManageUsers && ($isSuperAdmin
                             || (! $user->is_admin && $user->role_id === null && $user->id !== auth()->id()));
                     @endphp
-                    <div class="card border mb-2" wire:key="mu{{ $user->id }}">
-                        <div class="card-body p-2">
-                            <div class="d-flex justify-content-between align-items-start gap-2">
-                                <div class="d-flex align-items-center gap-2 min-width-0">
-                                    <span class="d-inline-flex align-items-center justify-content-center rounded-circle bg-primary-subtle text-primary flex-shrink-0"
-                                          style="width:32px;height:32px;font-weight:600;">
-                                        {{ strtoupper(substr($user->username, 0, 1)) }}
-                                    </span>
-                                    <div class="min-width-0 lh-sm">
-                                        <span class="fw-semibold d-block text-truncate">{{ $user->username }}</span>
-                                        <small class="text-muted d-block text-truncate">{{ $user->name ?: ($user->email ?: '—') }}</small>
+                    <div class="rd-mini" wire:key="mu{{ $user->id }}">
+                            <div class="rd-mini-head">
+                                <div class="rd-cell {{ $user->is_admin ? 'rd-tone-accent' : 'rd-tone-purple' }}">
+                                    <span class="rd-avatar">{{ strtoupper(substr($user->username, 0, 1)) }}</span>
+                                    <div class="min-width-0">
+                                        <span class="rd-mini-title text-truncate">{{ $user->username }}</span>
+                                        <span class="rd-mini-sub text-truncate">{{ $user->name ?: ($user->email ?: '—') }}</span>
                                     </div>
                                 </div>
                                 <div class="text-end flex-shrink-0">
@@ -186,52 +179,53 @@
                                 </div>
                             </div>
                             {{-- Meta on its own full-width line; actions in one non-wrapping row below --}}
-                            <small class="text-muted d-block mt-1">
+                            <span class="rd-mini-sub mt-2">
                                 {{ $user->groups->isNotEmpty() ? $user->groups->pluck('name')->join(', ') : 'No group' }} ·
                                 {{ $user->devices_count }} {{ Str::plural('device', $user->devices_count) }} ·
                                 <span class="text-nowrap">{{ $user->created_at?->format('Y-m-d') }}</span>
-                            </small>
-                            <div class="d-flex flex-nowrap justify-content-end gap-1 mt-1">
+                            </span>
+                            <div class="rd-mini-acts justify-content-end mt-2">
                                 @if ($canTouch)
-                                <a href="javascript:void(0);" class="btn btn-sm btn-light" wire:click="edit({{ $user->id }})"><i class="ri-pencil-line"></i></a>
-                                <a href="javascript:void(0);" class="btn btn-sm btn-light" title="Assign devices" wire:click="openAssign({{ $user->id }})"><i class="ri-computer-line"></i></a>
+                                <a href="javascript:void(0);" class="rd-iconbtn" title="Edit" wire:click="edit({{ $user->id }})"><i class="ri-pencil-line"></i></a>
+                                <a href="javascript:void(0);" class="rd-iconbtn" title="Assign devices" wire:click="openAssign({{ $user->id }})"><i class="ri-computer-line"></i></a>
                                 @unless ($user->id === auth()->id())
-                                    <a href="javascript:void(0);" class="btn btn-sm btn-light" title="{{ $user->is_active ? 'Disable' : 'Enable' }}"
+                                    <a href="javascript:void(0);" class="rd-iconbtn" title="{{ $user->is_active ? 'Disable' : 'Enable' }}"
                                        wire:click="toggleActive({{ $user->id }})">
                                         <i class="{{ $user->is_active ? 'ri-user-unfollow-line' : 'ri-user-follow-line' }}"></i>
                                     </a>
-                                    <a href="javascript:void(0);" class="btn btn-sm btn-light" title="Force logout everywhere"
+                                    <a href="javascript:void(0);" class="rd-iconbtn" title="Force logout everywhere"
                                        wire:click="forceLogout({{ $user->id }})"
                                        wire:confirm="Force {{ $user->username }} to log out everywhere? This signs out their RustDesk clients and console sessions.">
                                         <i class="ri-logout-box-r-line"></i>
                                     </a>
                                     @if ($user->totp_enabled)
-                                        <a href="javascript:void(0);" class="btn btn-sm btn-light text-warning" title="Reset 2FA"
+                                        <a href="javascript:void(0);" class="rd-iconbtn text-warning" title="Reset 2FA"
                                            wire:click="resetTwoFactor({{ $user->id }})"
                                            wire:confirm="Reset 2FA for {{ $user->username }}? Their authenticator and recovery codes are removed and they must re-enroll.">
                                             <i class="ri-shield-keyhole-line"></i>
                                         </a>
                                     @endif
-                                    <a href="javascript:void(0);" class="btn btn-sm btn-light text-danger"
+                                    <a href="javascript:void(0);" class="rd-iconbtn text-danger" title="Delete"
                                        wire:click="deleteUser({{ $user->id }})"
                                        wire:confirm="Delete user {{ $user->username }}? Their devices will be kept but no longer assigned to any user."><i class="ri-delete-bin-line"></i></a>
                                 @endunless
                                 @endif
                             </div>
-                        </div>
                     </div>
                 @empty
-                    <p class="text-center text-muted py-4 mb-0">No users match your filters.</p>
+                    <div class="rd-empty">
+                        <div class="rd-empty-icon"><i class="ri-user-line"></i></div>
+                        <p class="rd-empty-title">No users match your filters.</p>
+                        <p class="rd-empty-text">Console accounts sign in with a username, not an email address.</p>
+                        <button type="button" class="btn btn-sm btn-outline-light" wire:click="resetFilters">Clear filters</button>
+                    </div>
                 @endforelse
             </div>
 
-            <div class="d-flex justify-content-between align-items-center mt-3 flex-wrap gap-2">
-                <small class="text-muted">
-                    Showing {{ $users->firstItem() ?? 0 }}–{{ $users->lastItem() ?? 0 }} of {{ $users->total() }}
-                </small>
+            <div class="rd-tablefoot">
+                <span>Showing {{ $users->firstItem() ?? 0 }}–{{ $users->lastItem() ?? 0 }} of {{ $users->total() }}</span>
                 {{ $users->links() }}
             </div>
-        </div>
     </div>
 
     {{-- Create / Edit modal (plain Bootstrap markup, toggled by Livewire) --}}
@@ -318,7 +312,7 @@
                                     <div class="mb-3">
                                         <label class="form-label">Groups</label>
                                         <p class="text-muted fs-13 mb-2">A user can belong to several groups. Groups control address-book sharing and device-group access.</p>
-                                        <div class="border rounded p-2" style="max-height: 210px; overflow-y: auto;">
+                                        <div class="rd-scrollbox p-2" style="max-height: 210px; overflow-y: auto;">
                                             @forelse ($userGroups as $g)
                                                 <div class="form-check">
                                                     <input class="form-check-input" type="checkbox" id="ul-ug-{{ $g->id }}"
@@ -338,7 +332,7 @@
                                         <div class="mb-1">
                                             <label class="form-label">Device access</label>
                                             <p class="text-muted fs-13 mb-2">This user sees only devices they own plus devices in the groups checked below.</p>
-                                            <div class="border rounded p-2" style="max-height: 210px; overflow-y: auto;">
+                                            <div class="rd-scrollbox p-2" style="max-height: 210px; overflow-y: auto;">
                                                 @forelse ($deviceGroups as $dg)
                                                     <div class="form-check">
                                                         <input class="form-check-input" type="checkbox" id="ul-dg-{{ $dg->id }}"
@@ -384,20 +378,25 @@
                         </p>
                         <input type="search" class="form-control mb-2" placeholder="Search ID, alias, hostname…"
                                wire:model.live.debounce.300ms="assignSearch">
-                        <div class="border rounded" style="max-height: 340px; overflow-y: auto;">
+                        <div class="rd-scrollbox" style="max-height: 340px; overflow-y: auto;">
                             <table class="table table-sm table-hover mb-0">
                                 <tbody>
                                     @forelse ($assignDevices as $d)
                                         <tr wire:key="ad{{ $d->id }}">
                                             <td style="width:38px;">
-                                                <input class="form-check-input" type="checkbox"
-                                                       value="{{ $d->id }}" wire:model="assignDeviceIds">
+                                                <input class="form-check-input" type="checkbox" id="ul-ad-{{ $d->id }}"
+                                                       value="{{ $d->id }}" wire:model="assignDeviceIds"
+                                                       aria-label="Assign device {{ $d->rustdesk_id }}">
                                             </td>
                                             <td>
-                                                <span class="fw-semibold">{{ $d->rustdesk_id }}</span>
-                                                @if ($d->alias || $d->hostname)
-                                                    <small class="text-muted d-block">{{ $d->alias ?: $d->hostname }}</small>
-                                                @endif
+                                                {{-- The label is the tap target: a 14px checkbox is not one, and
+                                                     `for` makes the whole cell toggle it without a second binding. --}}
+                                                <label class="rd-picklabel" for="ul-ad-{{ $d->id }}">
+                                                    <span class="fw-semibold">{{ $d->rustdesk_id }}</span>
+                                                    @if ($d->alias || $d->hostname)
+                                                        <small class="text-muted d-block">{{ $d->alias ?: $d->hostname }}</small>
+                                                    @endif
+                                                </label>
                                             </td>
                                             <td class="text-end">
                                                 @if ($d->user_id && $d->user_id !== $assignUserId)

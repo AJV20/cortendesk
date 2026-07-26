@@ -7,7 +7,7 @@
          is a feature that exists and silently cannot run without a relay. --}}
     @if (auth()->user()?->consoleAllows('setting', 'rw') && ! app(\App\Services\MailSettings::class)->isEnabled())
         <div class="alert alert-warning d-flex align-items-start gap-2">
-            <i class="ri-mail-close-line fs-20 mt-1"></i>
+            <i class="ri-mail-close-line fs-20"></i>
             <div class="flex-grow-1">
                 <strong>Email is not configured.</strong>
                 User invitations cannot be sent, and emailed sign-in verification codes cannot
@@ -19,45 +19,177 @@
 
     @livewire(App\Livewire\LiveStats::class)
 
-    <div class="row">
+    <div class="row rd-row-equal">
         <div class="col-xl-8">
             <div class="card">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <h5 class="card-title mb-0"><i class="ri-line-chart-line me-1"></i>Connections — last 14 days</h5>
-                    <a href="{{ route('logs.connections') }}" class="fs-13">View log</a>
+                <div class="card-header d-flex flex-wrap align-items-center gap-2">
+                    <div class="min-width-0">
+                        <h5 class="card-title">Connections</h5>
+                        <div class="rd-card-sub">Sessions per day by type · last {{ $range }} days</div>
+                    </div>
+                    <div class="rd-card-actions">
+                        <div class="rd-seg" role="group" aria-label="Chart range">
+                            @foreach ($ranges as $r)
+                                <a href="{{ route('overview', ['range' => $r]) }}"
+                                   class="rd-seg-item {{ $r === $range ? 'active' : '' }}"
+                                   @if ($r === $range) aria-current="true" @endif>{{ $r }}D</a>
+                            @endforeach
+                        </div>
+                        <a href="{{ route('logs.connections') }}" class="fs-13">View log</a>
+                    </div>
                 </div>
-                <div class="card-body pt-1">
+                <div class="card-body">
                     <div id="chart-connections" style="min-height: 300px;"></div>
                 </div>
             </div>
         </div>
+
         <div class="col-xl-4">
+            @php
+                $platformTotal = array_sum($platformMix['values']);
+                // Same order as the chart series palette in the script below.
+                $platformTones = ['rd-tone-blue', 'rd-tone-accent', 'rd-tone-teal', 'rd-tone-purple', 'rd-tone-amber'];
+            @endphp
             <div class="card">
                 <div class="card-header">
-                    <h5 class="card-title mb-0"><i class="ri-computer-line me-1"></i>Device Platforms</h5>
+                    <h5 class="card-title">Device Platforms</h5>
+                    <div class="rd-card-sub">Share of {{ $platformTotal }} {{ Str::plural('device', $platformTotal) }}</div>
                 </div>
-                <div class="card-body pt-1">
-                    <div id="chart-platforms" style="min-height: 300px;"></div>
+                <div class="card-body">
+                    @if ($platformTotal > 0)
+                        <div class="rd-donut">
+                            <div id="chart-platforms" class="rd-donut-chart"></div>
+                            <ul class="rd-legend rd-donut-legend">
+                                @foreach ($platformMix['labels'] as $i => $label)
+                                    <li class="rd-legend-item {{ $platformTones[$i % count($platformTones)] }}">
+                                        <span class="rd-legend-swatch"></span>
+                                        <span class="rd-legend-label">{{ $label }}</span>
+                                        <span class="rd-legend-count">{{ $platformMix['values'][$i] }}</span>
+                                        <span class="rd-legend-pct">{{ round($platformMix['values'][$i] / $platformTotal * 100) }}%</span>
+                                    </li>
+                                @endforeach
+                            </ul>
+                        </div>
+                    @else
+                        {{-- The chart container still ships so the script has a stable
+                             hook; it is simply not rendered into while empty. --}}
+                        <div id="chart-platforms" class="d-none"></div>
+                        <div class="rd-empty">
+                            <div class="rd-empty-icon"><i class="ri-computer-line"></i></div>
+                            <p class="rd-empty-title">No devices yet</p>
+                            <p class="rd-empty-text">The platform mix appears once a RustDesk client checks in.</p>
+                            <a href="{{ route('devices') }}" class="btn btn-sm btn-outline-light">Go to devices</a>
+                        </div>
+                    @endif
                 </div>
             </div>
         </div>
     </div>
 
-    <div class="row">
-        <div class="col-xl-7">
+    @php
+        // Alerts is permission-gated (the controller nulls it without audit
+        // read), so the remaining two cards have to widen to keep the row at
+        // twelve columns — an equal-height row is not an equal-WIDTH one.
+        $hasAlerts = $recentAlarms !== null;
+    @endphp
+    <div class="row rd-row-equal">
+        <div class="{{ $hasAlerts ? 'col-xl-5' : 'col-xl-7' }}">
             @livewire(App\Livewire\ActiveSessions::class)
         </div>
-        <div class="col-xl-5">
+
+        <div class="{{ $hasAlerts ? 'col-xl-4' : 'col-xl-5' }}">
+            @php
+                $versionTotal = array_sum($versionCounts['values']);
+                $versionMax = $versionCounts['values'] ? max($versionCounts['values']) : 0;
+            @endphp
             <div class="card">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <h5 class="card-title mb-0"><i class="ri-download-2-line me-1"></i>Client Versions</h5>
-                    <a href="{{ route('devices') }}" class="fs-13">All devices</a>
+                <div class="card-header d-flex flex-wrap align-items-center gap-2">
+                    <div class="min-width-0">
+                        <h5 class="card-title">Client Versions</h5>
+                        <div class="rd-card-sub">{{ $versionTotal > 0 ? 'Top '.count($versionCounts['labels']).' in use' : 'Reported on each heartbeat' }}</div>
+                    </div>
+                    <div class="rd-card-actions">
+                        <a href="{{ route('devices') }}" class="fs-13">All devices</a>
+                    </div>
                 </div>
-                <div class="card-body pt-1">
-                    <div id="chart-versions" style="min-height: 260px;"></div>
+                <div class="card-body">
+                    <div id="chart-versions">
+                        @if ($versionTotal > 0)
+                            <ul class="rd-barlist">
+                                @foreach ($versionCounts['labels'] as $i => $label)
+                                    @php $count = $versionCounts['values'][$i]; @endphp
+                                    <li class="rd-barlist-item rd-tone-blue">
+                                        <div class="rd-barlist-head">
+                                            <span class="rd-barlist-label">{{ $label }}</span>
+                                            <span class="rd-barlist-count">{{ $count }}</span>
+                                            <span class="rd-barlist-pct">{{ round($count / $versionTotal * 100) }}%</span>
+                                        </div>
+                                        <div class="rd-barlist-track">
+                                            <div class="rd-barlist-fill" style="width: {{ $versionMax > 0 ? round($count / $versionMax * 100, 1) : 0 }}%"></div>
+                                        </div>
+                                    </li>
+                                @endforeach
+                            </ul>
+                        @else
+                            <div class="rd-empty">
+                                <div class="rd-empty-icon"><i class="ri-download-2-line"></i></div>
+                                <p class="rd-empty-title">No client versions reported</p>
+                                <p class="rd-empty-text">Clients report their version on their first heartbeat.</p>
+                            </div>
+                        @endif
+                    </div>
                 </div>
             </div>
+
         </div>
+
+        @if ($hasAlerts)
+            <div class="col-xl-3">
+                <div class="card">
+                    <div class="card-header d-flex flex-wrap align-items-center gap-2">
+                        <div class="min-width-0">
+                            <h5 class="card-title">Alerts</h5>
+                            <div class="rd-card-sub">Last 24 hours</div>
+                        </div>
+                        <div class="rd-card-actions">
+                            <a href="{{ route('logs.alarms') }}" class="fs-13">Alarm log</a>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        @if (count($recentAlarms) > 0)
+                            <ul class="rd-feed">
+                                @foreach ($recentAlarms as $alarm)
+                                    @php
+                                        $tone = match ($alarm->typeSeverity()) {
+                                            'danger' => 'rd-tone-red',
+                                            'warning' => 'rd-tone-amber',
+                                            default => 'rd-tone-muted',
+                                        };
+                                    @endphp
+                                    <li class="rd-feed-item">
+                                        <span class="rd-avatar {{ $tone }}"><i class="ri-alarm-warning-line"></i></span>
+                                        <div class="min-width-0">
+                                            <span class="rd-cell-title text-truncate">{{ $alarm->typeLabel() }}</span>
+                                            <span class="rd-cell-sub">
+                                                {{ $alarm->rustdesk_id === \App\Models\AlarmLog::CONSOLE_SOURCE ? 'Console' : $alarm->rustdesk_id }}
+                                                · <span title="{{ $alarm->created_at }}">{{ $alarm->created_at?->diffForHumans(short: true) }}</span>
+                                            </span>
+                                        </div>
+                                    </li>
+                                @endforeach
+                            </ul>
+                        @else
+                            <div class="rd-empty">
+                                <div class="rd-empty-icon"><i class="ri-shield-check-line"></i></div>
+                                <p class="rd-empty-title">Nothing to report</p>
+                                <p class="rd-empty-text">No alarms have been raised in the last 24 hours.</p>
+                                <a href="{{ route('logs.alarms') }}" class="btn btn-sm btn-outline-light">Open the alarm log</a>
+                            </div>
+                        @endif
+                    </div>
+                </div>
+            </div>
+        @endif
     </div>
 @endsection
 
@@ -69,28 +201,26 @@
 
     var connectionData = @json($connectionSeries);
     var platformData = @json($platformMix);
-    var versionData = @json($versionCounts);
-
-    // Categorical slots (validated against the Attex card surfaces in both
-    // modes); chrome inks per mode. Series color follows the entity, fixed order.
-    var THEMES = {
-        dark: {
-            series: ["#3987e5", "#d95926", "#199e70", "#c98500"],
-            ink: "#c3c2b7", muted: "#898781",
-            grid: "#3d4653", surface: "#313a46", mode: "dark"
-        },
-        light: {
-            series: ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"],
-            ink: "#52514e", muted: "#898781",
-            grid: "#e1e0d9", surface: "#ffffff", mode: "light"
-        }
-    };
+    var hasPlatformData = platformData.values.length > 0;
 
     var charts = [];
 
+    // The palette lives in cortendesk.css as custom properties; ApexCharts
+    // cannot read those itself, so they are resolved off the root element on
+    // every render — which is also how the light/dark flip stays in sync.
+    // Series order matches the design system: blue, accent, teal, purple, amber.
     function theme() {
-        var mode = document.documentElement.getAttribute("data-bs-theme") === "light" ? "light" : "dark";
-        return THEMES[mode];
+        var css = getComputedStyle(document.documentElement);
+        var token = function (name) { return css.getPropertyValue(name).trim(); };
+
+        return {
+            series: ["--rd-blue", "--rd-accent-ink", "--rd-teal", "--rd-purple", "--rd-amber"].map(token),
+            ink: token("--rd-ink"),
+            muted: token("--rd-ink-muted"),
+            grid: token("--rd-border"),
+            surface: token("--rd-surface"),
+            mode: document.documentElement.getAttribute("data-bs-theme") === "light" ? "light" : "dark"
+        };
     }
 
     function baseOptions(t) {
@@ -98,7 +228,7 @@
             chart: { fontFamily: "inherit", foreColor: t.muted, toolbar: { show: false }, background: "transparent" },
             grid: { borderColor: t.grid, strokeDashArray: 3 },
             tooltip: { theme: t.mode },
-            legend: { labels: { colors: t.ink }, markers: { size: 5 } },
+            legend: { labels: { colors: t.muted }, markers: { size: 5 } },
             dataLabels: { enabled: false }
         };
     }
@@ -108,49 +238,70 @@
         charts = [];
         var t = theme();
 
-        // Stacked daily connections: thin columns, rounded end on the stack top,
-        // 2px surface gap between stacked segments.
-        var conn = new ApexCharts(document.querySelector("#chart-connections"), Object.assign(baseOptions(t), {
+        // Daily connections, stacked by type. Bars thin out as the range grows
+        // so 90 days stays readable; a hairline gap separates the segments.
+        var days = connectionData.labels.length;
+        var connEl = document.querySelector("#chart-connections");
+        // Date labels need ~62px each. Ask for only as many ticks as the card
+        // is actually wide enough for, or 90 days collides into a smear.
+        var ticks = Math.max(3, Math.floor((connEl.clientWidth || 600) / 62));
+
+        var conn = new ApexCharts(connEl, Object.assign(baseOptions(t), {
             chart: Object.assign(baseOptions(t).chart, { type: "bar", height: 300, stacked: true }),
             series: connectionData.series,
             colors: t.series.slice(0, 3),
-            plotOptions: { bar: { columnWidth: "45%", borderRadius: 4, borderRadiusApplication: "end", borderRadiusWhenStacked: "last" } },
+            plotOptions: { bar: {
+                columnWidth: days > 60 ? "80%" : (days > 20 ? "62%" : "45%"),
+                borderRadius: 3,
+                borderRadiusApplication: "end",
+                borderRadiusWhenStacked: "last"
+            } },
             stroke: { show: true, width: 2, colors: [t.surface] },
-            xaxis: { categories: connectionData.labels, axisBorder: { color: t.grid }, axisTicks: { show: false } },
+            xaxis: {
+                categories: connectionData.labels,
+                tickAmount: Math.min(days, ticks),
+                axisBorder: { color: t.grid },
+                axisTicks: { show: false },
+                labels: { rotate: 0, hideOverlappingLabels: true }
+            },
             yaxis: { labels: { formatter: function (v) { return Math.round(v); } } },
-            legend: Object.assign(baseOptions(t).legend, { position: "bottom" })
+            legend: Object.assign(baseOptions(t).legend, { position: "bottom", horizontalAlign: "left", offsetY: 4 })
         }));
+        charts.push(conn);
 
-        // Platform donut: 2px surface ring between segments, legend carries identity.
-        var plat = new ApexCharts(document.querySelector("#chart-platforms"), Object.assign(baseOptions(t), {
-            chart: Object.assign(baseOptions(t).chart, { type: "donut", height: 300 }),
-            series: platformData.values,
-            labels: platformData.labels,
-            colors: t.series.slice(0, platformData.labels.length),
-            stroke: { width: 2, colors: [t.surface] },
-            plotOptions: { pie: { donut: { size: "72%", labels: { show: true,
-                total: { show: true, label: "Devices", color: t.ink, formatter: function (w) {
-                    return w.globals.seriesTotals.reduce(function (a, b) { return a + b; }, 0);
-                } },
-                value: { color: t.ink } } } } },
-            legend: Object.assign(baseOptions(t).legend, { position: "bottom" })
-        }));
+        // Platform donut: wide hole carrying the total; identity is carried by
+        // the .rd-legend list beside it, so Apex's own legend stays off.
+        if (hasPlatformData) {
+            var plat = new ApexCharts(document.querySelector("#chart-platforms"), Object.assign(baseOptions(t), {
+                chart: Object.assign(baseOptions(t).chart, { type: "donut", height: 240 }),
+                series: platformData.values,
+                labels: platformData.labels,
+                colors: t.series.slice(0, platformData.labels.length),
+                stroke: { width: 2, colors: [t.surface] },
+                plotOptions: { pie: { donut: { size: "78%", labels: { show: true,
+                    name: { fontSize: "12px", color: t.muted, offsetY: 20 },
+                    value: { fontSize: "26px", fontWeight: 600, color: t.ink, offsetY: -14 },
+                    total: { show: true, label: "Devices", color: t.muted, fontSize: "12px", formatter: function (w) {
+                        return w.globals.seriesTotals.reduce(function (a, b) { return a + b; }, 0);
+                    } }
+                } } } },
+                legend: { show: false }
+            }));
+            charts.push(plat);
+        }
 
-        // Version distribution: single series, single hue, no legend needed.
-        var ver = new ApexCharts(document.querySelector("#chart-versions"), Object.assign(baseOptions(t), {
-            chart: Object.assign(baseOptions(t).chart, { type: "bar", height: 260 }),
-            series: [{ name: "Devices", data: versionData.values }],
-            colors: [t.series[0]],
-            plotOptions: { bar: { horizontal: true, barHeight: "45%", borderRadius: 4, borderRadiusApplication: "end" } },
-            xaxis: { categories: versionData.labels, labels: { formatter: function (v) { return Math.round(v); } } },
-            legend: { show: false },
-            dataLabels: { enabled: true, style: { colors: [t.ink] }, formatter: function (v) { return v; }, offsetX: 24 }
-        }));
-
-        [conn, plat, ver].forEach(function (c) { charts.push(c); c.render(); });
+        charts.forEach(function (c) { c.render(); });
     }
 
     render();
+
+    // The tick budget above is width-derived, so a resize (or a phone turning
+    // sideways) has to recompute it. Debounced — Apex resizes the SVG itself.
+    var resizeTimer;
+    window.addEventListener("resize", function () {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(render, 250);
+    });
 
     // Re-render with the right mode colors when the Attex theme toggle flips.
     new MutationObserver(function (muts) {

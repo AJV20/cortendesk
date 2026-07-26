@@ -2,9 +2,23 @@
     {{-- ---------------------------------------------------------------- Profile --}}
     <div class="card">
         <div class="card-header">
-            <h5 class="card-title mb-0"><i class="ri-user-line me-1"></i>Profile</h5>
+            <h4 class="header-title">Profile</h4>
         </div>
         <div class="card-body">
+            {{-- Identity strip: who you are signed in as, before the fields that change it. --}}
+            <div class="rd-cell {{ $user->is_admin ? 'rd-tone-accent' : 'rd-tone-purple' }} mb-3">
+                <span class="rd-avatar rd-avatar-lg">{{ strtoupper(substr($user->username, 0, 1)) }}</span>
+                <div class="min-width-0">
+                    <span class="rd-cell-title">{{ $user->name ?: $user->username }}</span>
+                    <span class="rd-cell-sub">
+                        {{ $user->email ?: 'no email on file' }}
+                        @if ($user->isSsoLinked())
+                            · signed in with SSO
+                        @endif
+                    </span>
+                </div>
+            </div>
+
             @if ($profileSaved)
                 <div class="alert alert-success py-2" wire:poll.4s="$set('profileSaved', false)">
                     <i class="ri-check-line me-1"></i>Profile saved.
@@ -51,12 +65,12 @@
     @if ($user->isSsoProvisioned())
         <div class="card">
             <div class="card-header">
-                <h5 class="card-title mb-0"><i class="ri-lock-line me-1"></i>Password</h5>
+                <h4 class="header-title">Password</h4>
             </div>
             <div class="card-body">
-                <div class="d-flex align-items-start gap-2 text-muted mb-0">
+                <div class="d-flex align-items-start gap-2 rd-inset mb-0">
                     <i class="ri-shield-user-line fs-20 text-primary"></i>
-                    <div>
+                    <div class="text-muted">
                         This account signs in through single sign-on, so it has no console password to change.
                         Manage your credentials with your identity provider.
                     </div>
@@ -66,7 +80,7 @@
     @else
         <div class="card">
             <div class="card-header">
-                <h5 class="card-title mb-0"><i class="ri-lock-line me-1"></i>Change Password</h5>
+                <h4 class="header-title">Change Password</h4>
             </div>
             <div class="card-body">
                 @if ($passwordSaved)
@@ -101,7 +115,7 @@
                         @error('passwordConfirmation') <div class="invalid-feedback">{{ $message }}</div> @enderror
                     </div>
 
-                    <button type="submit" class="btn btn-warning">
+                    <button type="submit" class="btn btn-outline-primary">
                         <i class="ri-key-2-line me-1"></i>Change Password
                     </button>
                 </form>

@@ -26,62 +26,76 @@
             </button>
         </div>
 
-        <ul class="topbar-menu d-flex align-items-center gap-3">
+        @php
+            $rdUser = auth()->user();
+            $rdRole = $rdUser?->is_admin ? 'Administrator' : ($rdUser?->role?->name ?? 'User');
+        @endphp
 
-            @if (auth()->user()?->consoleAllows('setting') && ($newVersion = \App\Support\UpdateChecker::upgradeAvailable()))
-                <li>
+        <ul class="topbar-menu d-flex align-items-center">
+
+            @if ($rdUser?->consoleAllows('setting') && ($newVersion = \App\Support\UpdateChecker::upgradeAvailable()))
+                <li class="rd-topbar-upgrade">
                     <a class="nav-link" href="{{ \App\Support\UpdateChecker::UPGRADE_DOC }}" target="_blank" rel="noopener"
                        data-bs-toggle="tooltip" data-bs-placement="bottom" title="Version {{ $newVersion }} is available — how to upgrade">
-                        <span class="badge bg-warning-subtle text-warning">
-                            <i class="ri-download-cloud-2-line align-middle me-1"></i>Upgrade Available
+                        {{-- The widest thing in the bar at ~150px. Below sm the icon carries
+                             it alone; the tooltip and the sidebar footer still name the
+                             version, so nothing is lost. --}}
+                        <span class="rd-shell-badge">
+                            <i class="ri-download-cloud-2-line"></i><span class="d-none d-sm-inline">Upgrade Available</span>
                         </span>
                     </a>
                 </li>
             @endif
 
-            <li class="d-none d-sm-inline-block">
-                <div class="nav-link" id="light-dark-mode" data-bs-toggle="tooltip" data-bs-placement="left" title="Theme Mode">
-                    <i class="ri-moon-line fs-22"></i>
+            {{-- Reachable at every width. It used to drop below sm, which left the
+                 light palette unreachable on a phone — the one screen size where
+                 someone is most likely to be outdoors and want it. --}}
+            <li>
+                <div class="nav-link rd-topbar-btn" id="light-dark-mode" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Theme Mode">
+                    <i class="ri-moon-line"></i>
                 </div>
             </li>
 
             <li class="d-none d-md-inline-block">
-                <a class="nav-link" href="" data-toggle="fullscreen">
-                    <i class="ri-fullscreen-line fs-22"></i>
+                <a class="nav-link rd-topbar-btn" href="" data-toggle="fullscreen" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Full Screen">
+                    <i class="ri-fullscreen-line"></i>
                 </a>
             </li>
 
             <li class="dropdown">
-                <a class="nav-link dropdown-toggle arrow-none nav-user px-2" data-bs-toggle="dropdown" href="#" role="button" aria-haspopup="false" aria-expanded="false">
+                <a class="nav-link dropdown-toggle arrow-none nav-user" data-bs-toggle="dropdown" href="#" role="button" aria-haspopup="false" aria-expanded="false">
                     <span class="account-user-avatar">
-                        <span class="d-inline-flex align-items-center justify-content-center rounded-circle bg-primary text-white" style="width:32px;height:32px;font-weight:600;">
-                            {{ strtoupper(substr(auth()->user()->username ?? 'A', 0, 1)) }}
+                        <span class="rd-avatar rd-tone-accent">
+                            {{ strtoupper(substr($rdUser->username ?? 'A', 0, 1)) }}
                         </span>
                     </span>
-                    <span class="d-lg-flex flex-column gap-1 d-none">
-                        <h5 class="my-0">{{ auth()->user()?->displayName() }}</h5>
-                        <h6 class="my-0 fw-normal">{{ auth()->user()?->is_admin ? 'Administrator' : (auth()->user()?->role?->name ?? 'User') }}</h6>
+                    <span class="d-lg-flex flex-column d-none rd-topbar-identity">
+                        <h5 class="rd-topbar-name">{{ $rdUser?->displayName() }}</h5>
+                        <h6 class="rd-topbar-role">{{ $rdRole }}</h6>
                     </span>
                 </a>
                 <div class="dropdown-menu dropdown-menu-end dropdown-menu-animated profile-dropdown">
-                    <div class="dropdown-header noti-title">
-                        <h6 class="text-overflow m-0">Welcome!</h6>
+                    <div class="dropdown-header">
+                        <h6 class="rd-menu-name text-truncate">{{ $rdUser?->displayName() }}</h6>
+                        <span class="rd-menu-role">{{ $rdRole }}</span>
                     </div>
 
                     <a href="{{ route('account') }}" class="dropdown-item">
-                        <i class="ri-account-circle-line fs-18 align-middle me-1"></i>
+                        <i class="ri-account-circle-line"></i>
                         <span>My Account</span>
                     </a>
 
                     <a href="{{ route('account.two-factor') }}" class="dropdown-item">
-                        <i class="ri-shield-keyhole-line fs-18 align-middle me-1"></i>
+                        <i class="ri-shield-keyhole-line"></i>
                         <span>Two-Factor Authentication</span>
                     </a>
+
+                    <div class="dropdown-divider"></div>
 
                     <form method="POST" action="{{ route('logout') }}">
                         @csrf
                         <button type="submit" class="dropdown-item">
-                            <i class="ri-logout-box-line fs-18 align-middle me-1"></i>
+                            <i class="ri-logout-box-line"></i>
                             <span>Logout</span>
                         </button>
                     </form>

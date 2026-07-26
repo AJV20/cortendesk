@@ -5,8 +5,7 @@
 @section('content')
     <div class="card">
 
-        <div class="card-header py-3 text-center d-flex align-items-center justify-content-center"
-             style="background:radial-gradient(120% 140% at 50% 0%,#233149 0%,#141c2b 60%,#0f1622 100%);border-bottom:2px solid #e2652e;">
+        <div class="card-header rd-auth-head py-3 text-center d-flex align-items-center justify-content-center">
             <a href="{{ url('/') }}" class="auth-brand mb-0">
                 <img src="{{ asset('assets/images/cortendesk-sm.svg') }}" alt="CortenDesk" width="60" height="60" class="auth-brand-logo">
                 <span class="auth-brand-wordmark">Corten<span>Desk</span></span>
@@ -15,9 +14,9 @@
 
         <div class="card-body p-4">
 
-            <div class="text-center w-75 m-auto">
-                <h4 class="text-dark-50 text-center pb-0 fw-bold">Set your password</h4>
-                <p class="text-muted mb-4">You were invited to this console. Choose a password to finish setting up your account.</p>
+            <div class="text-center mb-4">
+                <h4 class="rd-auth-title">Set your password</h4>
+                <p class="rd-auth-sub">You were invited to this console. Choose a password to finish setting up your account.</p>
             </div>
 
             @if ($errors->any())
@@ -63,16 +62,16 @@
                            required autocomplete="new-password" placeholder="Repeat the password">
                 </div>
 
-                <div class="mb-3 mb-0 text-center">
-                    <button class="btn btn-primary w-100" type="submit">
+                <div class="mb-0 d-grid">
+                    <button class="btn btn-primary" type="submit">
                         <i class="ri-user-add-line me-1"></i> Create my account
                     </button>
                 </div>
             </form>
 
-            <p class="text-muted fs-13 text-center mt-3 mb-0">
+            <div class="rd-auth-foot">
                 This link works once and expires {{ $invitation->expires_at->diffForHumans() }}.
-            </p>
+            </div>
         </div>
     </div>
 @endsection

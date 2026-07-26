@@ -3,25 +3,31 @@
 @section('title', $ok ? 'Signed In' : 'Sign-In Failed')
 
 @section('content')
-    <div class="card-body p-4 text-center">
-        <div class="mb-3">
-            @if ($ok)
-                <i class="ri-checkbox-circle-line text-success" style="font-size: 3rem;"></i>
-            @else
-                <i class="ri-error-warning-line text-danger" style="font-size: 3rem;"></i>
-            @endif
+    <div class="card">
+
+        <div class="card-header rd-auth-head py-3 text-center d-flex align-items-center justify-content-center">
+            <a href="{{ url('/') }}" class="auth-brand mb-0">
+                <img src="{{ asset('assets/images/cortendesk-sm.svg') }}" alt="CortenDesk" width="60" height="60" class="auth-brand-logo">
+                <span class="auth-brand-wordmark">Corten<span>Desk</span></span>
+            </a>
         </div>
 
-        <h4 class="text-dark-50 pb-0 fw-bold">
-            {{ $ok ? 'Signed in to RustDesk' : 'Sign-in failed' }}
-        </h4>
+        <div class="card-body p-4 text-center">
+            <span class="rd-auth-icon {{ $ok ? 'rd-tone-green' : 'rd-tone-red' }}">
+                <i class="{{ $ok ? 'ri-checkbox-circle-line' : 'ri-error-warning-line' }}"></i>
+            </span>
 
-        <p class="text-muted mt-3 mb-0">{{ $message }}</p>
+            <h4 class="rd-auth-title">
+                {{ $ok ? 'Signed in to RustDesk' : 'Sign-in failed' }}
+            </h4>
 
-        @unless ($ok)
-            <p class="text-muted mt-3 mb-0 fs-13">
-                Return to the RustDesk client and try again, or contact your administrator.
-            </p>
-        @endunless
+            <p class="rd-auth-sub mb-0">{{ $message }}</p>
+
+            @unless ($ok)
+                <p class="rd-auth-foot-note mt-3">
+                    Return to the RustDesk client and try again, or contact your administrator.
+                </p>
+            @endunless
+        </div>
     </div>
 @endsection
