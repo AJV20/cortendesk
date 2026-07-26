@@ -1,10 +1,10 @@
 # CortenDesk
 
-<img width="100%" alt="CortenDesk - A RustDesk Pro Web GUI Application and Native Web Client" src="https://github.com/user-attachments/assets/541c6d49-8d4f-4ada-a99f-ff96d7d354d7" />
-
 **A professional, self-hosted web console for RustDesk servers — with a fully native in-browser remote desktop client.**
 
-CortenDesk gives the free, open-source RustDesk server (`hbbs`/`hbbr`) the management console it deserves: device fleet management, users and scoped access, address books, audit logs, and a web client that can view, control, and transfer files to your devices straight from the browser — no installer, no Electron, no paid tier.
+<img width="100%" alt="CortenDesk - A Rust Desk Pro Console Alternative made entriely for the Open Source Rust Desk Server, API Relay and Client hbbs/hbbr" src="https://github.com/user-attachments/assets/7eb7ad86-48f5-42ea-b2d6-662a2a8a1dab" />
+
+### CortenDesk gives the free, open-source RustDesk server (`hbbs`/`hbbr`) a clean and professional GUI Console: device fleet management, users and scoped access, address books, audit logs, and a web client that can view, control, and transfer files to your devices straight from the browser — no installer, no Electron, no paid tier.
 
 Built on Laravel + Livewire with precompiled assets: **there is no frontend build step**. Clone, configure, migrate, serve.
 
