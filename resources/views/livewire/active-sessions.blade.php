@@ -34,6 +34,9 @@
                             <th>To</th>
                             <th>Type</th>
                             <th>Started</th>
+                            @if ($canDisconnect)
+                                <th class="text-end">Action</th>
+                            @endif
                         </tr>
                         </thead>
                         <tbody>
@@ -66,6 +69,18 @@
                                     <span class="rd-cell-title fw-normal"><i class="rd-dot text-success"></i><span
                                             title="{{ $s->created_at }}">{{ $s->created_at->diffForHumans(short: true) }}</span></span>
                                 </td>
+                                @if ($canDisconnect)
+                                    <td class="text-end">
+                                        @if ($s->isDisconnecting())
+                                            {{-- The console cannot close the session itself; it waits for
+                                                 the device's next heartbeat to carry the instruction. --}}
+                                            <span class="badge bg-warning-subtle text-warning" title="Sent on the device's next heartbeat">Disconnecting…</span>
+                                        @else
+                                            <a href="#" class="text-danger fs-13" wire:click.prevent="disconnect({{ $s->id }})"
+                                               wire:confirm="End this session on {{ $s->rustdesk_id }}?">Disconnect</a>
+                                        @endif
+                                    </td>
+                                @endif
                             </tr>
                         @endforeach
                         </tbody>
@@ -97,6 +112,16 @@
                                     @default<span class="badge bg-info-subtle text-info">Remote</span>
                                 @endswitch
                             </div>
+                            @if ($canDisconnect)
+                                <div class="text-end">
+                                    @if ($s->isDisconnecting())
+                                        <span class="badge bg-warning-subtle text-warning">Disconnecting…</span>
+                                    @else
+                                        <a href="#" class="text-danger fs-13" wire:click.prevent="disconnect({{ $s->id }})"
+                                           wire:confirm="End this session on {{ $s->rustdesk_id }}?">Disconnect</a>
+                                    @endif
+                                </div>
+                            @endif
                             <div class="rd-mini-foot">
                                 <a href="rustdesk://{{ $s->rustdesk_id }}" title="Connect with RustDesk"
                                    class="fs-13 text-truncate">{{ $s->rustdesk_id }}</a>

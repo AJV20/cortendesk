@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\AuditConnection;
 use App\Models\Device;
 use App\Models\Strategy;
 use Illuminate\Http\Request;
@@ -62,6 +63,15 @@ class SyncController extends Controller
         // Device row exists but has never sent inventory — request it.
         if ($device->hostname === null || $device->hostname === '') {
             $response['sysinfo'] = 1;
+        }
+
+        // Operator-requested session termination (docs/client-api.md §8). The
+        // client closes each listed connection; this is the only channel the
+        // console has for reaching a live session, which runs peer-to-peer and
+        // never touches this API otherwise.
+        $disconnect = AuditConnection::pendingDisconnectsFor($id);
+        if ($disconnect !== []) {
+            $response['disconnect'] = $disconnect;
         }
 
         // Strategy push (PLAN C3, wire contract docs/strategy-protocol.md).
