@@ -49,7 +49,7 @@ return Application::configure(basePath: dirname(__DIR__))
         // The proxy list and the header policy live in TrustConfiguredProxies /
         // config/trustedproxy.php, NOT here: this closure runs outside a config
         // file, where env() returns null once `config:cache` has run — which
-        // deploy.sh and the Docker image both do on every start. Configuring it
+        // the Docker image does on every start. Configuring it
         // here meant TRUSTED_PROXIES in .env was silently ignored in production
         // (reported in #7).
         $middleware->replace(

@@ -108,7 +108,12 @@ it('creates a strategy with grouped options and audits it', function () {
 it('offers only allowlisted option keys, grouped as the protocol doc groups them', function () {
     $catalog = StrategyList::catalog();
 
-    expect(array_keys($catalog))->toBe(['permissions', 'security', 'display']);
+    // The first three mirror docs/strategy-protocol.md. 'client' is ours: it
+    // holds options that are not about an incoming session at all (currently
+    // allow-auto-update, #11), which do not belong under permissions, security
+    // or capture. Keep this assertion exact — the point of the test is that a
+    // group cannot appear by accident.
+    expect(array_keys($catalog))->toBe(['permissions', 'security', 'display', 'client']);
 
     $offered = [];
     foreach ($catalog as $group) {

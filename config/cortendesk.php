@@ -22,7 +22,12 @@ return [
     */
     'id_server' => env('CORTENDESK_ID_SERVER', ''),
     'relay_server' => env('CORTENDESK_RELAY_SERVER', ''),
-    'public_key' => env('CORTENDESK_PUBLIC_KEY', ''),
+    // Trimmed: id_ed25519.pub is written without a trailing newline, so a key
+    // that arrives with surrounding whitespace picked it up in transit (an
+    // editor, a copy-paste, a heredoc in a compose file). The comparison is
+    // exact, and the resulting failure is indistinguishable from a genuinely
+    // wrong key — clients simply refuse to connect.
+    'public_key' => trim((string) env('CORTENDESK_PUBLIC_KEY', '')),
 
     /*
     |--------------------------------------------------------------------------

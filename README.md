@@ -15,7 +15,7 @@ Built on Laravel + Livewire with precompiled assets: **there is no frontend buil
 - **Users & access scoping** — admins see everything; regular users see only their own devices plus device groups granted to them or their user groups. The RustDesk client API is scoped with the same rules.
 - **Address books** — full support for the modern multi-address-book API *and* the legacy API: shared books, share rules (everyone / user / group), tags with colors.
 - **Audit logs** — connections, file transfers, console logins, and security alarms (brute-force/blocked-access events); filterable, exportable to CSV, with configurable retention and automatic nightly pruning.
-- **Single sign-on (OIDC)** — sign in with Keycloak, Authentik, Entra ID, Okta, Google Workspace or any OpenID Connect provider. Authorization-code flow with PKCE, verified ID tokens, just-in-time account creation with optional approval, an email-domain allowlist, and optional provider sign-out. Password sign-in can be switched off — and comes back automatically if the provider is unreachable, so a broken IdP can't lock you out.
+- **Single sign-on (OIDC)** — sign in with Keycloak, Authentik, Entra ID, Okta, Google Workspace or any OpenID Connect provider. Authorization-code flow with PKCE, verified ID tokens, just-in-time account creation with optional approval, an email-domain allowlist, and optional provider sign-out. Password sign-in can be switched off — and returns by itself if SSO is disabled or left incompletely configured. For a provider that is unreachable while still configured, `CORTENDESK_OIDC_DISABLED=true` forces it off and brings the password form back.
 - **Device policies (strategies)** — push client settings to devices from the console: permissions, security and password rules, capture options. Assign to a device, a user or a device group, with the most specific assignment winning. Optionally enforced, so a local change is reverted on the next heartbeat.
 - **Two-factor authentication** — TOTP with single-use recovery codes, optionally required for everyone or for administrators only, with an administrator reset and a break-glass command.
 - **Delegated administration** — roles with a permission matrix over each console area, so you can grant someone the users screen without handing them the whole console.
@@ -51,7 +51,7 @@ WebSocket bridge to your RustDesk server built in). Releases are published to
 GHCR — or build it yourself:
 
 ```bash
-docker pull ghcr.io/marcpope/cortendesk:0.9.6   # or build locally:
+docker pull ghcr.io/marcpope/cortendesk:0.9.7   # or build locally:
 docker build -t cortendesk .
 docker run -d -p 8080:8080 -v cortendesk-data:/data \
   -e CORTENDESK_ID_SERVER=hbbs.example.com:21116 \
@@ -134,9 +134,23 @@ forge their IP in the audit logs. If your proxy connects from a public
 address, list it explicitly: `TRUSTED_PROXIES=203.0.113.7` (comma-separated,
 CIDRs allowed).
 
+Getting this wrong is worth more than a wrong column in a log: every request
+then appears to come from the proxy, so devices all record the same
+`last_online_ip` **and** the per-address sign-in limiter treats every user as
+one address, which can lock real users out.
+
 ### WebSocket bridge for the web client
 
-Browsers can't open raw TCP to hbbs/hbbr, so the web client speaks WebSocket. Add to your TLS server block (adjust the upstream host if hbbs runs elsewhere):
+Browsers can't open raw TCP to hbbs/hbbr, so the web client speaks WebSocket.
+
+**Running the Docker image?** You do not need the block below. The container
+already bridges `/ws/id` and `/ws/relay` to hbbs/hbbr itself — point your proxy
+at the container on 8080 for *all* paths and make sure it forwards WebSocket
+upgrade headers. The snippet below is for a **manual/VM install**, where hbbs
+and hbbr are reachable on the host. Full examples for Caddy, Traefik and nginx:
+[Reverse proxy and TLS](https://github.com/marcpope/cortendesk/wiki/Reverse-Proxy-and-TLS).
+
+For a manual install, add to your TLS server block (adjust the upstream host if hbbs runs elsewhere):
 
 ```nginx
 location = /ws/id {

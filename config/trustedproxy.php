@@ -8,7 +8,7 @@ return [
     |--------------------------------------------------------------------------
     | Which peers may set X-Forwarded-* on the way in. Read here, in a config
     | file, rather than via env() at bootstrap: `php artisan config:cache` (run
-    | by deploy.sh and by the Docker image on every start) stops loading .env
+    | by the Docker image on every start) stops loading .env
     | entirely, so an env() call outside a config file silently returns null and
     | a TRUSTED_PROXIES set in .env was quietly ignored. Config files are
     | evaluated while the cache is BUILT, so the value survives.

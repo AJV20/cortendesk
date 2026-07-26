@@ -196,3 +196,58 @@ it('arms emailed sign-in codes once email is enabled', function () {
 
     expect(Setting::get('email_login_verification'))->toBe('1');
 });
+
+/*
+|--------------------------------------------------------------------------
+| Server identity values are trimmed (#11 follow-up)
+|--------------------------------------------------------------------------
+| id_ed25519.pub is written with no trailing newline, so whitespace around a
+| public key was picked up in transit — an editor, a copy-paste, a heredoc in
+| a compose file. The key is compared exactly, so an untrimmed one fails in a
+| way that is indistinguishable from a genuinely wrong key: clients just do
+| not connect, and nothing on screen hints at why.
+*/
+
+it('trims whitespace from the public key on save', function () {
+    actingSettingsAdmin();
+
+    Livewire::test(SettingsPage::class)
+        ->set('publicKey', "  GG2jFmQYGsGGC8L7YuiDu3KURGEAQEOdc7thqisIcz8=\n")
+        ->call('save')
+        ->assertHasNoErrors();
+
+    expect(Setting::get('public_key'))->toBe('GG2jFmQYGsGGC8L7YuiDu3KURGEAQEOdc7thqisIcz8=');
+});
+
+it('trims whitespace from the id and relay server on save', function () {
+    actingSettingsAdmin();
+
+    Livewire::test(SettingsPage::class)
+        ->set('idServer', "  hbbs.example.com:21116 ")
+        ->set('relayServer', "hbbs.example.com:21117\n")
+        ->call('save')
+        ->assertHasNoErrors();
+
+    expect(Setting::get('id_server'))->toBe('hbbs.example.com:21116')
+        ->and(Setting::get('relay_server'))->toBe('hbbs.example.com:21117');
+});
+
+it('trims the public key coming from the environment', function () {
+    // Re-evaluate the real config file with a whitespace-padded env value,
+    // rather than asserting trim() against a value the test just set — that
+    // would pass even if the config file dropped the trim entirely.
+    // env() resolves through Laravel's own repository, populated at boot, so
+    // putenv() alone does not reach it — the value has to be set there.
+    $repo = \Illuminate\Support\Env::getRepository();
+    $original = $repo->get('CORTENDESK_PUBLIC_KEY');
+    $repo->set('CORTENDESK_PUBLIC_KEY', "  key-from-env  \n");
+
+    try {
+        $config = require config_path('cortendesk.php');
+        expect($config['public_key'])->toBe('key-from-env');
+    } finally {
+        $original === null
+            ? $repo->clear('CORTENDESK_PUBLIC_KEY')
+            : $repo->set('CORTENDESK_PUBLIC_KEY', $original);
+    }
+});

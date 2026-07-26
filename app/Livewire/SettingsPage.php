@@ -254,9 +254,12 @@ class SettingsPage extends Component
         $this->relayServers = $relays;
         Setting::put('relay_servers', json_encode($relays));
 
-        Setting::put('id_server', $this->idServer);
-        Setting::put('relay_server', $this->relayServer);
-        Setting::put('public_key', $this->publicKey);
+        Setting::put('id_server', trim($this->idServer));
+        Setting::put('relay_server', trim($this->relayServer));
+        // Pasting a key through an editor commonly drags in a trailing newline
+        // or space. The comparison is exact, so an untrimmed key fails exactly
+        // like a wrong one and there is nothing on screen to hint at why.
+        Setting::put('public_key', trim($this->publicKey));
         Setting::put('online_window', (string) $this->onlineWindow);
         Setting::put('rdgen_url', rtrim($this->rdgenUrl, '/'));
         Setting::put('log_retention_days', (string) $this->logRetentionDays);

@@ -81,6 +81,11 @@ class StrategyList extends Component
             'icon' => 'ri-macbook-line',
             'help' => 'Screen capture and desktop behaviour during a session.',
         ],
+        'client' => [
+            'title' => 'Client & updates',
+            'icon' => 'ri-refresh-line',
+            'help' => 'How the RustDesk client maintains itself. Unlike the groups above, these are not about an incoming session.',
+        ],
     ];
 
     /**
@@ -139,7 +144,18 @@ class StrategyList extends Component
         ],
         'allow-only-conn-window-open' => ['label' => 'Only accept while the client window is open', 'help' => 'Desktop only.'],
         'enable-trusted-devices' => ['label' => 'Offer "trust this device" on 2FA'],
-        'allow-remote-config-modification' => ['label' => 'Let the connecting side change this device\'s settings'],
+        // Client wording is "Enable remote configuration modification". Ours
+        // said only what it does, which reads better but meant nobody looking
+        // for the client's term could find it (#11). Lead with the client's
+        // label, keep the plain-English explanation as help.
+        'allow-remote-config-modification' => [
+            'label' => 'Enable remote configuration modification',
+            'help' => 'Lets the connecting side change this device\'s settings during a session.',
+        ],
+        'allow-auto-update' => [
+            'label' => 'Auto update',
+            'help' => 'Lets the client update itself. The client only exposes this on installed Windows, and on installed macOS that is not a custom build — elsewhere (Linux, portable installs, custom-branded builds) the toggle is hidden, so setting it here may have no visible effect.',
+        ],
         'allow-auto-disconnect' => ['label' => 'Disconnect idle sessions'],
         'auto-disconnect-timeout' => [
             'label' => 'Idle timeout (minutes)',

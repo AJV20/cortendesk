@@ -27,3 +27,18 @@ Homestead.yaml
 Thumbs.db
 webclient/node_modules/
 deploy.env
+
+# Production-only deployment assets. These carry real hostnames, IPs and
+# credentials, and the sanitized export copies the repo root verbatim — so
+# anything here that is not ignored ships to the public repo. The release
+# scan would catch it, but that is a tripwire, not prevention.
+docker-compose.prod.yml
+docker-compose.override.yml
+*.prod.yml
+.cert-alert.env
+
+# Database dumps (migrations, backups). Real rows, never in git.
+*.sql.gz
+*.dump
+/storage/app/*.db
+/storage/app/*.sqlite

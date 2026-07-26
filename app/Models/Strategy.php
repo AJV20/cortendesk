@@ -122,6 +122,12 @@ class Strategy extends Model
         'allow-auto-record-incoming' => ['group' => 'display', 'type' => 'bool'],
         'keep-awake-during-incoming-sessions' => ['group' => 'display', 'type' => 'bool'],
         'enable-lan-discovery' => ['group' => 'display', 'type' => 'bool'],
+
+        // --- client maintenance -------------------------------------------
+        // Not a permission, not an authorisation control, not capture — this
+        // is the client updating itself, so it gets its own group rather than
+        // being filed under something it is not.
+        'allow-auto-update' => ['group' => 'client', 'type' => 'bool'],
     ];
 
     /** Group keys in the order the editor shows them (mirrors the doc's §3 order). */

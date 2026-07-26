@@ -62,7 +62,7 @@ it('treats a forwarded-https request as secure', function () {
 |--------------------------------------------------------------------------
 | The list used to be built with env() inside bootstrap/app.php. That closure
 | runs outside a config file, so once `php artisan config:cache` had run — as
-| deploy.sh and the Docker image both do — env() returned null and a
+| the Docker image does on every start — env() returned null and a
 | TRUSTED_PROXIES set in .env was silently ignored on every production install.
 */
 

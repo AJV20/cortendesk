@@ -2340,6 +2340,45 @@ html[data-sidenav-size="sm-hover"]:not([data-layout="topnav"]) .wrapper .leftsid
     padding: 20px;
 }
 
+/* Restore scrolling in dialogs whose form wraps the header/body/footer.
+   ---------------------------------------------------------------------------
+   .modal-dialog-scrollable works by making .modal-content a flex column and
+   letting .modal-body take the leftover height with overflow-y:auto. Every
+   editor dialog here nests a <form> between the two so one submit handler can
+   cover the body and the footer button:
+
+       .modal-content > form > (.modal-header, .modal-body, .modal-footer)
+
+   That form becomes the ONLY flex child of .modal-content. It has no height
+   constraint, so it grows to its natural content height, .modal-body is never
+   bounded, and overflow-y:auto has nothing to scroll against — the dialog
+   simply runs off the bottom of the screen, taking the Save button with it.
+   Add Strategy is where it shows first because it is the tallest, but all
+   seven editor dialogs share the structure.
+
+   Fixed here rather than by unwrapping the forms: the markup is correct HTML
+   and the submit handler depends on it. min-height:0 is the load-bearing part
+   — a flex item's default min-height:auto refuses to shrink below its content,
+   which is exactly what stops the scroll from ever engaging. */
+.modal-dialog-scrollable .modal-content > form {
+    display: flex;
+    flex-direction: column;
+    max-height: 100%;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.modal-dialog-scrollable .modal-content > form > .modal-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.modal-dialog-scrollable .modal-content > form > .modal-header,
+.modal-dialog-scrollable .modal-content > form > .modal-footer {
+    flex: 0 0 auto;
+}
+
 /* Livewire toggles these dialogs by hand, so the backdrop is a sibling div
    (or an inline style) rather than Bootstrap's own. Deepen it either way. */
 .modal-backdrop.show {
