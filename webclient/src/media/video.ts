@@ -56,6 +56,23 @@ async function probe(codec: string): Promise<boolean> {
   }
 }
 
+/**
+ * Can this context play H.264 through Media Source Extensions?
+ *
+ * The fallback for origins where WebCodecs is missing. MSE is NOT
+ * secure-context gated, which is the whole reason a plain-http session is
+ * possible at all — see mse-video.ts.
+ */
+export function mseH264Available(): boolean {
+  const MS = (globalThis as { MediaSource?: typeof MediaSource }).MediaSource;
+  if (!MS?.isTypeSupported) return false;
+  try {
+    return MS.isTypeSupported('video/mp4; codecs="avc1.640033"');
+  } catch {
+    return false;
+  }
+}
+
 export async function probeSupportedDecoding(): Promise<SupportedDecoding> {
   let vp9 = false;
   let vp8 = false;
@@ -68,6 +85,11 @@ export async function probeSupportedDecoding(): Promise<SupportedDecoding> {
       probe(CODEC_STRING.h264s),
       probe(CODEC_STRING.av1s),
     ]);
+  } else if (mseH264Available()) {
+    // No WebCodecs, but MSE can play H.264. Advertise H.264 and nothing else:
+    // claiming a codec MSE cannot mux would leave the peer sending a stream
+    // this client can never display.
+    h264 = true;
   }
   // ability_h265 deliberately stays 0 even where 'hev1.1.6.L93.B0' probes ok:
   // hardware HEVC decoders routinely accept the config then fail on real

@@ -43,6 +43,10 @@ const shared = {
     // `libsodium` package — unresolvable. Bundle the CJS build instead (same
     // alias as vitest.config.ts).
     'libsodium-wrappers': require.resolve('libsodium-wrappers'),
+    // jMuxer imports node's `stream` for its optional createStream() wrapper,
+    // which this client never calls. Stub it rather than bundling a polyfill
+    // for an unreachable path.
+    stream: resolve(__dirname, 'src/shims/node-stream.ts'),
   },
   define: {
     'process.env.NODE_ENV': dev ? '"development"' : '"production"',

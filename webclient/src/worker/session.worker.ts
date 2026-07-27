@@ -28,7 +28,8 @@ import { Session, type SessionSinks } from '../core/session';
 import { fileResponseToEvents } from '../core/file-transfer';
 import { WsStream } from '../transport/ws-stream';
 import { AudioPipeline } from '../media/audio';
-import { VideoPipeline, probeSupportedDecoding, type EncodedCase } from '../media/video';
+import { VideoPipeline, mseH264Available, probeSupportedDecoding, type EncodedCase } from '../media/video';
+import { ForwardingVideoPipeline } from '../media/mse-video';
 import { cursorToDataUrl, decodeClipboardText, initZstd, zstdDecode } from '../input/clipboard-cursor';
 
 // Decoded audio is outside the frozen SessionEvent union: the main thread
@@ -88,6 +89,11 @@ export interface WorkerDeps {
     onNeedRefresh: () => void,
     onStats: (s: Partial<SessionStats>) => void,
   ): VideoPipelineLike;
+  /** Fallback used when WebCodecs is absent: forwards H.264 instead of decoding. */
+  createForwardingVideoPipeline?(
+    emit: (data: Uint8Array, key: boolean) => void,
+    onNeedRefresh: () => void,
+  ): VideoPipelineLike;
   createAudioPipeline?(): AudioPipelineLike;
   probeDecoding?(): Promise<SupportedDecoding>;
   ready?(): Promise<void>;
@@ -127,6 +133,8 @@ export class WorkerHost {
       createSession: (config, sinks) => new Session(config, sinks),
       createVideoPipeline: (canvas, onAck, onNeedRefresh, onStats) =>
         new VideoPipeline(canvas, onAck, onNeedRefresh, onStats),
+      createForwardingVideoPipeline: (emit, onNeedRefresh) =>
+        new ForwardingVideoPipeline(emit, onNeedRefresh),
       createAudioPipeline: () => new AudioPipeline(),
       probeDecoding: () => probeSupportedDecoding(),
       ready: async () => {
@@ -308,14 +316,23 @@ export class WorkerHost {
       if (canvas) {
         this.probe = await this.deps.probeDecoding();
 
+        // No WebCodecs (insecure origin) but MSE can play H.264: forward the
+        // bitstream to the main thread instead of decoding here. The canvas is
+        // unused in that mode — a <video> element renders instead.
+        const useMse = typeof VideoDecoder === 'undefined' && mseH264Available();
         // Session acks every video_frame on receipt (video_ack_required), so the
         // per-drawn-frame ack hook is a no-op here.
-        const video = this.deps.createVideoPipeline(
-          canvas,
-          () => {},
-          () => this.session?.refresh(),
-          (s) => this.postStats(s),
-        );
+        const video = useMse
+          ? this.deps.createForwardingVideoPipeline(
+              (data, key) => this.deps.post({ t: 'h264', data, key }, [data.buffer]),
+              () => this.session?.refresh(),
+            )
+          : this.deps.createVideoPipeline(
+              canvas,
+              () => {},
+              () => this.session?.refresh(),
+              (s) => this.postStats(s),
+            );
         video.onNeedReadvertise = () => this.readvertise();
         this.video = video;
 

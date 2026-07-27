@@ -365,6 +365,24 @@
   overflow: hidden;
 }
 
+#rd-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+  outline: none;
+  touch-action: none;
+}
+#rd-viewport[data-fit='actual'] #rd-video {
+  position: static;
+  width: auto;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
+
 #rd-canvas {
   position: absolute;
   inset: 0;

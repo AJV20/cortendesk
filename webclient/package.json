@@ -19,6 +19,7 @@
     "drive:online": "TSX_TSCONFIG_PATH=node-harness/tsconfig.json node --import tsx node-harness/drive-login.mjs --online"
   },
   "dependencies": {
+    "jmuxer": "^2.1.1",
     "libsodium-wrappers": "^0.7.15",
     "tweetnacl": "^1.0.3",
     "zstddec": "^0.1.0"

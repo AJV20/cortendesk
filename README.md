@@ -34,7 +34,7 @@ Built on Laravel + Livewire with precompiled assets: **there is no frontend buil
 - **File transfer** — an in-session dual-pane manager: browse the remote filesystem, send/receive files and folders with progress, resume-aware digests, conflict prompts, and drag-and-drop. Uses the File System Access API on Chromium; falls back to picker/Downloads elsewhere.
 - Saved passwords (hashed, never plaintext) with auto-login per device.
 - Best experienced in Chrome/Edge; the desktop stream requires WebCodecs.
-- **HTTPS is required.** Both WebCodecs (`VideoDecoder`) and Web Crypto (`crypto.subtle`) are restricted to secure contexts, so the browser blocks them over plain `http://` — this is browser policy, not a CortenDesk setting, and cannot be worked around in JavaScript. `http://localhost` counts as secure. The console itself works fine over plain HTTP; only the in-browser client needs TLS.
+- **HTTPS recommended, not required.** Over HTTPS the client uses WebCodecs for hardware-accelerated VP8/VP9/H.264/H.265/AV1. WebCodecs is restricted to secure contexts, so over plain `http://` the client falls back to H.264 through Media Source Extensions, which is not. The fallback is automatic and needs no configuration; it is limited to H.264 and reports no per-frame statistics. `http://localhost` counts as secure.
 
 ## Requirements
 
@@ -42,7 +42,7 @@ Built on Laravel + Livewire with precompiled assets: **there is no frontend buil
 - MySQL/MariaDB (SQLite works for evaluation)
 - nginx + php-fpm (or any Laravel-capable web server)
 - A running open-source **RustDesk server** (`hbbs`/`hbbr`), reachable from your devices
-- For the web client: a TLS-terminating proxy that bridges `wss://` to hbbs/hbbr WebSocket ports (21118/21119) — sample config below
+- For the web client: a proxy bridging WebSockets to hbbs/hbbr ports 21118/21119 — `wss://` over HTTPS, or `ws://` if you serve the console over plain HTTP — sample config below
 
 ## Quick start with Docker
 
@@ -51,7 +51,7 @@ WebSocket bridge to your RustDesk server built in). Releases are published to
 GHCR — or build it yourself:
 
 ```bash
-docker pull ghcr.io/marcpope/cortendesk:0.9.8   # or build locally:
+docker pull ghcr.io/marcpope/cortendesk:1.0.0   # or build locally:
 docker build -t cortendesk .
 docker run -d -p 8080:8080 -v cortendesk-data:/data \
   -e CORTENDESK_ID_SERVER=hbbs.example.com:21116 \

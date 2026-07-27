@@ -197,20 +197,32 @@ describe('PERMISSION_CONTROLS', () => {
 describe('secure context requirement', () => {
   // Issue #3: over plain http the first symptom was
   // "Cannot read properties of undefined (reading 'digest')", because
-  // crypto.subtle is absent outside a secure context. A pure-JS hash would not
-  // help — WebCodecs' VideoDecoder is [SecureContext] too, so the failure would
-  // just move to the decoder. The client must say so instead.
-  it('names crypto.subtle and VideoDecoder as the secure-context dependencies', () => {
-    // Pins the two APIs the guard exists for. If either stops being used, the
-    // guard should be revisited rather than left asserting a stale reason.
-    const source = readFileSync(new URL('./app.ts', import.meta.url), 'utf8');
-
-    expect(source).toContain('isSecureContext');
-    expect(source).toContain('crypto.subtle');
-    expect(source).toContain('VideoDecoder');
+  // crypto.subtle is absent outside a secure context.
+  //
+  // Both original blockers are now gone: the login hash is vendored
+  // (core/sha256.ts), and video falls back to Media Source Extensions, which
+  // is not secure-context gated. These tests pin the CURRENT contract — an
+  // earlier version asserted the source still mentioned crypto.subtle, which
+  // kept passing off a doc comment after the dependency itself had gone.
+  it('no longer depends on crypto.subtle anywhere in the client source', () => {
+    for (const f of ['../core/auth.ts', '../core/session.ts', '../core/crypto.ts']) {
+      const source = readFileSync(new URL(f, import.meta.url), 'utf8');
+      const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+      expect(code, f).not.toContain('crypto.subtle');
+    }
   });
 
-  it('checks the context before connecting, not only on load', () => {
+  it('gates on decode capability, not on the origin being secure', () => {
+    const source = readFileSync(new URL('./app.ts', import.meta.url), 'utf8');
+    // The guard must consult both paths before refusing.
+    expect(source).toContain('VideoDecoder');
+    expect(source).toContain('mseH264Available');
+    // The MSE path is not announced in the UI — it looks the same to the
+    // operator — but it must remain a real branch, not a claim.
+    expect(source).toContain('mse-video');
+  });
+
+  it('checks capability before connecting, not only on load', () => {
     const source = readFileSync(new URL('./app.ts', import.meta.url), 'utf8');
     const calls = source.match(/secureContextProblem\(\)/g) ?? [];
 

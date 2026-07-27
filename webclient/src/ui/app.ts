@@ -53,6 +53,8 @@ import {
   type RdGlobalConfig,
 } from './common';
 import { FilePanel } from './file-panel';
+import { MseVideoPlayer } from '../media/mse-video';
+import { mseH264Available } from '../media/video';
 
 // Back-compat: everything that used to live here is re-exported for tests and
 // external importers.
@@ -150,6 +152,9 @@ export class RdApp {
   private permissions: Record<string, boolean> = {};
 
   private filePanel: FilePanel | undefined;
+  private videoEl!: HTMLVideoElement;
+  /** Set only on insecure origins, where WebCodecs is unavailable. */
+  private msePlayer: MseVideoPlayer | undefined;
 
   // --- chrome state ---------------------------------------------------------
   private viewOnly = false;
@@ -247,6 +252,16 @@ export class RdApp {
       canvas.id = 'rd-canvas';
     }
     viewport.appendChild(canvas);
+    let vid = document.getElementById('rd-video') as HTMLVideoElement | null;
+    if (!vid) {
+      vid = document.createElement('video');
+      vid.id = 'rd-video';
+      vid.muted = true; // audio has its own path; a muted element may autoplay
+      vid.playsInline = true;
+      vid.hidden = true;
+    }
+    viewport.appendChild(vid);
+    this.videoEl = vid;
     // Pre-redesign mount point some cached pages still carry.
     document.getElementById('rd-stats')?.remove();
     const make = (id: string): HTMLElement => {
@@ -910,36 +925,28 @@ export class RdApp {
   /**
    * Why the browser will refuse to run this page's session, or null if it won't.
    *
-   * Served over plain http:// the page is not a "secure context", and the two
-   * things this client is built on are both gated behind that:
-   * `crypto.subtle` (the login handshake hashes with SHA-256) and WebCodecs'
-   * `VideoDecoder` (the entire video pipeline). Without the check the first
-   * failure surfaces as `Cannot read properties of undefined (reading
-   * 'digest')`, which sends operators hunting for a bug in their config —
-   * reported in #3.
+   * Two things used to make an insecure origin fatal: `crypto.subtle` for the
+   * login hash, and WebCodecs' `VideoDecoder` for video. The hash no longer
+   * uses Web Crypto (see core/sha256.ts), and video falls back to Media Source
+   * Extensions, which is not secure-context gated. So plain http:// now works
+   * where MSE can play H.264 — degraded, and the operator is told so.
    *
-   * There is no workaround worth shipping: a pure-JS hash would only move the
-   * failure to the decoder, which cannot be polyfilled. So say so plainly and
-   * point at the ways out.
+   * What remains fatal is an origin with neither WebCodecs nor MSE H.264: there
+   * is no third way to show the remote screen. Saying so plainly beats the old
+   * failure, `Cannot read properties of undefined (reading 'digest')`, which
+   * sent operators hunting through their config (#3).
    */
   private secureContextProblem(): string | null {
+    if (typeof VideoDecoder !== 'undefined') return null; // full-quality path
+    if (mseH264Available()) return null; // degraded path — see fallbackNotice()
+
     if (typeof isSecureContext !== 'undefined' && !isSecureContext) {
-      return 'This page is served over plain HTTP, so the browser blocks the '
-        + 'cryptography and video decoding the client needs. Serve the console '
-        + 'over HTTPS, or open it as http://localhost, which browsers treat as secure.';
+      return 'This page is served over plain HTTP and this browser cannot fall '
+        + 'back to Media Source playback. Serve the console over HTTPS, or open '
+        + 'it as http://localhost, which browsers treat as secure.';
     }
-
-    if (typeof crypto === 'undefined' || !crypto.subtle) {
-      return 'This browser is not exposing Web Crypto to the page. That normally '
-        + 'means the page is not being served over HTTPS.';
-    }
-
-    if (typeof VideoDecoder === 'undefined') {
-      return 'This browser has no WebCodecs video decoder. Chrome or Edge over '
-        + 'HTTPS is required for the remote screen.';
-    }
-
-    return null;
+    return 'This browser has no WebCodecs video decoder and no Media Source '
+      + 'support for H.264. Chrome or Edge is required for the remote screen.';
   }
 
   private onConnectClick(): void {
@@ -1033,6 +1040,7 @@ export class RdApp {
   private teardown(): void {
     this.detach?.();
     this.detach = undefined;
+    this.teardownMse();
     const w = this.worker;
     this.worker = undefined;
     if (w) setTimeout(() => w.terminate(), 250); // let a pending 'disconnect' flush first
@@ -1101,6 +1109,9 @@ export class RdApp {
         break;
       case 'chat':
         this.onChat(ev.text);
+        break;
+      case 'h264':
+        this.pushMseFrame(ev.data, ev.key);
         break;
       case 'permission':
         this.applyPermission(ev.kind, ev.enabled);
@@ -1290,6 +1301,43 @@ export class RdApp {
     this.el.edge
       .querySelector<HTMLButtonElement>('[data-open="files"]')
       ?.toggleAttribute('disabled', false);
+  }
+
+  /**
+   * Feed a forwarded H.264 frame to the MSE player, creating it on first use.
+   *
+   * Reaching here at all means the worker found no WebCodecs and chose the
+   * forwarding pipeline, so the <video> takes over from the canvas: it becomes
+   * the visible surface AND the input target, since clicks must map against
+   * whatever is actually showing the remote screen.
+   */
+  private pushMseFrame(data: Uint8Array, key: boolean): void {
+    if (!this.msePlayer) {
+      this.msePlayer = new MseVideoPlayer(this.videoEl, (msg) => {
+        this.toast(msg);
+        this.post({ c: 'refresh' });
+      });
+      this.canvas.hidden = true;
+      this.videoEl.hidden = false;
+      // Re-point input at the element the operator can actually see.
+      this.detach?.();
+      this.detach = attachInput(this.videoEl, (c) => this.post(c), () => this.currentRect(), {
+        isTouchMode: () => this.inputMode === 'touch',
+      });
+      this.el.viewport.dataset.mse = '1';
+    }
+    this.msePlayer.push(data, key);
+  }
+
+  /** Put the canvas back in charge; called whenever a session ends. */
+  private teardownMse(): void {
+    if (!this.msePlayer) return;
+    this.msePlayer.close();
+    this.msePlayer = undefined;
+    this.videoEl.hidden = true;
+    this.videoEl.removeAttribute('src');
+    this.canvas.hidden = false;
+    delete this.el.viewport.dataset.mse;
   }
 
   private async sendClipboard(): Promise<void> {

@@ -20,6 +20,9 @@ export type SessionEvent =                       // worker -> main
   | { t:'cursor'; pngDataUrl:string; hotx:number; hoty:number } | { t:'cursorPos'; x:number; y:number }
   | { t:'clipboard'; text:string } | { t:'permission'; kind:string; enabled:boolean }
   | { t:'chat'; text:string }             // inbound message from the remote peer
+  // Fallback video: raw H.264 Annex B forwarded for main-thread MSE playback.
+  // Only emitted when WebCodecs is unavailable (insecure origin).
+  | { t:'h264'; data:Uint8Array; key:boolean }
   | { t:'credentials'; hashHex:string }   // h1 = SHA256(pw||salt); UI may persist for "save password"
   | { t:'loginError'; message:string }
   | { t:'uac'; on:boolean }               // remote UAC prompt opened/closed (capture restarts around it)

@@ -1,4 +1,5 @@
 import { LoginRequest, Message, OptionMessage, SupportedDecoding } from '../gen/message';
+import { sha256 as sha256sync } from './sha256';
 
 const utf8 = new TextEncoder();
 
@@ -9,8 +10,12 @@ function cat(a: Uint8Array, b: Uint8Array): Uint8Array<ArrayBuffer> {
   return out;
 }
 
+// Deliberately not crypto.subtle: that is gated behind a secure context, and
+// this hash is the only reason the login path ever needed one. The vendored
+// implementation behaves identically everywhere, including over plain http://.
+// Kept async so every caller's signature is unchanged.
 async function sha256(data: Uint8Array<ArrayBuffer>): Promise<Uint8Array> {
-  return new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+  return sha256sync(data);
 }
 
 // h1 = SHA256(utf8(pw) || utf8(salt)) as RAW 32 bytes (never hex). This is the
