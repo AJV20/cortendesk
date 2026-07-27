@@ -113,6 +113,11 @@ class FakeSession implements SessionLike {
   setQuality(q: number): void {
     this.calls.push(['setQuality', q]);
   }
+  chats: string[] = [];
+  sendChat(text: string): void {
+    this.chats.push(text);
+  }
+
   sendClipboardText(text: string): void {
     this.calls.push(['sendClipboardText', text]);
   }

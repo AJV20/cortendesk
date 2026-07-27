@@ -247,3 +247,81 @@ describe.skipIf(typeof VideoDecoder === 'undefined')('probeSupportedDecoding (re
     expect(sd.i444).toBeUndefined();
   });
 });
+
+describe('decoder backpressure', () => {
+  it('drops delta frames once the decode queue is deep, but never key frames', () => {
+    const { StubVideoDecoder, chunks } = makeStubDecoder({ supported: ['vp09.00.10.08'] });
+    // A decoder that never drains: every decode leaves the queue deeper.
+    let depth = 0;
+    class Backed extends StubVideoDecoder {
+      get decodeQueueSize() {
+        return depth;
+      }
+      override decode(chunk: StubChunk) {
+        depth++;
+        chunks.push(chunk);
+        // Deliberately produces no output — a saturated decoder mid-catch-up.
+      }
+    }
+    stubGlobals(Backed);
+    const { pipe, onNeedRefresh } = makePipeline();
+
+    // Key frame first so the pipeline leaves awaitingKey.
+    pipe.pushFrame(vp9Frame([true]));
+    // Now push far more deltas than the queue cap allows.
+    for (let i = 0; i < 60; i++) pipe.pushFrame(vp9Frame([false]));
+
+    const deltas = chunks.filter((c) => c.type === 'delta').length;
+    expect(deltas).toBeGreaterThan(0);
+    expect(deltas).toBeLessThan(60); // some were dropped rather than queued
+    expect(onNeedRefresh).toHaveBeenCalled(); // and a key frame was requested
+
+    // A key frame must still get through even while the queue is deep.
+    const before = chunks.filter((c) => c.type === 'key').length;
+    pipe.pushFrame(vp9Frame([true]));
+    expect(chunks.filter((c) => c.type === 'key').length).toBe(before + 1);
+  });
+});
+
+describe('silent stall recovery', () => {
+  it('asks for a key frame when chunks are accepted but nothing renders', () => {
+    vi.useFakeTimers();
+    const { StubVideoDecoder } = makeStubDecoder({ supported: ['vp09.00.10.08'] });
+    // Accepts everything, throws nothing, never calls output(). This is the
+    // failure that error handling cannot see.
+    class Silent extends StubVideoDecoder {
+      override decode(_chunk: StubChunk) {}
+    }
+    stubGlobals(Silent);
+    const { pipe, onNeedRefresh } = makePipeline();
+
+    pipe.pushFrame(vp9Frame([true]));
+    onNeedRefresh.mockClear();
+
+    // Well inside the stall window: no complaint yet.
+    vi.advanceTimersByTime(500);
+    pipe.pushFrame(vp9Frame([false]));
+    expect(onNeedRefresh).not.toHaveBeenCalled();
+
+    // Past it: the pipeline should now be asking the peer to resend.
+    vi.advanceTimersByTime(5000);
+    pipe.pushFrame(vp9Frame([false]));
+    expect(onNeedRefresh).toHaveBeenCalled();
+  });
+
+  it('does not fire on a healthy session that keeps rendering', () => {
+    vi.useFakeTimers();
+    const { StubVideoDecoder } = makeStubDecoder({ supported: ['vp09.00.10.08'] });
+    stubGlobals(StubVideoDecoder); // its decode() always outputs a frame
+    const { pipe, onNeedRefresh } = makePipeline();
+
+    pipe.pushFrame(vp9Frame([true]));
+    onNeedRefresh.mockClear();
+
+    for (let i = 0; i < 20; i++) {
+      vi.advanceTimersByTime(1000);
+      pipe.pushFrame(vp9Frame([false]));
+    }
+    expect(onNeedRefresh).not.toHaveBeenCalled();
+  });
+});

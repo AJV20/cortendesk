@@ -6,6 +6,7 @@ import {
   ICONS,
   PERMISSION_CONTROLS,
   buildSessionConfig,
+  buildTypeCommands,
   cursorCss,
   displayToRect,
   formatDuration,
@@ -215,5 +216,31 @@ describe('secure context requirement', () => {
 
     // definition + on-load check + connect check
     expect(calls.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe('buildTypeCommands', () => {
+  it('sends ASCII as chr presses and non-ASCII as unicode', () => {
+    const cmds = buildTypeCommands('aé');
+    expect(cmds).toEqual([
+      { c: 'key', down: false, press: true, keyKind: 'chr', value: 97, modifiers: [] },
+      { c: 'key', down: false, press: true, keyKind: 'unicode', value: 0xe9, modifiers: [] },
+    ]);
+  });
+
+  it('maps newline and tab to control keys and drops carriage returns', () => {
+    const kinds = buildTypeCommands('a\r\n\tb').map((c) => (c.c === 'key' ? [c.keyKind, c.value] : null));
+    expect(kinds).toEqual([
+      ['chr', 97],
+      ['control', 27], // Return — \r of the CRLF pair must not double it
+      ['control', 31], // Tab
+      ['chr', 98],
+    ]);
+  });
+
+  it('handles astral code points as single unicode presses', () => {
+    const cmds = buildTypeCommands('🙂');
+    expect(cmds).toHaveLength(1);
+    expect(cmds[0]).toMatchObject({ keyKind: 'unicode', value: 0x1f642 });
   });
 });

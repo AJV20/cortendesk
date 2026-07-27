@@ -22,6 +22,31 @@ const MAX_DECODE_FAIL = 3;
 const REFRESH_DEBOUNCE_MS = 1000;
 const STATS_INTERVAL_MS = 1000;
 
+/**
+ * Backpressure: above this many chunks queued in the decoder, delta frames are
+ * dropped until it drains.
+ *
+ * Without a cap, a device that cannot decode as fast as frames arrive grows the
+ * queue without bound, and every frame is displayed later than the last — the
+ * picture stays smooth while drifting further behind reality, which is worse
+ * than a visible stutter because the operator does not realise they are acting
+ * on a stale screen. Dropping deltas costs picture quality until the next key
+ * frame and keeps latency bounded.
+ */
+const MAX_DECODE_QUEUE = 30;
+
+/**
+ * How long frames may arrive with nothing rendered before assuming the decoder
+ * is wedged and asking the peer for a fresh key frame.
+ *
+ * The failure this catches is silent: chunks are accepted, decode() does not
+ * throw, and no error callback fires, but no VideoFrame ever comes out. Error
+ * handling never engages because nothing reports an error — the session simply
+ * shows a frozen or black picture. Only comparing frames in against frames out
+ * detects it.
+ */
+const STALL_TIMEOUT_MS = 2500;
+
 async function probe(codec: string): Promise<boolean> {
   try {
     const res = await VideoDecoder.isConfigSupported({ codec, optimizeForLatency: true });
@@ -77,6 +102,9 @@ export class VideoPipeline {
   private lastW = 0;
   private lastH = 0;
   private closed = false;
+  // Stall detection: frames rendered out, and when the last one arrived.
+  private framesOut = 0;
+  private lastOutputMs = Date.now();
 
   constructor(
     private readonly canvas: OffscreenCanvas,
@@ -132,6 +160,16 @@ export class VideoPipeline {
         this.requestRefresh();
         continue;
       }
+      // Backpressure. Key frames always go through — dropping one would leave
+      // the decoder with nothing to resynchronise on and turn a slow session
+      // into a stuck one.
+      if (!f.key && (this.decoder?.decodeQueueSize ?? 0) > MAX_DECODE_QUEUE) {
+        this.framesDropped++;
+        // Ask for a key frame so the picture recovers cleanly once the queue
+        // drains, rather than showing deltas built on frames that were skipped.
+        this.requestRefresh();
+        continue;
+      }
       try {
         this.windowBytes += f.data.byteLength;
         this.decoder!.decode(
@@ -142,6 +180,7 @@ export class VideoPipeline {
           }),
         );
         this.awaitingKey = false;
+        this.checkStall();
       } catch {
         this.noteFailure(kase);
         if (this.disabled.has(kase) || !this.decoder || this.decoder.state === 'closed') break;
@@ -154,6 +193,10 @@ export class VideoPipeline {
     this.currentCase = null;
     this.awaitingKey = true;
     this.failStreak = 0;
+    // Without clearing these, a reconnect inherits the old counters and the
+    // stall check fires immediately on a session that is perfectly healthy.
+    this.framesOut = 0;
+    this.lastOutputMs = Date.now();
   }
 
   close(): void {
@@ -182,6 +225,8 @@ export class VideoPipeline {
 
   private handleOutput(frame: VideoFrame): void {
     this.failStreak = 0;
+    this.framesOut++;
+    this.lastOutputMs = Date.now();
     try {
       const w = frame.displayWidth;
       const h = frame.displayHeight;
@@ -236,6 +281,24 @@ export class VideoPipeline {
     if (now - this.lastRefreshMs < REFRESH_DEBOUNCE_MS) return;
     this.lastRefreshMs = now;
     this.onNeedRefresh();
+  }
+
+  /**
+   * Frames going in, nothing coming out — ask for a key frame.
+   *
+   * Gated on time since the last rendered frame, NOT on "has never produced
+   * one". A decoder that works for ten minutes and then wedges is the more
+   * common case, and a total-output check would never catch it. Because this
+   * runs only from the decode path it cannot fire on an idle session, where no
+   * chunks arrive and a frozen picture is simply a static screen.
+   */
+  private checkStall(): void {
+    if (this.closed) return;
+    if (Date.now() - this.lastOutputMs < STALL_TIMEOUT_MS) return;
+    // Reset the clock so this asks once per timeout window, not once per chunk.
+    this.lastOutputMs = Date.now();
+    this.awaitingKey = true;
+    this.requestRefresh();
   }
 
   private tickStats(): void {

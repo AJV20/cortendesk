@@ -57,6 +57,7 @@ export interface SessionLike {
   refresh(): void;
   setQuality(imageQuality: number): void;
   sendClipboardText(text: string): void;
+  sendChat(text: string): void;
   sendFileAction(union: NonNullable<FileAction['union']>): void;
   sendFileResponse(union: NonNullable<FileResponse['union']>): void;
   disconnect(): void;
@@ -279,6 +280,9 @@ export class WorkerHost {
         return;
       case 'clipboardText':
         this.session?.sendClipboardText(cmd.text);
+        return;
+      case 'chat':
+        this.session?.sendChat(cmd.text);
         return;
       case 'disconnect':
         this.session?.disconnect(); // emits 'closed' + closeAll -> teardown

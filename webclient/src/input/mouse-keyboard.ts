@@ -177,12 +177,48 @@ function modifierList(e: ModifierState): number[] {
 
 type KeyboardLock = { lock?: (keyCodes?: string[]) => Promise<void>; unlock?: () => void };
 
+export type InputOptions = {
+  /**
+   * When true, touch pointers get gesture mapping: dragging a finger moves the
+   * remote cursor without holding a button, a quick tap clicks where the
+   * finger was, and a still long-press right-clicks.
+   *
+   * Without it (pointer mode), a finger behaves like a pressed left button —
+   * touching immediately mouses-down and dragging drags. That is correct for
+   * a stylus or a touch-screen laptop, and hopeless on a phone, where the
+   * finger is also the only way to aim: every attempt to position the cursor
+   * drags whatever it lands on. Mouse/pen pointers are identical in both
+   * modes.
+   */
+  isTouchMode?: () => boolean;
+};
+
+const TOUCH_TAP_MS = 500;      // tap = shorter than this…
+const TOUCH_SLOP_PX = 12;      // …and moved less than this
+const TOUCH_LONGPRESS_MS = 600; // still for this long = right-click
+
 export function attachInput(
   el: HTMLElement,
   post: (cmd: UiCommand) => void,
   getDisplay: () => DisplayRect,
+  options: InputOptions = {},
 ): () => void {
   if (el.tabIndex < 0) el.tabIndex = 0; // keyboard focus target
+
+  // One-finger gesture state (touch mode). Secondary touches are ignored — a
+  // second finger mid-gesture would otherwise teleport the cursor.
+  let touch: {
+    id: number; startX: number; startY: number; lastX: number; lastY: number;
+    moved: boolean; downAt: number; timer: ReturnType<typeof setTimeout> | undefined;
+  } | null = null;
+
+  const touchActive = (e: PointerEvent): boolean =>
+    e.pointerType === 'touch' && options.isTouchMode?.() === true;
+
+  const sendAt = (clientX: number, clientY: number, mask: number): void => {
+    const { x, y } = mapCoords(clientX, clientY, el.getBoundingClientRect(), getDisplay());
+    post({ c: 'mouse', mask, x, y, modifiers: [] });
+  };
 
   const posted = (e: { clientX: number; clientY: number } & ModifierState, mask: number): void => {
     const { x, y } = mapCoords(e.clientX, e.clientY, el.getBoundingClientRect(), getDisplay());
@@ -190,6 +226,19 @@ export function attachInput(
   };
 
   const onPointerMove = (e: PointerEvent): void => {
+    if (touchActive(e)) {
+      if (!touch || e.pointerId !== touch.id) return;
+      const dx = e.clientX - touch.startX;
+      const dy = e.clientY - touch.startY;
+      if (!touch.moved && dx * dx + dy * dy > TOUCH_SLOP_PX * TOUCH_SLOP_PX) {
+        touch.moved = true;
+        clearTimeout(touch.timer);
+      }
+      touch.lastX = e.clientX;
+      touch.lastY = e.clientY;
+      sendAt(e.clientX, e.clientY, buttonMask(MouseType.MOVE, 0)); // cursor follows, no button
+      return;
+    }
     posted(e, buttonMask(MouseType.MOVE, 0));
   };
   const onPointerDown = (e: PointerEvent): void => {
@@ -200,10 +249,39 @@ export function attachInput(
       /* capture is best-effort */
     }
     e.preventDefault();
+    if (touchActive(e)) {
+      if (touch) return; // second finger — ignore
+      touch = {
+        id: e.pointerId, startX: e.clientX, startY: e.clientY,
+        lastX: e.clientX, lastY: e.clientY, moved: false, downAt: Date.now(),
+        timer: setTimeout(() => {
+          // Long-press, finger still: context menu where the finger rests.
+          if (!touch || touch.moved) return;
+          sendAt(touch.lastX, touch.lastY, buttonMask(MouseType.MOVE, 0));
+          sendAt(touch.lastX, touch.lastY, buttonMask(MouseType.DOWN, MouseButton.RIGHT));
+          sendAt(touch.lastX, touch.lastY, buttonMask(MouseType.UP, MouseButton.RIGHT));
+          touch = null; // consumed; the pointerup that follows does nothing
+        }, TOUCH_LONGPRESS_MS),
+      };
+      return;
+    }
     posted(e, buttonMask(MouseType.DOWN, domButtonToMask(e.button)));
   };
   const onPointerUp = (e: PointerEvent): void => {
     e.preventDefault();
+    if (e.pointerType === 'touch' && touch && e.pointerId === touch.id) {
+      clearTimeout(touch.timer);
+      const wasTap = !touch.moved && Date.now() - touch.downAt < TOUCH_TAP_MS;
+      const { startX, startY } = touch;
+      touch = null;
+      if (wasTap) {
+        sendAt(startX, startY, buttonMask(MouseType.MOVE, 0));
+        sendAt(startX, startY, buttonMask(MouseType.DOWN, MouseButton.LEFT));
+        sendAt(startX, startY, buttonMask(MouseType.UP, MouseButton.LEFT));
+      }
+      return;
+    }
+    if (touchActive(e)) return; // stray secondary finger
     posted(e, buttonMask(MouseType.UP, domButtonToMask(e.button)));
   };
   const onWheel = (e: WheelEvent): void => {

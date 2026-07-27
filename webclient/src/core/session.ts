@@ -1,5 +1,6 @@
 import type { DisplayInfo, Encryptor, SessionConfig, SessionEvent, SessionState } from './contracts';
 import {
+  ChatMessage,
   Clipboard,
   ClipboardFormat,
   ControlKey,
@@ -342,6 +343,11 @@ export class Session {
 
   private dispatchMisc(u: Misc['union']): void {
     switch (u?.$case) {
+      case 'chat_message':
+        // Chat is a Misc member, not a top-level Message — same channel as
+        // switch_display and refresh_video. Empty texts are keepalive noise.
+        if (u.chat_message.text) this.sinks.emit({ t: 'chat', text: u.chat_message.text });
+        return;
       case 'permission_info':
         this.sinks.emit({
           t: 'permission',
@@ -389,6 +395,7 @@ export class Session {
       displays,
       username: pi.username,
       hostname: pi.hostname,
+      platform: pi.platform,
       version: pi.version,
       current: pi.current_display,
     });
@@ -478,6 +485,13 @@ export class Session {
         format: ClipboardFormat.Text,
       }),
     });
+  }
+
+  sendChat(text: string): void {
+    // ChatMessage.text is plain UTF-8; protobuf handles the encoding. There is
+    // no per-message id or ack in the protocol, so the UI echoes what it sent
+    // rather than waiting for confirmation.
+    this.sendMisc({ $case: 'chat_message', chat_message: ChatMessage.fromPartial({ text }) });
   }
 
   // File-transfer connections: outbound FileAction (requests and upload control),

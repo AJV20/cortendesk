@@ -1,19 +1,21 @@
-// CortenDesk web client — main-thread UI shell: toolbar, slide-out stats, connect overlay.
+// CortenDesk web client — main-thread UI shell: top bar, command dock, side panel, connect overlay.
 //
-// DOM id contract (the Blade view provides these; each is created here if missing, and
-// #rd-canvas / #rd-stats / #rd-overlay are normalized INTO #rd-viewport on mount):
+// DOM id contract (the Blade view provides some; each is created here if missing, and
+// #rd-canvas / #rd-side / #rd-overlay are normalized INTO #rd-viewport on mount):
 //   #rd-root       page wrapper (toolbar + viewport); gets data-state="<SessionState>"
-//   #rd-toolbar    slim top bar — contents rendered by this module
-//   #rd-viewport   region between toolbar and page bottom; holds canvas, stats, overlay, toast
+//   #rd-toolbar    top bar — brand / control island / avatar, rendered by this module
+//   #rd-viewport   region between toolbar and page bottom; holds canvas, side panel, dock, overlay, toast
 //   #rd-canvas     <canvas> transferred to the session worker (replaced with a fresh node on reconnect)
-//   #rd-stats      right slide-out stats panel — contents rendered here; .rd-open = visible
+//   #rd-dock       floating bottom command bar — input, clipboard, panels
+//   #rd-side       right slide-out with Files / Chat / Details tabs; .rd-open = visible
+//   #rd-edge       edge strip of shortcuts shown while the side panel is closed
 //   #rd-overlay    connect overlay — rendered children: #rd-peer-id (row #rd-field-id, hidden when
 //                  the peer id is server-injected or in ?id=), #rd-password, #rd-connect,
 //                  #rd-overlay-status, #rd-overlay-error; .rd-hidden hides the overlay
 //   #rd-toast      transient notification (created here)
 //
 // Server-injected config:
-//   window.__RD__ = { peerId?, serverKeyB64, wsIdUrl, wsRelayUrl, myId, myName, workerUrl? }
+//   window.__RD__ = { peerId?, serverKeyB64, wsIdUrl, wsRelayUrl, myId, myName, version?, workerUrl? }
 // Worker script resolution order: __RD__.workerUrl → <script data-rd-worker="/rdclient/session.worker.js">
 // → 'session.worker.js' resolved next to the built app.js (import.meta.url).
 
@@ -28,14 +30,17 @@ import type {
 } from '../core/contracts';
 import { attachInput, type DisplayRect } from '../input/mouse-keyboard';
 import { readLocalClipboardText } from '../input/clipboard-cursor';
+import { ControlKey } from '../gen/message';
 import {
-  OVERLAY_VERSION,
+  overlayVersion,
   QUALITY,
   STATE_LABEL,
   buildSessionConfig,
+  buildTypeCommands,
   clearSavedHash,
   cursorCss,
   displayToRect,
+  escapeHtml,
   formatDuration,
   formatMbps,
   iconHtml,
@@ -55,19 +60,28 @@ export * from './common';
 
 type RdWindow = Window & { __RD__?: RdGlobalConfig };
 
+type SideTab = 'files' | 'chat' | 'details';
+type InputMode = 'pointer' | 'touch';
+type FitMode = 'fit' | 'actual';
+
+type ChatEntry = { who: 'me' | 'peer'; text: string; at: number };
+
 type Els = {
   root: HTMLElement;
   toolbar: HTMLElement;
   viewport: HTMLElement;
-  statsPanel: HTMLElement;
+  dock: HTMLElement;
+  side: HTMLElement;
+  edge: HTMLElement;
   overlay: HTMLElement;
   toast: HTMLElement;
   peerLabel: HTMLElement;
-  stateLabel: HTMLElement;
-  monitors: HTMLElement;
-  quality: HTMLSelectElement;
-  btnFullscreen: HTMLButtonElement;
-  btnStats: HTMLButtonElement;
+  peerSub: HTMLElement;
+  btnMonitors: HTMLButtonElement;
+  btnFit: HTMLButtonElement;
+  btnViewOnly: HTMLButtonElement;
+  chatList: HTMLElement;
+  chatInput: HTMLInputElement;
   statCodec: HTMLElement;
   statRes: HTMLElement;
   statFps: HTMLElement;
@@ -75,6 +89,9 @@ type Els = {
   statDropped: HTMLElement;
   statDuration: HTMLElement;
   statVersion: HTMLElement;
+  statDevice: HTMLElement;
+  statUser: HTMLElement;
+  statPlatform: HTMLElement;
   overlayPeer: HTMLElement;
   overlayTarget: HTMLElement;
   fieldId: HTMLElement;
@@ -94,14 +111,20 @@ function q<T extends Element>(scope: ParentNode, sel: string): T {
 }
 
 /**
- * Peer permission name (PermissionInfo_Permission) -> the toolbar control it
- * governs. Permissions with no control here are tracked but change nothing.
+ * Peer permission name (PermissionInfo_Permission) -> the control it governs.
+ * Permissions with no control here are tracked but change nothing. Keyboard
+ * additionally gates the modifier latches and Type (KEYBOARD_EXTRA_IDS) — the
+ * map keeps one canonical id per permission because the peer reports the
+ * permission, not the widgets.
  */
 export const PERMISSION_CONTROLS: Record<string, { id: string; title: string }> = {
   File: { id: 'rd-btn-files', title: 'File transfer' },
   Clipboard: { id: 'rd-btn-clip', title: 'Send clipboard to remote' },
-  Keyboard: { id: 'rd-btn-cad', title: 'Send Ctrl+Alt+Del' },
+  Keyboard: { id: 'rd-btn-cad', title: 'Keyboard shortcuts' },
 };
+
+/** Controls beyond the canonical one that a withdrawn Keyboard permission disables. */
+const KEYBOARD_EXTRA_IDS = ['rd-lat-ctrl', 'rd-lat-alt', 'rd-key-del', 'rd-btn-type'];
 
 export class RdApp {
   private cfg: RdGlobalConfig | undefined;
@@ -128,12 +151,29 @@ export class RdApp {
 
   private filePanel: FilePanel | undefined;
 
+  // --- chrome state ---------------------------------------------------------
+  private viewOnly = false;
+  private latchCtrl = false;
+  private latchAlt = false;
+  private inputMode: InputMode = 'pointer';
+  private fitMode: FitMode = 'fit';
+  private quality: number = QUALITY.balanced;
+  private sideTab: SideTab = 'files';
+  private chatLog: ChatEntry[] = [];
+  private chatUnread = 0;
+  private peerWho = ''; // user@host once peerInfo arrives
+  private peerPlatform = '';
+  private pop: HTMLElement | undefined; // the one open popover
+  private popAnchor: HTMLElement | undefined;
+  private popCleanup: (() => void) | undefined;
+
   mount(): void {
     (window as unknown as { __rdApp?: RdApp }).__rdApp = this; // console/debug handle
     this.cfg = (window as unknown as RdWindow).__RD__;
     this.ensureDom();
-    this.renderToolbar();
-    this.renderStats();
+    this.renderTopBar();
+    this.renderDock();
+    this.renderSide();
     this.renderOverlay();
 
     const attr = document
@@ -178,11 +218,6 @@ export class RdApp {
     }, 1000);
 
     window.addEventListener('beforeunload', () => this.post({ c: 'disconnect' }));
-    document.addEventListener('fullscreenchange', () => {
-      this.el.btnFullscreen.innerHTML = iconHtml(
-        document.fullscreenElement ? 'fullscreenExit' : 'fullscreen',
-      );
-    });
   }
 
   // --- DOM scaffolding -------------------------------------------------------
@@ -212,88 +247,99 @@ export class RdApp {
       canvas.id = 'rd-canvas';
     }
     viewport.appendChild(canvas);
-    let statsPanel = document.getElementById('rd-stats');
-    if (!statsPanel) {
-      statsPanel = document.createElement('div');
-      statsPanel.id = 'rd-stats';
+    // Pre-redesign mount point some cached pages still carry.
+    document.getElementById('rd-stats')?.remove();
+    const make = (id: string): HTMLElement => {
+      let n = document.getElementById(id);
+      if (!n) {
+        n = document.createElement('div');
+        n.id = id;
+      }
+      viewport.appendChild(n);
+      return n;
+    };
+    const side = make('rd-side');
+    const edge = make('rd-edge');
+    const overlay = make('rd-overlay');
+    const toast = make('rd-toast');
+    // The dock sits BELOW the viewport in normal flow, never over it — an
+    // overlay here hides exactly the strip of remote screen (the Windows
+    // taskbar) an operator most often needs.
+    let dock = document.getElementById('rd-dock');
+    if (!dock) {
+      dock = document.createElement('div');
+      dock.id = 'rd-dock';
     }
-    viewport.appendChild(statsPanel);
-    let overlay = document.getElementById('rd-overlay');
-    if (!overlay) {
-      overlay = document.createElement('div');
-      overlay.id = 'rd-overlay';
-    }
-    viewport.appendChild(overlay);
-    let toast = document.getElementById('rd-toast');
-    if (!toast) {
-      toast = document.createElement('div');
-      toast.id = 'rd-toast';
-      viewport.appendChild(toast);
-    }
+    root.appendChild(dock);
     root.dataset.state = 'closed';
+    viewport.dataset.fit = 'fit';
     this.canvas = canvas;
     this.el = {
       root,
       toolbar,
       viewport,
-      statsPanel,
+      dock,
+      side,
+      edge,
       overlay,
       toast,
     } as Els; // remaining refs filled by render*()
   }
 
-  private renderToolbar(): void {
-    const btn = (id: string, name: IconName, title: string, extra = ''): string =>
-      `<button type="button" class="rd-btn${extra}" id="${id}" title="${title}" aria-label="${title}">${iconHtml(name)}</button>`;
+  // --- top bar -----------------------------------------------------------------
+
+  private renderTopBar(): void {
+    const initials =
+      (this.cfg?.myName || this.cfg?.myId || '?')
+        .split(/[\s._-]+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((w) => w[0]!.toUpperCase())
+        .join('') || '?';
     this.el.toolbar.innerHTML = `
-      <div class="rd-tb-left">
-        <span class="rd-status-dot" aria-hidden="true"></span>
-        <span class="rd-peer" id="rd-peer-label"></span>
-        <span class="rd-state" id="rd-state-label"></span>
+      <div class="rd-tb-brand">
+        <img src="/rdclient/logo.png" alt="" width="30" height="30">
+        <span class="rd-tb-brandtext">
+          <span class="rd-tb-name">Corten<span>Desk</span></span>
+          <span class="rd-tb-sub">RustDesk Remote Console</span>
+        </span>
       </div>
-      <div class="rd-tb-right">
-        <span class="rd-monitors" id="rd-monitors" hidden></span>
-        <select class="rd-quality" id="rd-quality" title="Image quality" aria-label="Image quality">
-          <option value="${QUALITY.best}">Best</option>
-          <option value="${QUALITY.balanced}" selected>Balanced</option>
-          <option value="${QUALITY.speed}">Speed</option>
-        </select>
-        ${btn('rd-btn-files', 'folderTransfer', 'File transfer')}
-        ${btn('rd-btn-clip', 'clipboard', 'Send clipboard to remote')}
-        ${btn('rd-btn-cad', 'keyboard', 'Send Ctrl+Alt+Del')}
-        ${btn('rd-btn-refresh', 'refresh', 'Refresh video')}
-        ${btn('rd-btn-fullscreen', 'fullscreen', 'Fullscreen')}
-        ${btn('rd-btn-stats', 'pulse', 'Session stats')}
-        ${btn('rd-btn-disconnect', 'power', 'Disconnect', ' rd-danger')}
+      <div class="rd-tb-island">
+        <span class="rd-peer-chip">
+          <span class="rd-status-dot" aria-hidden="true"></span>
+          <span class="rd-peer-meta">
+            <span class="rd-peer" id="rd-peer-label">—</span>
+            <span class="rd-peer-sub" id="rd-peer-sub"></span>
+          </span>
+        </span>
+        <span class="rd-island-sep rd-stream-only" aria-hidden="true"></span>
+        <button type="button" class="rd-ib rd-stream-only" id="rd-btn-monitors" title="Select monitor" aria-label="Select monitor" aria-haspopup="true" hidden>${iconHtml('monitor')}</button>
+        <button type="button" class="rd-ib rd-stream-only" id="rd-btn-more" title="More options" aria-label="More options" aria-haspopup="true">${iconHtml('more')}</button>
+        <span class="rd-island-sep rd-stream-only" aria-hidden="true"></span>
+        <button type="button" class="rd-chip rd-stream-only" id="rd-btn-fit" aria-haspopup="true" title="Scale mode">
+          <span id="rd-fit-label">Fit to screen</span>${iconHtml('chevronDown')}
+        </button>
+        <button type="button" class="rd-chip rd-stream-only" id="rd-btn-viewonly" aria-pressed="false" title="Block all input to the remote device">
+          ${iconHtml('eye')}<span>View only</span>
+        </button>
+        <button type="button" class="rd-disconnect rd-stream-only" id="rd-btn-disconnect">Disconnect</button>
+      </div>
+      <div class="rd-tb-user">
+        <span class="rd-avatar" title="${escapeHtml(this.cfg?.myName || this.cfg?.myId || '')}">${escapeHtml(initials)}</span>
       </div>`;
     const t = this.el.toolbar;
     this.el.peerLabel = q(t, '#rd-peer-label');
-    this.el.stateLabel = q(t, '#rd-state-label');
-    this.el.monitors = q(t, '#rd-monitors');
-    this.el.quality = q(t, '#rd-quality');
-    this.el.btnFullscreen = q(t, '#rd-btn-fullscreen');
-    this.el.btnStats = q(t, '#rd-btn-stats');
+    this.el.peerSub = q(t, '#rd-peer-sub');
+    this.el.btnMonitors = q(t, '#rd-btn-monitors');
+    this.el.btnFit = q(t, '#rd-btn-fit');
+    this.el.btnViewOnly = q(t, '#rd-btn-viewonly');
 
-    this.el.quality.addEventListener('change', () => {
-      this.post({ c: 'quality', imageQuality: Number(this.el.quality.value) });
-    });
-    q<HTMLButtonElement>(t, '#rd-btn-files').addEventListener('click', () => {
-      this.openFileTransfer();
-    });
-    q<HTMLButtonElement>(t, '#rd-btn-clip').addEventListener('click', () => {
-      void this.sendClipboard();
-    });
-    q<HTMLButtonElement>(t, '#rd-btn-cad').addEventListener('click', () => {
-      this.post({ c: 'ctrlAltDel' });
-      this.toast('Ctrl+Alt+Del sent');
-    });
-    q<HTMLButtonElement>(t, '#rd-btn-refresh').addEventListener('click', () => {
-      this.post({ c: 'refresh' });
-    });
-    this.el.btnFullscreen.addEventListener('click', () => {
-      void this.toggleFullscreen();
-    });
-    this.el.btnStats.addEventListener('click', () => this.toggleStats());
+    this.el.btnMonitors.addEventListener('click', () => this.openMonitorPop());
+    q<HTMLButtonElement>(t, '#rd-btn-more').addEventListener('click', (e) =>
+      this.openMorePop(e.currentTarget as HTMLElement),
+    );
+    this.el.btnFit.addEventListener('click', () => this.openFitPop());
+    this.el.btnViewOnly.addEventListener('click', () => this.toggleViewOnly());
     q<HTMLButtonElement>(t, '#rd-btn-disconnect').addEventListener('click', () => {
       this.setLoggedOutFlag(true); // an explicit logout must not auto-login on reload
       this.post({ c: 'disconnect' });
@@ -301,33 +347,489 @@ export class RdApp {
     });
   }
 
-  private renderStats(): void {
-    const row = (id: string, label: string): string =>
-      `<div class="rd-stat-row"><dt>${label}</dt><dd id="${id}">—</dd></div>`;
-    this.el.statsPanel.innerHTML = `
-      <div class="rd-stats-head">
-        <span>Session</span>
-        <button type="button" class="rd-btn" id="rd-stats-close" title="Close" aria-label="Close stats">&times;</button>
-      </div>
-      <dl class="rd-stats-body">
-        ${row('rd-stat-codec', 'Codec')}
-        ${row('rd-stat-res', 'Resolution')}
-        ${row('rd-stat-fps', 'FPS')}
-        ${row('rd-stat-bitrate', 'Bitrate')}
-        ${row('rd-stat-dropped', 'Frames dropped')}
-        ${row('rd-stat-duration', 'Duration')}
-        ${row('rd-stat-version', 'Peer version')}
-      </dl>`;
-    const p = this.el.statsPanel;
-    this.el.statCodec = q(p, '#rd-stat-codec');
-    this.el.statRes = q(p, '#rd-stat-res');
-    this.el.statFps = q(p, '#rd-stat-fps');
-    this.el.statBitrate = q(p, '#rd-stat-bitrate');
-    this.el.statDropped = q(p, '#rd-stat-dropped');
-    this.el.statDuration = q(p, '#rd-stat-duration');
-    this.el.statVersion = q(p, '#rd-stat-version');
-    q<HTMLButtonElement>(p, '#rd-stats-close').addEventListener('click', () => this.toggleStats(false));
+  private toggleViewOnly(): void {
+    this.viewOnly = !this.viewOnly;
+    this.el.btnViewOnly.setAttribute('aria-pressed', String(this.viewOnly));
+    this.el.btnViewOnly.classList.toggle('rd-on', this.viewOnly);
+    // Latched modifiers make no sense with input off; drop them quietly.
+    if (this.viewOnly) this.setLatches(false, false);
+    this.toast(this.viewOnly ? 'View only — input is not sent' : 'Input enabled');
   }
+
+  // --- bottom dock ---------------------------------------------------------------
+
+  private renderDock(): void {
+    const db = (id: string, icon: IconName, label: string, title = label): string =>
+      `<button type="button" class="rd-db" id="${id}" title="${title}" aria-label="${title}">` +
+      `${iconHtml(icon)}<span>${label}</span></button>`;
+    this.el.dock.innerHTML = `
+      <div class="rd-dock-group" role="group" aria-label="Keyboard">
+        ${db('rd-lat-ctrl', 'keyboard', 'Ctrl', 'Hold Ctrl for clicks and keys')}
+        ${db('rd-lat-alt', 'keyboard', 'Alt', 'Hold Alt for clicks and keys')}
+        ${db('rd-key-del', 'keyboard', 'Del', 'Send Delete')}
+        ${db('rd-btn-cad', 'keyboard', 'Keys', 'Keyboard shortcuts')}
+      </div>
+      <span class="rd-dock-sep" aria-hidden="true"></span>
+      <div class="rd-dock-group" role="group" aria-label="Input mode">
+        ${db('rd-mode-pointer', 'pointer', 'Pointer', 'Pointer mode — touch acts as a pressed button')}
+        ${db('rd-mode-touch', 'touch', 'Touch', 'Touch mode — drag moves the cursor, tap clicks, long-press right-clicks')}
+      </div>
+      <span class="rd-dock-sep" aria-hidden="true"></span>
+      <div class="rd-dock-group" role="group" aria-label="Send">
+        ${db('rd-btn-type', 'typeText', 'Type', 'Type text on the remote device')}
+        ${db('rd-btn-clip', 'clipboard', 'Clipboard', 'Send clipboard to remote')}
+      </div>
+      <span class="rd-dock-sep" aria-hidden="true"></span>
+      <div class="rd-dock-group" role="group" aria-label="Panels">
+        ${db('rd-btn-files', 'folderTransfer', 'File Transfer')}
+        ${db('rd-btn-chat', 'chat', 'Chat')}
+        ${db('rd-btn-session', 'info', 'Session', 'Session details')}
+      </div>`;
+    const d = this.el.dock;
+    q<HTMLButtonElement>(d, '#rd-lat-ctrl').addEventListener('click', () =>
+      this.setLatches(!this.latchCtrl, this.latchAlt),
+    );
+    q<HTMLButtonElement>(d, '#rd-lat-alt').addEventListener('click', () =>
+      this.setLatches(this.latchCtrl, !this.latchAlt),
+    );
+    q<HTMLButtonElement>(d, '#rd-key-del').addEventListener('click', () => {
+      this.pressControl(ControlKey.Delete, 'Delete sent');
+    });
+    q<HTMLButtonElement>(d, '#rd-btn-cad').addEventListener('click', (e) =>
+      this.openKeysPop(e.currentTarget as HTMLElement),
+    );
+    q<HTMLButtonElement>(d, '#rd-mode-pointer').addEventListener('click', () => this.setInputMode('pointer'));
+    q<HTMLButtonElement>(d, '#rd-mode-touch').addEventListener('click', () => this.setInputMode('touch'));
+    this.setInputMode('pointer');
+    q<HTMLButtonElement>(d, '#rd-btn-type').addEventListener('click', (e) =>
+      this.openTypePop(e.currentTarget as HTMLElement),
+    );
+    q<HTMLButtonElement>(d, '#rd-btn-clip').addEventListener('click', () => {
+      void this.sendClipboard();
+    });
+    q<HTMLButtonElement>(d, '#rd-btn-files').addEventListener('click', () => this.openSide('files'));
+    q<HTMLButtonElement>(d, '#rd-btn-chat').addEventListener('click', () => this.openSide('chat'));
+    q<HTMLButtonElement>(d, '#rd-btn-session').addEventListener('click', () => this.openSide('details'));
+  }
+
+  private setInputMode(mode: InputMode): void {
+    this.inputMode = mode;
+    this.el.dock.querySelector('#rd-mode-pointer')?.classList.toggle('rd-on', mode === 'pointer');
+    this.el.dock.querySelector('#rd-mode-touch')?.classList.toggle('rd-on', mode === 'touch');
+  }
+
+  private setLatches(ctrl: boolean, alt: boolean): void {
+    this.latchCtrl = ctrl;
+    this.latchAlt = alt;
+    for (const [id, on] of [
+      ['rd-lat-ctrl', ctrl],
+      ['rd-lat-alt', alt],
+    ] as const) {
+      const b = this.el.dock.querySelector<HTMLButtonElement>(`#${id}`);
+      b?.classList.toggle('rd-on', on);
+      b?.setAttribute('aria-pressed', String(on));
+    }
+  }
+
+  /** Send a single control key as a press (down+up in one message). */
+  private pressControl(key: ControlKey, note?: string): void {
+    this.post({ c: 'key', down: false, press: true, keyKind: 'control', value: key, modifiers: [] });
+    if (note) this.toast(note);
+  }
+
+  // --- side panel (Files / Chat / Details) ----------------------------------------
+
+  private renderSide(): void {
+    const tab = (id: SideTab, icon: IconName, label: string): string =>
+      `<button type="button" class="rd-tab" data-tab="${id}" role="tab" aria-selected="false">` +
+      `${iconHtml(icon)}<span>${label}</span><i class="rd-badge" hidden></i></button>`;
+    this.el.side.innerHTML = `
+      <header class="rd-side-head">
+        <div class="rd-side-tabs" role="tablist">
+          ${tab('files', 'folderTransfer', 'Files')}
+          ${tab('chat', 'chat', 'Chat')}
+          ${tab('details', 'info', 'Details')}
+        </div>
+        <button type="button" class="rd-ib" id="rd-side-close" title="Close panel" aria-label="Close panel">${iconHtml('close')}</button>
+      </header>
+      <div class="rd-side-body">
+        <section class="rd-pane" data-pane="files" hidden></section>
+        <section class="rd-pane rd-pane-chat" data-pane="chat" hidden>
+          <div class="rd-chat-list" id="rd-chat-list"></div>
+          <form class="rd-chat-compose" id="rd-chat-form">
+            <input type="text" id="rd-chat-input" autocomplete="off" placeholder="Message the remote user…" maxlength="2000">
+            <button type="submit" class="rd-ib rd-chat-send" title="Send" aria-label="Send message">${iconHtml('send')}</button>
+          </form>
+        </section>
+        <section class="rd-pane rd-pane-details" data-pane="details" hidden>
+          <dl class="rd-stats-body">
+            <div class="rd-stat-row"><dt>Device</dt><dd id="rd-stat-device">—</dd></div>
+            <div class="rd-stat-row"><dt>User</dt><dd id="rd-stat-user">—</dd></div>
+            <div class="rd-stat-row"><dt>Platform</dt><dd id="rd-stat-platform">—</dd></div>
+            <div class="rd-stat-row"><dt>Peer version</dt><dd id="rd-stat-version">—</dd></div>
+            <div class="rd-stat-row"><dt>Codec</dt><dd id="rd-stat-codec">—</dd></div>
+            <div class="rd-stat-row"><dt>Resolution</dt><dd id="rd-stat-res">—</dd></div>
+            <div class="rd-stat-row"><dt>FPS</dt><dd id="rd-stat-fps">—</dd></div>
+            <div class="rd-stat-row"><dt>Bitrate</dt><dd id="rd-stat-bitrate">—</dd></div>
+            <div class="rd-stat-row"><dt>Frames dropped</dt><dd id="rd-stat-dropped">—</dd></div>
+            <div class="rd-stat-row"><dt>Duration</dt><dd id="rd-stat-duration">—</dd></div>
+          </dl>
+        </section>
+      </div>`;
+    this.el.edge.innerHTML = `
+      <button type="button" class="rd-edge-btn" data-open="files" title="File transfer" aria-label="Open file transfer">${iconHtml('folderTransfer')}</button>
+      <button type="button" class="rd-edge-btn" data-open="chat" title="Chat" aria-label="Open chat">${iconHtml('chat')}<i class="rd-badge" hidden></i></button>
+      <button type="button" class="rd-edge-btn" data-open="details" title="Session details" aria-label="Open session details">${iconHtml('info')}</button>`;
+
+    const s = this.el.side;
+    this.el.chatList = q(s, '#rd-chat-list');
+    this.el.chatInput = q(s, '#rd-chat-input');
+    this.el.statDevice = q(s, '#rd-stat-device');
+    this.el.statUser = q(s, '#rd-stat-user');
+    this.el.statPlatform = q(s, '#rd-stat-platform');
+    this.el.statVersion = q(s, '#rd-stat-version');
+    this.el.statCodec = q(s, '#rd-stat-codec');
+    this.el.statRes = q(s, '#rd-stat-res');
+    this.el.statFps = q(s, '#rd-stat-fps');
+    this.el.statBitrate = q(s, '#rd-stat-bitrate');
+    this.el.statDropped = q(s, '#rd-stat-dropped');
+    this.el.statDuration = q(s, '#rd-stat-duration');
+
+    for (const b of s.querySelectorAll<HTMLButtonElement>('.rd-tab')) {
+      b.addEventListener('click', () => this.openSide(b.dataset.tab as SideTab));
+    }
+    q<HTMLButtonElement>(s, '#rd-side-close').addEventListener('click', () => this.closeSide());
+    for (const b of this.el.edge.querySelectorAll<HTMLButtonElement>('.rd-edge-btn')) {
+      b.addEventListener('click', () => this.openSide(b.dataset.open as SideTab));
+    }
+    q<HTMLFormElement>(s, '#rd-chat-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      this.sendChatFromInput();
+    });
+  }
+
+  private get sideOpen(): boolean {
+    return this.el.side.classList.contains('rd-open');
+  }
+
+  private openSide(tabName: SideTab): void {
+    if (this.state !== 'streaming') {
+      this.toast('Connect to a device first');
+      return;
+    }
+    // Same tab, already open -> the dock button acts as a toggle.
+    if (this.sideOpen && this.sideTab === tabName) {
+      this.closeSide();
+      return;
+    }
+    if (tabName === 'files') {
+      if (this.permissions.File === false) {
+        this.toast('This device does not permit file transfer');
+        return;
+      }
+      this.ensureFilePanel();
+    }
+    this.sideTab = tabName;
+    this.el.side.classList.add('rd-open');
+    this.el.root.classList.add('rd-side-is-open');
+    for (const b of this.el.side.querySelectorAll<HTMLButtonElement>('.rd-tab')) {
+      const active = b.dataset.tab === tabName;
+      b.classList.toggle('rd-active', active);
+      b.setAttribute('aria-selected', String(active));
+    }
+    for (const p of this.el.side.querySelectorAll<HTMLElement>('.rd-pane')) {
+      p.hidden = p.dataset.pane !== tabName;
+    }
+    for (const [id, on] of [
+      ['rd-btn-files', tabName === 'files'],
+      ['rd-btn-chat', tabName === 'chat'],
+      ['rd-btn-session', tabName === 'details'],
+    ] as const) {
+      this.el.dock.querySelector(`#${id}`)?.classList.toggle('rd-on', on);
+    }
+    if (tabName === 'chat') {
+      this.chatUnread = 0;
+      this.renderChatBadges();
+      this.renderChatList();
+      this.el.chatInput.focus();
+    }
+  }
+
+  private closeSide(): void {
+    this.el.side.classList.remove('rd-open');
+    this.el.root.classList.remove('rd-side-is-open');
+    for (const id of ['rd-btn-files', 'rd-btn-chat', 'rd-btn-session']) {
+      this.el.dock.querySelector(`#${id}`)?.classList.remove('rd-on');
+    }
+  }
+
+  // The file panel mounts INSIDE the Files pane. Its FILE_TRANSFER connection
+  // reuses this session's h1 credential — no second password prompt.
+  private ensureFilePanel(): void {
+    if (this.filePanel) {
+      this.filePanel.open();
+      return;
+    }
+    const pane = q<HTMLElement>(this.el.side, '[data-pane="files"]');
+    this.filePanel = new FilePanel({
+      viewport: pane,
+      workerUrl: this.workerUrl,
+      toast: (msg) => this.toast(msg),
+      getConfig: () => {
+        if (!this.cfg || this.state !== 'streaming') return null;
+        return buildSessionConfig(this.cfg, this.peerId, '', this.sessionHashHex, 'fileTransfer');
+      },
+    });
+    this.filePanel.open();
+  }
+
+  // --- chat -----------------------------------------------------------------------
+
+  private sendChatFromInput(): void {
+    const text = this.el.chatInput.value.trim();
+    if (!text || this.state !== 'streaming') return;
+    this.post({ c: 'chat', text });
+    // No delivery ack exists in the protocol; echo what we sent.
+    this.chatLog.push({ who: 'me', text, at: Date.now() });
+    this.el.chatInput.value = '';
+    this.renderChatList();
+  }
+
+  private onChat(text: string): void {
+    this.chatLog.push({ who: 'peer', text, at: Date.now() });
+    if (this.sideOpen && this.sideTab === 'chat') {
+      this.renderChatList();
+    } else {
+      this.chatUnread++;
+      this.renderChatBadges();
+      this.toast(`Chat: ${text.length > 80 ? text.slice(0, 77) + '…' : text}`);
+    }
+  }
+
+  private renderChatList(): void {
+    const fmt = (at: number): string => {
+      const d = new Date(at);
+      return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    };
+    this.el.chatList.innerHTML = this.chatLog.length
+      ? this.chatLog
+          .map(
+            (m) =>
+              `<div class="rd-msg-row rd-from-${m.who}"><span class="rd-bubble">${escapeHtml(m.text)}</span>` +
+              `<span class="rd-msg-time">${fmt(m.at)}</span></div>`,
+          )
+          .join('')
+      : '<div class="rd-chat-empty">No messages yet. Anything you send pops up on the remote screen.</div>';
+    this.el.chatList.scrollTop = this.el.chatList.scrollHeight;
+  }
+
+  private renderChatBadges(): void {
+    // The dock chat button gains its badge lazily so renderDock stays simple.
+    if (!this.el.dock.querySelector('#rd-btn-chat .rd-badge')) {
+      const b = document.createElement('i');
+      b.className = 'rd-badge';
+      b.hidden = true;
+      this.el.dock.querySelector('#rd-btn-chat')?.appendChild(b);
+    }
+    const label = this.chatUnread > 9 ? '9+' : String(this.chatUnread);
+    for (const b of this.el.root.querySelectorAll<HTMLElement>('.rd-badge')) {
+      b.hidden = this.chatUnread === 0;
+      b.textContent = label;
+    }
+  }
+
+  // --- popovers ---------------------------------------------------------------------
+
+  private closePop(): void {
+    this.popCleanup?.();
+    this.popCleanup = undefined;
+    this.pop?.remove();
+    this.pop = undefined;
+    this.popAnchor = undefined;
+  }
+
+  /**
+   * One popover at a time, anchored to a control. Clicking the same anchor
+   * again closes it; outside pointer-down and Esc close it; `up` opens above
+   * the anchor (for the dock).
+   */
+  private openPop(anchor: HTMLElement, build: (pop: HTMLElement) => void, up = false): void {
+    if (this.pop && this.popAnchor === anchor) {
+      this.closePop();
+      return;
+    }
+    this.closePop();
+    const pop = document.createElement('div');
+    pop.className = 'rd-pop';
+    pop.setAttribute('role', 'menu');
+    build(pop);
+    this.el.root.appendChild(pop);
+    const a = anchor.getBoundingClientRect();
+    const r = pop.getBoundingClientRect();
+    let left = a.left + a.width / 2 - r.width / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - r.width - 8));
+    const top = up ? a.top - r.height - 10 : a.bottom + 10;
+    pop.style.left = `${Math.round(left)}px`;
+    pop.style.top = `${Math.round(Math.max(8, top))}px`;
+    this.pop = pop;
+    this.popAnchor = anchor;
+
+    const onDown = (e: Event): void => {
+      const t = e.target as Node;
+      if (!pop.contains(t) && !anchor.contains(t)) this.closePop();
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') this.closePop();
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    document.addEventListener('keydown', onKey, true);
+    this.popCleanup = () => {
+      document.removeEventListener('pointerdown', onDown, true);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  }
+
+  private menuItem(icon: IconName | null, label: string, checked = false): string {
+    return (
+      `<button type="button" class="rd-mi${checked ? ' rd-checked' : ''}" role="menuitem">` +
+      `${icon ? iconHtml(icon) : '<span class="rd-mi-pad"></span>'}` +
+      `<span class="rd-mi-label">${escapeHtml(label)}</span>` +
+      `${checked ? iconHtml('check') : ''}</button>`
+    );
+  }
+
+  private openMonitorPop(): void {
+    this.openPop(this.el.btnMonitors, (pop) => {
+      // DisplayInfo carries index/geometry/name only — the protocol sends no
+      // per-monitor preview, so these are honest tiles, not fake thumbnails.
+      pop.innerHTML =
+        '<div class="rd-pop-title">Select monitor</div>' +
+        this.displays
+          .map((d, i) => {
+            const label = d.name?.trim() || `Monitor ${i + 1}`;
+            return (
+              `<button type="button" class="rd-mon-tile${i === this.current ? ' rd-checked' : ''}" data-idx="${i}" role="menuitem">` +
+              `<span class="rd-mon-num">${i + 1}</span>` +
+              `<span class="rd-mon-meta"><span class="rd-mon-name">${escapeHtml(label)}</span>` +
+              `<span class="rd-mon-res">${d.width}×${d.height}</span></span>` +
+              `${i === this.current ? iconHtml('check') : ''}</button>`
+            );
+          })
+          .join('');
+      for (const b of pop.querySelectorAll<HTMLButtonElement>('.rd-mon-tile')) {
+        b.addEventListener('click', () => {
+          const i = Number(b.dataset.idx);
+          this.post({ c: 'switchDisplay', index: i });
+          this.current = i;
+          this.closePop();
+        });
+      }
+    });
+  }
+
+  private openMorePop(anchor: HTMLElement): void {
+    this.openPop(anchor, (pop) => {
+      const fs = !!document.fullscreenElement;
+      pop.innerHTML =
+        this.menuItem('refresh', 'Refresh video') +
+        this.menuItem(fs ? 'fullscreenExit' : 'fullscreen', fs ? 'Exit fullscreen' : 'Fullscreen') +
+        '<div class="rd-pop-sep"></div><div class="rd-pop-title">Image quality</div>' +
+        this.menuItem(null, 'Best', this.quality === QUALITY.best) +
+        this.menuItem(null, 'Balanced', this.quality === QUALITY.balanced) +
+        this.menuItem(null, 'Speed', this.quality === QUALITY.speed);
+      const items = pop.querySelectorAll<HTMLButtonElement>('.rd-mi');
+      items[0]?.addEventListener('click', () => {
+        this.post({ c: 'refresh' });
+        this.closePop();
+      });
+      items[1]?.addEventListener('click', () => {
+        void this.toggleFullscreen();
+        this.closePop();
+      });
+      const qv = [QUALITY.best, QUALITY.balanced, QUALITY.speed];
+      [items[2], items[3], items[4]].forEach((b, i) => {
+        b?.addEventListener('click', () => {
+          this.quality = qv[i]!;
+          this.post({ c: 'quality', imageQuality: this.quality });
+          this.closePop();
+        });
+      });
+    });
+  }
+
+  private openFitPop(): void {
+    this.openPop(this.el.btnFit, (pop) => {
+      pop.innerHTML =
+        this.menuItem(null, 'Fit to screen', this.fitMode === 'fit') +
+        this.menuItem(null, 'Actual size', this.fitMode === 'actual');
+      const items = pop.querySelectorAll<HTMLButtonElement>('.rd-mi');
+      const set = (mode: FitMode, label: string): void => {
+        this.fitMode = mode;
+        this.el.viewport.dataset.fit = mode;
+        q(this.el.toolbar, '#rd-fit-label').textContent = label;
+        this.closePop();
+      };
+      items[0]?.addEventListener('click', () => set('fit', 'Fit to screen'));
+      items[1]?.addEventListener('click', () => set('actual', 'Actual size'));
+    });
+  }
+
+  private openKeysPop(anchor: HTMLElement): void {
+    this.openPop(
+      anchor,
+      (pop) => {
+        pop.innerHTML =
+          '<div class="rd-pop-title">Send to remote</div>' +
+          this.menuItem('keyboard', 'Ctrl+Alt+Del') +
+          this.menuItem('keyboard', 'Windows key') +
+          this.menuItem('keyboard', 'PrintScreen') +
+          this.menuItem('keyboard', 'Escape') +
+          this.menuItem('keyboard', 'Tab');
+        const acts: [string, () => void][] = [
+          ['Ctrl+Alt+Del sent', () => this.post({ c: 'ctrlAltDel' })],
+          ['Windows key sent', () => this.pressControl(ControlKey.Meta)],
+          ['PrintScreen sent', () => this.pressControl(ControlKey.Snapshot)],
+          ['Escape sent', () => this.pressControl(ControlKey.Escape)],
+          ['Tab sent', () => this.pressControl(ControlKey.Tab)],
+        ];
+        pop.querySelectorAll<HTMLButtonElement>('.rd-mi').forEach((b, i) => {
+          b.addEventListener('click', () => {
+            acts[i]![1]();
+            this.toast(acts[i]![0]);
+            this.closePop();
+          });
+        });
+      },
+      true,
+    );
+  }
+
+  private openTypePop(anchor: HTMLElement): void {
+    this.openPop(
+      anchor,
+      (pop) => {
+        pop.classList.add('rd-pop-type');
+        pop.innerHTML = `
+          <div class="rd-pop-title">Type on the remote device</div>
+          <textarea id="rd-type-text" rows="4" placeholder="Sent as keystrokes — works where the remote clipboard does not."></textarea>
+          <div class="rd-pop-actions">
+            <button type="button" class="rd-chip rd-chip-solid" id="rd-type-send">${iconHtml('send')}<span>Send keystrokes</span></button>
+          </div>`;
+        const ta = q<HTMLTextAreaElement>(pop, '#rd-type-text');
+        setTimeout(() => ta.focus(), 0);
+        q<HTMLButtonElement>(pop, '#rd-type-send').addEventListener('click', () => {
+          const text = ta.value;
+          if (!text) return;
+          for (const cmd of buildTypeCommands(text)) this.post(cmd);
+          this.toast(`Typed ${text.length} character${text.length === 1 ? '' : 's'}`);
+          this.closePop();
+        });
+      },
+      true,
+    );
+  }
+
+  // --- connect overlay ------------------------------------------------------------
 
   private renderOverlay(): void {
     const svg = (paths: string, size = 20): string =>
@@ -342,7 +844,7 @@ export class RdApp {
           <img class="rd-logo" src="/rdclient/logo.png" alt="CortenDesk" width="60" height="60">
           <span class="rd-wordmark">Corten<span>Desk</span></span>
         </div>
-        <div class="rd-tagline">Web-Based Client ${OVERLAY_VERSION}</div>
+        <div class="rd-tagline">Web-Based Client ${overlayVersion(this.cfg)}</div>
         <div class="rd-divider" aria-hidden="true"></div>
         <p class="rd-help">Enter the client's temporary or permanent password assigned in the RustDesk client.</p>
         <div class="rd-target" id="rd-target" hidden>
@@ -480,9 +982,21 @@ export class RdApp {
 
   private startSession(config: SessionConfig): void {
     this.teardown();
-    // A fresh connection may be a different peer/credential — retire the panel.
+    // A fresh connection may be a different peer/credential — retire the panel
+    // and everything else that belonged to the previous session.
     this.filePanel?.destroy();
     this.filePanel = undefined;
+    this.closeSide();
+    this.closePop();
+    this.chatLog = [];
+    this.chatUnread = 0;
+    this.renderChatBadges();
+    this.viewOnly = false;
+    this.el.btnViewOnly.classList.remove('rd-on');
+    this.el.btnViewOnly.setAttribute('aria-pressed', 'false');
+    this.setLatches(false, false);
+    this.peerWho = '';
+    this.peerPlatform = '';
     this.sessionHashHex = config.savedHashHex;
     this.stats = undefined;
     this.streamStartMs = 0;
@@ -496,8 +1010,11 @@ export class RdApp {
     worker.onerror = (e: ErrorEvent) => this.setState('error', e.message || 'session worker failed');
     const cmd: UiCommand = { c: 'connect', config, canvas: offscreen };
     worker.postMessage(cmd, [offscreen]);
-    this.detach = attachInput(canvas, (c) => this.post(c), () => this.currentRect());
+    this.detach = attachInput(canvas, (c) => this.post(c), () => this.currentRect(), {
+      isTouchMode: () => this.inputMode === 'touch',
+    });
     this.el.peerLabel.textContent = this.peerId;
+    this.el.statDevice.textContent = this.peerId;
     this.resetPermissions();
     this.setState('connecting');
   }
@@ -521,7 +1038,20 @@ export class RdApp {
     if (w) setTimeout(() => w.terminate(), 250); // let a pending 'disconnect' flush first
   }
 
+  /**
+   * Single choke point to the worker. View-only swallows everything that would
+   * act on the remote device. The Ctrl/Alt latches merge into the modifiers of
+   * key and mouse traffic — a pure merge, no synthetic key down/up, so a
+   * dropped session can never leave a modifier stuck on the peer.
+   */
   private post(cmd: UiCommand): void {
+    if (this.viewOnly && (cmd.c === 'mouse' || cmd.c === 'key' || cmd.c === 'ctrlAltDel')) return;
+    if ((this.latchCtrl || this.latchAlt) && (cmd.c === 'mouse' || cmd.c === 'key')) {
+      const extra: number[] = [];
+      if (this.latchCtrl) extra.push(ControlKey.Control);
+      if (this.latchAlt) extra.push(ControlKey.Alt);
+      cmd = { ...cmd, modifiers: [...new Set([...cmd.modifiers, ...extra])] };
+    }
     this.worker?.postMessage(cmd);
   }
 
@@ -544,10 +1074,14 @@ export class RdApp {
       case 'peerInfo': {
         this.displays = ev.displays;
         this.current = ev.current;
-        const who = ev.username ? `${ev.username}@${ev.hostname}` : ev.hostname;
-        this.el.peerLabel.textContent = who ? `${this.peerId} · ${who}` : this.peerId;
+        this.peerWho = ev.username ? `${ev.username}@${ev.hostname}` : ev.hostname;
+        this.peerPlatform = ev.platform || '';
+        this.el.peerLabel.textContent = this.peerWho || this.peerId;
+        this.refreshPeerSub();
         this.el.statVersion.textContent = ev.version || '—';
-        this.renderMonitors();
+        this.el.statUser.textContent = this.peerWho || '—';
+        this.el.statPlatform.textContent = this.peerPlatform || '—';
+        this.el.btnMonitors.hidden = this.displays.length < 2;
         document.title = `${this.peerId} — CortenDesk`;
         break;
       }
@@ -564,6 +1098,9 @@ export class RdApp {
           ?.writeText(ev.text)
           .then(() => this.toast('Remote clipboard received'))
           .catch(() => this.toast('Remote clipboard received (press Ctrl+V on this page to sync)'));
+        break;
+      case 'chat':
+        this.onChat(ev.text);
         break;
       case 'permission':
         this.applyPermission(ev.kind, ev.enabled);
@@ -615,10 +1152,21 @@ export class RdApp {
     if (this.pendingHashHex) saveSavedHash(this.peerId, this.pendingHashHex);
   }
 
+  /** The line under the peer name: state while in flight, identity once live. */
+  private refreshPeerSub(): void {
+    if (this.state === 'streaming') {
+      const bits = ['Online'];
+      if (this.peerPlatform) bits.push(this.peerPlatform);
+      this.el.peerSub.textContent = bits.join(' · ');
+    } else {
+      this.el.peerSub.textContent = STATE_LABEL[this.state];
+    }
+  }
+
   private setState(state: SessionState, detail?: string): void {
     this.state = state;
     this.el.root.dataset.state = state;
-    this.el.stateLabel.textContent = STATE_LABEL[state];
+    this.refreshPeerSub();
     switch (state) {
       case 'streaming':
         if (!this.streamStartMs) this.streamStartMs = Date.now();
@@ -630,6 +1178,8 @@ export class RdApp {
         this.teardown();
         this.filePanel?.destroy();
         this.filePanel = undefined;
+        this.closeSide();
+        this.closePop();
         this.showOverlay();
         this.setOverlayBusy(false);
         this.setOverlayError(detail || 'Connection failed');
@@ -638,6 +1188,8 @@ export class RdApp {
         this.teardown();
         this.filePanel?.destroy();
         this.filePanel = undefined;
+        this.closeSide();
+        this.closePop();
         this.showOverlay();
         this.setOverlayBusy(false);
         this.setOverlayStatusText('Disconnected');
@@ -658,26 +1210,7 @@ export class RdApp {
     this.el.statDropped.textContent = String(s.framesDropped);
   }
 
-  private renderMonitors(): void {
-    const wrap = this.el.monitors;
-    wrap.innerHTML = '';
-    wrap.hidden = this.displays.length < 2;
-    this.displays.forEach((d, i) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'rd-btn rd-mon' + (i === this.current ? ' rd-active' : '');
-      b.textContent = String(i + 1);
-      b.title = d.name ? `${d.name} (${d.width}×${d.height})` : `Display ${i + 1}`;
-      b.addEventListener('click', () => {
-        this.post({ c: 'switchDisplay', index: i });
-        this.current = i;
-        this.renderMonitors();
-      });
-      wrap.appendChild(b);
-    });
-  }
-
-  // --- toolbar actions -------------------------------------------------------
+  // --- permissions / misc ------------------------------------------------------
 
   // Keep ?lo=1 in the URL in sync with "the user logged out on purpose".
   private setLoggedOutFlag(on: boolean): void {
@@ -692,10 +1225,8 @@ export class RdApp {
     }
   }
 
-  // Slide the file-transfer panel over the live desktop. Its FILE_TRANSFER
-  // connection reuses this session's h1 credential — no second password prompt.
   /**
-   * Apply a peer-advertised permission to the toolbar.
+   * Apply a peer-advertised permission to the chrome.
    *
    * The peer is the only thing that ENFORCES these — a server policy (a
    * CortenDesk strategy, or the user's own settings) is applied on the
@@ -711,22 +1242,30 @@ export class RdApp {
 
     const target = PERMISSION_CONTROLS[kind];
     if (!target) {
-      return; // nothing in the toolbar maps to it
+      return; // nothing in the chrome maps to it
     }
 
-    const el = this.el.toolbar.querySelector<HTMLButtonElement>(`#${target.id}`);
-    if (!el) {
-      return;
+    const ids = kind === 'Keyboard' ? [target.id, ...KEYBOARD_EXTRA_IDS] : [target.id];
+    for (const id of ids) {
+      const el = this.el.root.querySelector<HTMLButtonElement>(`#${id}`);
+      if (!el) continue;
+      el.disabled = !enabled;
+      if (id === target.id) {
+        el.title = enabled ? target.title : `${target.title} — not permitted by this device`;
+        el.setAttribute('aria-label', el.title);
+      }
     }
-
-    el.disabled = !enabled;
-    el.title = enabled ? target.title : `${target.title} — not permitted by this device`;
-    el.setAttribute('aria-label', el.title);
 
     // A capability withdrawn mid-session has to close what it opened.
-    if (!enabled && kind === 'File') {
-      this.filePanel?.destroy();
-      this.filePanel = undefined;
+    if (kind === 'File') {
+      this.el.edge
+        .querySelector<HTMLButtonElement>('[data-open="files"]')
+        ?.toggleAttribute('disabled', !enabled);
+      if (!enabled) {
+        this.filePanel?.destroy();
+        this.filePanel = undefined;
+        if (this.sideOpen && this.sideTab === 'files') this.closeSide();
+      }
     }
 
     this.toast(`Peer ${enabled ? 'enabled' : 'disabled'} ${target.title.toLowerCase()}`);
@@ -735,37 +1274,22 @@ export class RdApp {
   /** Forget peer permissions — they belong to one session, not to the client. */
   private resetPermissions(): void {
     this.permissions = {};
+    const all = new Set<string>(KEYBOARD_EXTRA_IDS);
+    for (const { id } of Object.values(PERMISSION_CONTROLS)) all.add(id);
+    for (const id of all) {
+      const el = this.el.root.querySelector<HTMLButtonElement>(`#${id}`);
+      if (el) el.disabled = false;
+    }
     for (const { id, title } of Object.values(PERMISSION_CONTROLS)) {
-      const el = this.el.toolbar.querySelector<HTMLButtonElement>(`#${id}`);
+      const el = this.el.root.querySelector<HTMLButtonElement>(`#${id}`);
       if (el) {
-        el.disabled = false;
         el.title = title;
         el.setAttribute('aria-label', title);
       }
     }
-  }
-
-  private openFileTransfer(): void {
-    if (this.state !== 'streaming') {
-      this.toast('Connect to a device first');
-      return;
-    }
-    if (this.permissions.File === false) {
-      this.toast('This device does not permit file transfer');
-      return;
-    }
-    if (!this.filePanel) {
-      this.filePanel = new FilePanel({
-        viewport: this.el.viewport,
-        workerUrl: this.workerUrl,
-        toast: (msg) => this.toast(msg),
-        getConfig: () => {
-          if (!this.cfg || this.state !== 'streaming') return null;
-          return buildSessionConfig(this.cfg, this.peerId, '', this.sessionHashHex, 'fileTransfer');
-        },
-      });
-    }
-    this.filePanel.toggle();
+    this.el.edge
+      .querySelector<HTMLButtonElement>('[data-open="files"]')
+      ?.toggleAttribute('disabled', false);
   }
 
   private async sendClipboard(): Promise<void> {
@@ -785,13 +1309,6 @@ export class RdApp {
     } catch {
       this.toast('Fullscreen unavailable');
     }
-  }
-
-  private toggleStats(open?: boolean): void {
-    const el = this.el.statsPanel;
-    const next = open ?? !el.classList.contains('rd-open');
-    el.classList.toggle('rd-open', next);
-    this.el.btnStats.setAttribute('aria-pressed', String(next));
   }
 
   // --- overlay / toast -------------------------------------------------------
@@ -842,6 +1359,7 @@ export class RdApp {
     this.teardown();
     this.filePanel?.destroy();
     this.filePanel = undefined;
+    this.closePop();
     if (this.ticker) clearInterval(this.ticker);
   }
 }

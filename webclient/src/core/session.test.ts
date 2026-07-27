@@ -538,6 +538,32 @@ describe('streaming dispatch', () => {
     expect(h.events.at(-1)).toEqual({ t: 'permission', kind: 'Clipboard', enabled: true });
   });
 
+  it('emits inbound chat and ignores empty keepalive texts', async () => {
+    const h = await establishLoggedIn();
+    const chat = (text: string) =>
+      h.peer.seal({
+        union: { $case: 'misc', misc: { union: { $case: 'chat_message', chat_message: { text } } } },
+      });
+
+    await h.session.onRelayBytes(chat('hello from the peer'));
+    expect(h.events.at(-1)).toEqual({ t: 'chat', text: 'hello from the peer' });
+
+    // An empty text carries no message and must not surface as one.
+    const before = h.events.length;
+    await h.session.onRelayBytes(chat(''));
+    expect(h.events.length).toBe(before);
+  });
+
+  it('sends chat as a Misc message, not a top-level one', async () => {
+    const h = await establishLoggedIn();
+    h.session.sendChat('reply from the console');
+    const msg = h.peer.open(h.nextRelay());
+    if (msg.union?.$case !== 'misc') throw new Error('expected misc');
+    const misc = msg.union.misc.union;
+    if (misc?.$case !== 'chat_message') throw new Error('expected chat_message inside misc');
+    expect(misc.chat_message.text).toBe('reply from the console');
+  });
+
   it('closes on misc close_reason', async () => {
     const h = await establishLoggedIn();
     await h.session.onRelayBytes(

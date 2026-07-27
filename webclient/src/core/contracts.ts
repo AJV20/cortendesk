@@ -15,10 +15,11 @@ export type FtEntry = { kind:FtEntryKind; name:string; size:number; modifiedSec:
 export type FtDirectory = { id:number; path:string; entries:FtEntry[] };
 export type SessionEvent =                       // worker -> main
   | { t:'state'; state:SessionState; detail?:string }
-  | { t:'peerInfo'; displays:DisplayInfo[]; username:string; hostname:string; version:string; current:number }
+  | { t:'peerInfo'; displays:DisplayInfo[]; username:string; hostname:string; platform:string; version:string; current:number }
   | { t:'stats'; stats:SessionStats }
   | { t:'cursor'; pngDataUrl:string; hotx:number; hoty:number } | { t:'cursorPos'; x:number; y:number }
   | { t:'clipboard'; text:string } | { t:'permission'; kind:string; enabled:boolean }
+  | { t:'chat'; text:string }             // inbound message from the remote peer
   | { t:'credentials'; hashHex:string }   // h1 = SHA256(pw||salt); UI may persist for "save password"
   | { t:'loginError'; message:string }
   | { t:'uac'; on:boolean }               // remote UAC prompt opened/closed (capture restarts around it)
@@ -37,6 +38,7 @@ export type UiCommand =                           // main -> worker
   | { c:'key'; down:boolean; press:boolean; keyKind:'chr'|'control'|'unicode'; value:number; modifiers:number[] }
   | { c:'switchDisplay'; index:number } | { c:'ctrlAltDel' } | { c:'refresh' }
   | { c:'quality'; imageQuality:number } | { c:'clipboardText'; text:string } | { c:'disconnect' }
+  | { c:'chat'; text:string }             // outbound message to the remote peer
   // file transfer connections only (no canvas; connect with config.connType='fileTransfer'):
   | { c:'connectFile'; config:SessionConfig }
   | { c:'ftReadDir'; path:string; includeHidden:boolean }

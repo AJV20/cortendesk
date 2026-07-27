@@ -1,7 +1,7 @@
 // Shared UI helpers for the desktop client (app.ts) and the file-transfer
 // window (file-app.ts): icons, state labels, saved-credential storage, session
 // config plumbing. app.ts re-exports everything here for back-compat.
-import type { DisplayInfo, SessionConfig, SessionState } from '../core/contracts';
+import type { DisplayInfo, SessionConfig, SessionState, UiCommand } from '../core/contracts';
 import type { DisplayRect } from '../input/mouse-keyboard';
 
 export type RdGlobalConfig = {
@@ -11,12 +11,29 @@ export type RdGlobalConfig = {
   wsRelayUrl: string;
   myId: string;
   myName: string;
+  /** Console version, injected per request — see OVERLAY_VERSION. */
+  version?: string;
   workerUrl?: string;
 };
 
 export const QUALITY = { best: 4, balanced: 3, speed: 2 } as const; // ImageQuality enum values
 
-export const OVERLAY_VERSION = 'v0.51b.';
+/**
+ * Fallback only. The real version is injected per request by the console
+ * (window.__RD__.version) and read via overlayVersion() below.
+ *
+ * The web client is not released independently — it only ships inside a
+ * CortenDesk release — so it carries the project version rather than one of
+ * its own. Taking it at runtime matters: the bundle is rebuilt only when
+ * webclient/src changes, so a version baked in at build time would still claim
+ * the older release on every release that did not touch the client.
+ */
+export const OVERLAY_VERSION = 'dev';
+
+export function overlayVersion(cfg?: { version?: string } | null): string {
+  const v = cfg?.version?.trim();
+  return v ? `v${v}` : OVERLAY_VERSION;
+}
 
 export const STATE_LABEL: Record<SessionState, string> = {
   connecting: 'Connecting',
@@ -125,6 +142,15 @@ export function displayToRect(d: DisplayInfo): DisplayRect {
 }
 
 export type IconName =
+  | 'pointer'
+  | 'touch'
+  | 'typeText'
+  | 'chat'
+  | 'more'
+  | 'check'
+  | 'chevronDown'
+  | 'info'
+  | 'send'
   | 'fullscreen'
   | 'fullscreenExit'
   | 'monitor'
@@ -151,6 +177,42 @@ export type IconName =
   | 'close';
 
 export const ICONS: Record<IconName, { ri: string; svg: string }> = {
+  pointer: {
+    ri: '',
+    svg: '<path d="M5 3.5 19 10.8l-6.1 1.6L9.2 18 5 3.5Z"/>',
+  },
+  touch: {
+    ri: '',
+    svg: '<path d="M9 11.5V5a1.7 1.7 0 0 1 3.4 0v5.2M12.4 10.2V8.8a1.7 1.7 0 0 1 3.4 0v2.4M15.8 11.2v-.6a1.6 1.6 0 0 1 3.2.3c0 4.3-.8 6-2 7.6-1 1.4-2.6 2-4.6 2-2.9 0-4-1-6.2-4.6L4.7 13.9a1.5 1.5 0 0 1 2.5-1.6L9 14.6"/>',
+  },
+  typeText: {
+    ri: '',
+    svg: '<path d="M5 6.5V5h14v1.5M12 5v14M9.5 19h5"/>',
+  },
+  chat: {
+    ri: '',
+    svg: '<path d="M4 5.5h16v11H10l-4.5 3.6v-3.6H4v-11Z"/>',
+  },
+  more: {
+    ri: '',
+    svg: '<circle cx="5.5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="18.5" cy="12" r="1"/>',
+  },
+  check: {
+    ri: '',
+    svg: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  },
+  chevronDown: {
+    ri: '',
+    svg: '<path d="m6.5 9.5 5.5 5.5 5.5-5.5"/>',
+  },
+  info: {
+    ri: '',
+    svg: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 7.8h.01"/>',
+  },
+  send: {
+    ri: '',
+    svg: '<path d="M4 11.5 20 4l-4.5 16-4-6.5L4 11.5ZM11.5 13.5 20 4"/>',
+  },
   fullscreen: {
     ri: 'ri-fullscreen-line',
     svg: '<path d="M8 3H4a1 1 0 0 0-1 1v4M16 3h4a1 1 0 0 1 1 1v4M8 21H4a1 1 0 0 1-1-1v-4M16 21h4a1 1 0 0 0 1-1v-4"/>',
@@ -263,11 +325,39 @@ function hasRemixIcons(): boolean {
 
 export function iconHtml(name: IconName): string {
   const ic = ICONS[name];
-  if (hasRemixIcons()) return `<i class="${ic.ri}"></i>`;
+  // An entry with no ri class always renders its inline svg — used for icons
+  // whose Remix name is not stable across the font versions installs carry.
+  if (ic.ri && hasRemixIcons()) return `<i class="${ic.ri}"></i>`;
   return (
     '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" ' +
     `stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ic.svg}</svg>`
   );
+}
+
+/**
+ * Translate literal text into the key events that type it on the peer.
+ *
+ * `press: true` is RustDesk's "down and up in one message" — no held state to
+ * leave stuck if the session drops mid-string. ASCII goes as `chr`, anything
+ * beyond as `unicode`, and the two control characters that matter in pasted
+ * text (newline, tab) as their control keys. ControlKey values: Return=27,
+ * Tab=31 — fixed by the protobuf, not by us. Carriage returns are dropped so
+ * CRLF text does not double-newline.
+ */
+export function buildTypeCommands(text: string): UiCommand[] {
+  const out: UiCommand[] = [];
+  const press = (keyKind: 'chr' | 'control' | 'unicode', value: number): void => {
+    out.push({ c: 'key', down: false, press: true, keyKind, value, modifiers: [] });
+  };
+  for (const ch of text) {
+    if (ch === '\r') continue;
+    if (ch === '\n') { press('control', 27); continue; }
+    if (ch === '\t') { press('control', 31); continue; }
+    const cp = ch.codePointAt(0);
+    if (cp === undefined) continue;
+    press(cp <= 127 ? 'chr' : 'unicode', cp);
+  }
+  return out;
 }
 
 export function escapeHtml(s: string): string {
