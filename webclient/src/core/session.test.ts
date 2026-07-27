@@ -877,3 +877,96 @@ describe('file-transfer connections', () => {
     }
   });
 });
+
+describe('display switching', () => {
+  /*
+   * The host's ONLY reply to a switch_display request is Misc.switch_display
+   * (server/video_service.rs make_display_changed_msg). It carries the origin
+   * of the display now being captured, and input coordinates are absolute
+   * virtual-desktop positions — so dropping this message meant clicks kept
+   * landing on whichever monitor the stale origin pointed at.
+   */
+  it('emits switchDisplay with the geometry the host reports', async () => {
+    const h = await establishLoggedIn();
+    await h.session.onRelayBytes(
+      h.peer.seal({
+        union: {
+          $case: 'misc',
+          misc: {
+            union: {
+              $case: 'switch_display',
+              switch_display: {
+                display: 1,
+                x: 1920,
+                y: 0,
+                width: 2560,
+                height: 1440,
+                cursor_embedded: false,
+              },
+            },
+          },
+        },
+      }),
+    );
+    expect(h.events.at(-1)).toEqual({
+      t: 'switchDisplay',
+      index: 1,
+      x: 1920,
+      y: 0,
+      width: 2560,
+      height: 1440,
+      cursorEmbedded: false,
+    });
+  });
+
+  it('carries a non-zero origin, which is what selects the monitor', async () => {
+    // Guards the specific regression: an origin flattened to 0 sends every
+    // click to the primary monitor no matter which display is on screen.
+    const h = await establishLoggedIn();
+    await h.session.onRelayBytes(
+      h.peer.seal({
+        union: {
+          $case: 'misc',
+          misc: {
+            union: {
+              $case: 'switch_display',
+              switch_display: {
+                display: 2,
+                x: -1920,
+                y: -200,
+                width: 1920,
+                height: 1080,
+                cursor_embedded: true,
+              },
+            },
+          },
+        },
+      }),
+    );
+    const ev = h.events.at(-1);
+    expect(ev?.t).toBe('switchDisplay');
+    if (ev?.t === 'switchDisplay') {
+      // Negative origins are ordinary: a monitor placed left of / above the
+      // primary has them, and they must survive intact.
+      expect(ev.x).toBe(-1920);
+      expect(ev.y).toBe(-200);
+      expect(ev.cursorEmbedded).toBe(true);
+    }
+  });
+
+  it('never populates width/height on an outgoing switch request', async () => {
+    // server/connection.rs handle_switch_display: a non-zero width/height on
+    // the REQUEST makes the host CHANGE THAT MONITOR'S RESOLUTION. We only
+    // ever want to change which display is captured, so these must stay 0.
+    const h = await establishLoggedIn();
+    h.session.switchDisplay(1);
+    const msg = h.peer.open(h.nextRelay());
+    expect(msg.union?.$case).toBe('misc');
+    if (msg.union?.$case === 'misc' && msg.union.misc.union?.$case === 'switch_display') {
+      const sd = msg.union.misc.union.switch_display;
+      expect(sd.display).toBe(1);
+      expect(sd.width).toBe(0);
+      expect(sd.height).toBe(0);
+    }
+  });
+});

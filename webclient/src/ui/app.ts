@@ -39,6 +39,7 @@ import {
   buildTypeCommands,
   clearSavedHash,
   cursorCss,
+  applySwitchDisplay,
   displayToRect,
   escapeHtml,
   formatDuration,
@@ -735,7 +736,12 @@ export class RdApp {
         b.addEventListener('click', () => {
           const i = Number(b.dataset.idx);
           this.post({ c: 'switchDisplay', index: i });
-          this.current = i;
+          // Deliberately NOT setting this.current here. The host decides which
+          // display is captured and answers with Misc.switch_display; assuming
+          // success locally meant input started mapping to the new monitor's
+          // origin while the video still showed the old one — a switch the host
+          // declines never corrects itself. The confirmation arrives in
+          // milliseconds and updates both together.
           this.closePop();
         });
       }
@@ -1091,6 +1097,16 @@ export class RdApp {
         this.el.statPlatform.textContent = this.peerPlatform || '—';
         this.el.btnMonitors.hidden = this.displays.length < 2;
         document.title = `${this.peerId} — CortenDesk`;
+        break;
+      }
+      case 'switchDisplay': {
+        // Authoritative: the host telling us what it is now capturing. Trust
+        // its geometry over the PeerInfo snapshot, which can be stale by the
+        // time a switch happens (resolution changed, monitor re-arranged, a
+        // display that was offline at login).
+        this.current = ev.index;
+        applySwitchDisplay(this.displays, ev);
+        this.refreshPeerSub();
         break;
       }
       case 'stats':

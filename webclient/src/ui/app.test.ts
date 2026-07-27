@@ -5,6 +5,7 @@ import {
   STATE_LABEL,
   ICONS,
   PERMISSION_CONTROLS,
+  applySwitchDisplay,
   buildSessionConfig,
   buildTypeCommands,
   cursorCss,
@@ -254,5 +255,64 @@ describe('buildTypeCommands', () => {
     const cmds = buildTypeCommands('🙂');
     expect(cmds).toHaveLength(1);
     expect(cmds[0]).toMatchObject({ keyKind: 'unicode', value: 0x1f642 });
+  });
+});
+
+describe('applySwitchDisplay', () => {
+  const mk = (): DisplayInfo[] => [
+    { index: 0, x: 0, y: 0, width: 1920, height: 1080, name: 'Primary', scale: 1 },
+    { index: 1, x: 1920, y: 0, width: 1920, height: 1080, name: 'Second', scale: 1 },
+  ];
+
+  it('writes the origin the host reports', () => {
+    const d = mk();
+    applySwitchDisplay(d, { index: 1, x: 2560, y: -120, width: 3840, height: 2160 });
+    expect(d[1]).toMatchObject({ x: 2560, y: -120, width: 3840, height: 2160 });
+  });
+
+  it('leaves the other displays untouched', () => {
+    const d = mk();
+    applySwitchDisplay(d, { index: 1, x: 2560, y: 0, width: 3840, height: 2160 });
+    expect(d[0]).toMatchObject({ x: 0, y: 0, width: 1920, height: 1080 });
+  });
+
+  it('treats zero width/height as "unchanged", not as a collapsed display', () => {
+    // A 0 here would make the coordinate mapping scale against nothing while
+    // the capture is still running at its real size.
+    const d = mk();
+    applySwitchDisplay(d, { index: 1, x: 1920, y: 0, width: 0, height: 0 });
+    expect(d[1]).toMatchObject({ x: 1920, y: 0, width: 1920, height: 1080 });
+  });
+
+  it('ignores an index the display list does not have', () => {
+    const d = mk();
+    expect(() => applySwitchDisplay(d, { index: 7, x: 1, y: 2, width: 3, height: 4 })).not.toThrow();
+    expect(d).toHaveLength(2);
+  });
+
+  it('keeps a negative origin, which a left/above monitor legitimately has', () => {
+    const d = mk();
+    applySwitchDisplay(d, { index: 0, x: -1920, y: -1080, width: 1920, height: 1080 });
+    expect(d[0]).toMatchObject({ x: -1920, y: -1080 });
+  });
+});
+
+describe('switched display feeds the coordinate mapping', () => {
+  it('sends a centre click to the monitor the host says it is capturing', () => {
+    // The bug this covers end to end: the click used to land on whichever
+    // monitor the stale origin pointed at, so switching monitors appeared to
+    // move the picture but not the mouse.
+    const displays: DisplayInfo[] = [
+      { index: 0, x: 0, y: 0, width: 1920, height: 1080, name: 'A', scale: 1 },
+      { index: 1, x: 0, y: 0, width: 1920, height: 1080, name: 'B', scale: 1 }, // stale: origin not yet known
+    ];
+    applySwitchDisplay(displays, { index: 1, x: 1920, y: 0, width: 1920, height: 1080 });
+    const rect = displayToRect(displays[1]!);
+    expect(rect.x).toBe(1920);
+    // A click at the centre of display 1 must be past the primary's width,
+    // i.e. on the second monitor rather than the middle of the first.
+    const centreX = rect.x + rect.width / 2;
+    expect(centreX).toBe(2880);
+    expect(centreX).toBeGreaterThan(displays[0]!.width);
   });
 });

@@ -11,9 +11,15 @@ return [
     | framework needs to place the application's name in a notification or
     | other UI elements where an application name needs to be displayed.
     |
+    | The default is deliberately NOT Laravel's stock value: it lands in every
+    | page title, in the From name on outgoing mail, and in emailed sign-in
+    | codes. The Docker image sets no APP_NAME, so the default is what most
+    | installs actually run with, and the stock value made every console read
+    | "Sign In | Laravel".
+    |
     */
 
-    'name' => env('APP_NAME', 'Laravel'),
+    'name' => env('APP_NAME', 'CortenDesk'),
 
     /*
     |--------------------------------------------------------------------------

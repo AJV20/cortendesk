@@ -141,6 +141,31 @@ export function displayToRect(d: DisplayInfo): DisplayRect {
   return { x: d.x, y: d.y, width: d.width, height: d.height };
 }
 
+/**
+ * Fold the host's Misc.switch_display into the display list, in place.
+ *
+ * The host's geometry wins over the PeerInfo snapshot: PeerInfo is taken at
+ * login and can be stale by the time anyone switches monitors (resolution
+ * changed, displays re-arranged, a monitor that was offline then). Since input
+ * coordinates are absolute virtual-desktop positions, a stale origin sends
+ * every click to the wrong monitor.
+ *
+ * Zero width/height mean "unchanged" rather than "collapse this display" —
+ * writing them through would leave the coordinate mapping dividing by a size
+ * the capture is not actually using.
+ */
+export function applySwitchDisplay(
+  displays: DisplayInfo[],
+  ev: { index: number; x: number; y: number; width: number; height: number },
+): void {
+  const d = displays[ev.index];
+  if (!d) return;
+  d.x = ev.x;
+  d.y = ev.y;
+  if (ev.width > 0) d.width = ev.width;
+  if (ev.height > 0) d.height = ev.height;
+}
+
 export type IconName =
   | 'pointer'
   | 'touch'

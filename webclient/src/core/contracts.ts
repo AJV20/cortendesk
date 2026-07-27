@@ -16,6 +16,12 @@ export type FtDirectory = { id:number; path:string; entries:FtEntry[] };
 export type SessionEvent =                       // worker -> main
   | { t:'state'; state:SessionState; detail?:string }
   | { t:'peerInfo'; displays:DisplayInfo[]; username:string; hostname:string; platform:string; version:string; current:number }
+  // The peer's authoritative answer to a display switch. It is the ONLY reply
+  // the host sends (server/video_service.rs make_display_changed_msg), and it
+  // carries the real geometry of what is now being captured — which is what
+  // input coordinates must be mapped against. A locally-assumed index is not
+  // enough: the host can refuse the switch, or report different geometry.
+  | { t:'switchDisplay'; index:number; x:number; y:number; width:number; height:number; cursorEmbedded:boolean }
   | { t:'stats'; stats:SessionStats }
   | { t:'cursor'; pngDataUrl:string; hotx:number; hoty:number } | { t:'cursorPos'; x:number; y:number }
   | { t:'clipboard'; text:string } | { t:'permission'; kind:string; enabled:boolean }

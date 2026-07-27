@@ -674,6 +674,16 @@ html[data-sidenav-size="sm-hover"]:not([data-layout="topnav"]) .wrapper .leftsid
     box-shadow: none;
 }
 
+/* Shrinking the items to chips (below) also shrank the row that holds them:
+   .navbar-custom is min-height 70px, but .topbar only measured 42px and sat
+   at the top of it, pooling 28px of dead space underneath. Everything then
+   read as pushed toward the ceiling. The theme never needed this rule because
+   its full-height items filled the bar on their own. .topbar already carries
+   align-items:center, so giving it the bar's own height is the whole fix. */
+.navbar-custom .topbar {
+    min-height: var(--ct-topbar-height);
+}
+
 .navbar-custom .topbar-menu {
     gap: 8px;
 }

@@ -367,8 +367,25 @@ export class Session {
         // around the secure-desktop switch; the worker kicks the video stream.
         this.sinks.emit({ t: 'uac', on: u.uac });
         return;
+      case 'switch_display': {
+        // The host's confirmation of which display it is now capturing, and
+        // where that display sits in the virtual desktop. Dropping this was a
+        // real bug: input coordinates are absolute virtual-desktop positions,
+        // so the origin here is what decides which monitor a click lands on.
+        const s = u.switch_display;
+        this.sinks.emit({
+          t: 'switchDisplay',
+          index: s.display,
+          x: s.x,
+          y: s.y,
+          width: s.width,
+          height: s.height,
+          cursorEmbedded: s.cursor_embedded,
+        });
+        return;
+      }
       default:
-        return; // TODO: switch_display, back_notification, supported_encoding, ...
+        return; // TODO: back_notification, supported_encoding, ...
     }
   }
 
