@@ -6,19 +6,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="CortenDesk — self-hosted RustDesk server console"/>
     <meta name="csrf-token" content="{{ csrf_token() }}">
-    <link rel="shortcut icon" href="{{ asset('assets/images/cortendesk-sm.svg') }}">
+    <link rel="shortcut icon" href="{{ \App\Support\Asset::url('assets/images/cortendesk-sm.svg') }}">
 
     <!-- Theme Config Js -->
-    <script src="{{ asset('assets/js/config.js') }}"></script>
+    <script src="{{ \App\Support\Asset::url('assets/js/config.js') }}"></script>
 
     <!-- App css -->
-    <link href="{{ asset('assets/css/app.min.css') }}" rel="stylesheet" type="text/css" id="app-style"/>
+    <link href="{{ \App\Support\Asset::url('assets/css/app.min.css') }}" rel="stylesheet" type="text/css" id="app-style"/>
 
     <!-- Icons css -->
-    <link href="{{ asset('assets/css/icons.min.css') }}" rel="stylesheet" type="text/css"/>
+    <link href="{{ \App\Support\Asset::url('assets/css/icons.min.css') }}" rel="stylesheet" type="text/css"/>
 
     <!-- CortenDesk custom css -->
-    <link href="{{ asset('assets/css/cortendesk.css') }}" rel="stylesheet" type="text/css"/>
+    <link href="{{ \App\Support\Asset::url('assets/css/cortendesk.css') }}" rel="stylesheet" type="text/css"/>
 </head>
 
 <body>
@@ -73,10 +73,10 @@
     </div>
 
     <!-- Vendor js -->
-    <script src="{{ asset('assets/js/vendor.min.js') }}"></script>
+    <script src="{{ \App\Support\Asset::url('assets/js/vendor.min.js') }}"></script>
 
     <!-- App js -->
-    <script src="{{ asset('assets/js/app.min.js') }}"></script>
+    <script src="{{ \App\Support\Asset::url('assets/js/app.min.js') }}"></script>
 
     @stack('scripts')
 </body>

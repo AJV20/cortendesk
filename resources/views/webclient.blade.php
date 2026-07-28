@@ -8,8 +8,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>{{ $peerId !== '' ? $peerId.' — ' : '' }}CortenDesk Web Client</title>
-    <link rel="shortcut icon" href="{{ asset('assets/images/favicon.ico') }}">
-    <link rel="stylesheet" href="{{ asset('assets/css/icons.min.css') }}">
+    <link rel="shortcut icon" href="{{ \App\Support\Asset::url('assets/images/favicon.ico') }}">
+    <link rel="stylesheet" href="{{ \App\Support\Asset::url('assets/css/icons.min.css') }}">
     <link rel="stylesheet" href="/rdclient/app.css?v={{ $rdVer }}">
     <style>
         html, body { height: 100%; margin: 0; overflow: hidden; background: #000; }

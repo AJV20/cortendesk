@@ -194,7 +194,7 @@
 @endsection
 
 @push('scripts')
-<script src="{{ asset('assets/vendor/apexcharts/apexcharts.min.js') }}"></script>
+<script src="{{ \App\Support\Asset::url('assets/vendor/apexcharts/apexcharts.min.js') }}"></script>
 <script>
 (function () {
     "use strict";

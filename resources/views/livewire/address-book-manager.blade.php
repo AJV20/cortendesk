@@ -106,7 +106,12 @@
                             <div>
                                 <h4 class="header-title d-flex align-items-center gap-2 flex-wrap">
                                     {{ $book->name }}
-                                    @if ($book->is_personal)
+                                    @if ($book->is_personal && $book->isOrphaned())
+                                        {{-- Its owner was deleted, so nobody can read it. Named
+                                             rather than left as "Personal / unknown", which gave
+                                             no clue why it was there or what to do about it. --}}
+                                        <span class="badge bg-warning-subtle text-warning">Orphaned</span>
+                                    @elseif ($book->is_personal)
                                         <span class="badge bg-info-subtle text-info">Personal</span>
                                     @else
                                         <span class="badge bg-primary-subtle text-primary">Shared</span>
@@ -127,6 +132,18 @@
                                     <button type="button" class="btn btn-sm btn-outline-danger"
                                             wire:click="deleteBook"
                                             wire:confirm="Delete address book “{{ $book->name }}”? This also permanently deletes all of its entries, tags, and sharing rules.">
+                                        <i class="ri-delete-bin-line me-1"></i>Delete
+                                    </button>
+                                </div>
+                            @elseif ($book->is_personal && $book->isOrphaned() && $canManage)
+                                {{-- The whole reason this book is reachable at all. Without a
+                                     control here the backend permission was unusable: the fix
+                                     for #14 shipped in 1.0.2 with no way for anyone to press it.
+                                     No Rename — the only useful action on an orphan is removal. --}}
+                                <div class="d-flex gap-2">
+                                    <button type="button" class="btn btn-sm btn-outline-danger"
+                                            wire:click="deleteBook"
+                                            wire:confirm="Delete this orphaned address book? Its owner no longer exists, so nobody can read it. This permanently deletes its entries and tags.">
                                         <i class="ri-delete-bin-line me-1"></i>Delete
                                     </button>
                                 </div>

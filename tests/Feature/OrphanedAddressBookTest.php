@@ -94,3 +94,58 @@ it('refuses to delete a live user\'s personal book', function () {
 
     expect(AddressBook::find($book->id))->not->toBeNull();
 });
+
+/*
+|--------------------------------------------------------------------------
+| The button must actually be on screen (issue #14, second report)
+|--------------------------------------------------------------------------
+| 1.0.2 fixed the backend and was verified by calling deleteBook() straight
+| through Livewire — which bypasses the view. The blade template still hid the
+| control behind `! $book->is_personal`, so the permission was real and utterly
+| unreachable. These assert what a user can SEE, not what a method will do.
+*/
+
+it('shows a delete control on an orphaned book', function () {
+    $admin = User::factory()->create(['is_admin' => true]);
+    $book = AddressBook::create([
+        'name' => 'My address book', 'owner_user_id' => 999999, 'is_personal' => true,
+    ]);
+
+    Livewire::actingAs($admin)
+        ->test(AddressBookManager::class)
+        ->call('selectBook', $book->id)
+        ->assertSeeHtml('wire:click="deleteBook"');
+});
+
+it('labels an orphaned book so it is clear why it can be removed', function () {
+    $admin = User::factory()->create(['is_admin' => true]);
+    $book = AddressBook::create([
+        'name' => 'My address book', 'owner_user_id' => 999999, 'is_personal' => true,
+    ]);
+
+    Livewire::actingAs($admin)
+        ->test(AddressBookManager::class)
+        ->call('selectBook', $book->id)
+        ->assertSee('Orphaned');
+});
+
+it('shows no delete control on a live user\'s personal book', function () {
+    $admin = User::factory()->create(['is_admin' => true]);
+    $owner = User::factory()->create();
+    $book = AddressBook::personalFor($owner);
+
+    Livewire::actingAs($admin)
+        ->test(AddressBookManager::class)
+        ->call('selectBook', $book->id)
+        ->assertDontSeeHtml('wire:click="deleteBook"');
+});
+
+it('shows the owner their own personal book without a delete control', function () {
+    $owner = User::factory()->create();
+    $book = AddressBook::personalFor($owner);
+
+    Livewire::actingAs($owner)
+        ->test(AddressBookManager::class)
+        ->call('selectBook', $book->id)
+        ->assertDontSeeHtml('wire:click="deleteBook"');
+});
