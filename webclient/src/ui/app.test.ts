@@ -9,11 +9,13 @@ import {
   buildSessionConfig,
   buildTypeCommands,
   cursorCss,
+  debugEnabled,
   displayToRect,
   formatDuration,
   formatMbps,
   iconHtml,
   loggedOutFromSearch,
+  normalizePeerId,
   peerIdFromSearch,
   resolveWorkerUrl,
   type IconName,
@@ -314,5 +316,64 @@ describe('switched display feeds the coordinate mapping', () => {
     const centreX = rect.x + rect.width / 2;
     expect(centreX).toBe(2880);
     expect(centreX).toBeGreaterThan(displays[0]!.width);
+  });
+});
+
+describe('normalizePeerId', () => {
+  it('strips the grouping spaces the RustDesk client displays', () => {
+    // "123 456 789" is how the client shows an ID, so it is what people copy.
+    expect(normalizePeerId('123 456 789')).toBe('123456789');
+  });
+
+  it('strips leading and trailing whitespace', () => {
+    expect(normalizePeerId('  123456789  ')).toBe('123456789');
+    expect(normalizePeerId('\t123 456 789\n')).toBe('123456789');
+  });
+
+  it('strips the non-breaking space that copying from a rendered UI produces', () => {
+    // Written as an escape on purpose: a literal U+00A0 here is invisible,
+    // and an editor normalising it would silently turn this into a copy of
+    // the plain-space test above while still passing.
+    expect(normalizePeerId('123\u00A0456\u00A0789')).toBe('123456789');
+  });
+
+  it('leaves a clean id untouched', () => {
+    expect(normalizePeerId('123456789')).toBe('123456789');
+  });
+
+  it('preserves non-numeric ids, which custom IDs may be', () => {
+    // Only whitespace is removed: a device can be given an alphanumeric ID,
+    // and stripping anything broader would break it.
+    expect(normalizePeerId('my desk-01')).toBe('mydesk-01');
+    expect(normalizePeerId('office_pc')).toBe('office_pc');
+  });
+
+  it('returns empty for whitespace-only input', () => {
+    expect(normalizePeerId('   ')).toBe('');
+  });
+});
+
+describe('debugEnabled', () => {
+  it('is off by default', () => {
+    expect(debugEnabled('', {})).toBe(false);
+    expect(debugEnabled('?id=123', {})).toBe(false);
+  });
+
+  it('turns on from the query string', () => {
+    expect(debugEnabled('?debug=1', {})).toBe(true);
+    expect(debugEnabled('?debug=true', {})).toBe(true);
+    expect(debugEnabled('?id=1&debug=1', {})).toBe(true);
+  });
+
+  it('turns on from a runtime flag, so a live session can be instrumented', () => {
+    expect(debugEnabled('', { __rdDebug: true })).toBe(true);
+  });
+
+  it('requires the flag to be exactly true, not merely truthy', () => {
+    // Guards against a stray assignment of a string or object switching on
+    // per-event logging for someone who never asked for it.
+    expect(debugEnabled('', { __rdDebug: 'yes' })).toBe(false);
+    expect(debugEnabled('', { __rdDebug: 1 })).toBe(false);
+    expect(debugEnabled('?debug=0', {})).toBe(false);
   });
 });

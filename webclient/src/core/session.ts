@@ -19,6 +19,7 @@ import {
   PermissionInfo_Permission,
   SupportedDecoding,
   SupportedDecoding_PreferCodec,
+  CaptureDisplays,
   SwitchDisplay,
   VideoFrame,
 } from '../gen/message';
@@ -91,6 +92,9 @@ function isManualAccept(error: string): boolean {
 }
 
 export class Session {
+  /** Display index we asked for and have not had confirmed yet; null when settled. */
+  private pendingDisplay: number | null = null;
+
   private readonly config: SessionConfig;
   private readonly sinks: SessionSinks;
   private readonly serverEdPk: Uint8Array;
@@ -373,6 +377,14 @@ export class Session {
         // real bug: input coordinates are absolute virtual-desktop positions,
         // so the origin here is what decides which monitor a click lands on.
         const s = u.switch_display;
+        // Pruning the capture set (see switchDisplay) stops the old display's
+        // service broadcasting, but not instantly: its snapshot can already be
+        // in flight when our CaptureDisplays arrives. Until the host confirms
+        // the display we actually asked for, a message about a different one is
+        // that stale broadcast, and following it is what put input back on the
+        // monitor we had just left.
+        if (this.pendingDisplay !== null && s.display !== this.pendingDisplay) return;
+        this.pendingDisplay = null;
         this.sinks.emit({
           t: 'switchDisplay',
           index: s.display,
@@ -467,7 +479,26 @@ export class Session {
   }
 
   switchDisplay(index: number): void {
+    // While this is outstanding, a switch_display naming a DIFFERENT display is
+    // a stale broadcast rather than news — see dispatchMisc.
+    this.pendingDisplay = index;
     this.sendMisc({ $case: 'switch_display', switch_display: SwitchDisplay.fromPartial({ display: index }) });
+    // Prune the capture set, or the host keeps us subscribed to the old
+    // display's video service. connection.rs switch_display_to only
+    // unsubscribes the old service for clients BELOW 1.2.4:
+    //
+    //   // For versions greater than 1.2.4, a `CaptureDisplays` message will
+    //   // be sent immediately. Unnecessary capturers will be removed then.
+    //
+    // We advertise 1.4.0, so the host waits for this message and we never sent
+    // one. The old service kept broadcasting at us and replayed its stored
+    // snapshot — a switch_display for the display we had just left, which put
+    // our display index back and sent every subsequent click to the wrong
+    // monitor. It was also still encoding a display nobody was watching.
+    this.sendMisc({
+      $case: 'capture_displays',
+      capture_displays: CaptureDisplays.fromPartial({ set: [index] }),
+    });
   }
 
   ctrlAltDel(): void {

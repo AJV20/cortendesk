@@ -57,6 +57,17 @@ class AddressBook extends Model
     }
 
     /**
+     * Does this book's owner no longer exist?
+     *
+     * Uses the relation rather than a fresh query so an eager-loaded list (the
+     * console loads `owner` for the name column) costs nothing extra.
+     */
+    public function isOrphaned(): bool
+    {
+        return $this->owner === null;
+    }
+
+    /**
      * Effective permission tier of $user on this book (PLAN B4). This is the
      * single source of truth shared by the console (AddressBookManager) and the
      * client AB API so ro / rw / full is enforced consistently.
@@ -72,7 +83,16 @@ class AddressBook extends Model
     public function permissionFor(User $user): int
     {
         if ($this->is_personal) {
-            return $this->owner_user_id === $user->id ? AddressBookRule::PERM_FULL : 0;
+            if ($this->owner_user_id === $user->id) {
+                return AddressBookRule::PERM_FULL;
+            }
+
+            // An orphaned book — its owner was deleted before the cleanup in
+            // User::booted existed — has no privacy left to protect and, without
+            // this, no permission check anywhere can reach it. It stayed listed
+            // as "unknown" and could never be removed by anyone. Admins only:
+            // a live user's personal book remains private to them.
+            return $user->is_admin && $this->isOrphaned() ? AddressBookRule::PERM_FULL : 0;
         }
 
         if ($this->owner_user_id === $user->id || $user->is_admin) {

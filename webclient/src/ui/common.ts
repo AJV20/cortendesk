@@ -63,8 +63,24 @@ export function formatMbps(mbps: number): string {
   return `${n} Mbps`;
 }
 
+/**
+ * Strip whitespace from a device ID.
+ *
+ * The RustDesk client displays IDs grouped as "123 456 789", so that is what
+ * people copy and type. The spaces are presentation only — the ID is
+ * "123456789" — and an ID with them in it simply is not found.
+ *
+ * Whitespace only, deliberately: IDs are not always numeric (a device can be
+ * given a custom alphanumeric ID), so stripping anything broader would break
+ * legitimate IDs. \s covers the non-breaking space that copying from a
+ * rendered UI can produce.
+ */
+export function normalizePeerId(raw: string): string {
+  return raw.replace(/\s+/g, '');
+}
+
 export function peerIdFromSearch(search: string): string | null {
-  const id = new URLSearchParams(search).get('id')?.trim();
+  const id = normalizePeerId(new URLSearchParams(search).get('id') ?? '');
   return id ? id : null;
 }
 
@@ -139,6 +155,22 @@ export function buildSessionConfig(
 
 export function displayToRect(d: DisplayInfo): DisplayRect {
   return { x: d.x, y: d.y, width: d.width, height: d.height };
+}
+
+/**
+ * Is diagnostic logging on?
+ *
+ * Enabled by `?debug=1` or by setting `window.__rdDebug = true` at runtime, so
+ * a session already in progress can be instrumented without a reload — which
+ * matters when the thing being diagnosed only happens once you are connected.
+ *
+ * Off by default: these logs fire per input event, and a remote session
+ * generates a lot of those.
+ */
+export function debugEnabled(search: string, win: unknown): boolean {
+  if ((win as { __rdDebug?: unknown } | undefined)?.__rdDebug === true) return true;
+  const v = new URLSearchParams(search).get('debug');
+  return v === '1' || v === 'true';
 }
 
 /**

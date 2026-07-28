@@ -39,6 +39,7 @@ import {
   buildTypeCommands,
   clearSavedHash,
   cursorCss,
+  debugEnabled,
   applySwitchDisplay,
   displayToRect,
   escapeHtml,
@@ -47,6 +48,7 @@ import {
   iconHtml,
   loadSavedHash,
   loggedOutFromSearch,
+  normalizePeerId,
   peerIdFromSearch,
   resolveWorkerUrl,
   saveSavedHash,
@@ -187,7 +189,8 @@ export class RdApp {
       ?.getAttribute('data-rd-worker');
     this.workerUrl = resolveWorkerUrl(this.cfg?.workerUrl, attr, import.meta.url);
 
-    this.fixedPeerId = this.cfg?.peerId?.trim() || peerIdFromSearch(location.search) || '';
+    this.fixedPeerId =
+      normalizePeerId(this.cfg?.peerId ?? '') || peerIdFromSearch(location.search) || '';
     if (this.fixedPeerId) {
       this.el.fieldId.hidden = true;
       this.el.overlayTarget.hidden = false;
@@ -201,9 +204,14 @@ export class RdApp {
       this.el.overlayTarget.hidden = true;
       this.el.peerIdInput.focus();
     }
-    this.el.peerIdInput.addEventListener('change', () =>
-      this.hydrateSavedPassword(this.el.peerIdInput.value.trim()),
-    );
+    // Rewrite the field itself, not just the value read out of it: the saved
+    // password is keyed by ID, so "123 456 789" and "123456789" would otherwise
+    // look like two different devices, and the user would see their pasted
+    // spaces survive a failed connect with no hint as to why.
+    this.el.peerIdInput.addEventListener('change', () => {
+      this.el.peerIdInput.value = normalizePeerId(this.el.peerIdInput.value);
+      this.hydrateSavedPassword(this.el.peerIdInput.value);
+    });
 
     // Saved password + fixed peer -> sign straight in. Skipped when ?lo=1
     // (the user logged out on purpose) so the connect screen stays put.
@@ -957,7 +965,7 @@ export class RdApp {
 
   private onConnectClick(): void {
     if (this.worker && this.state !== 'error' && this.state !== 'closed') return;
-    const peerId = (this.el.peerIdInput.value || this.fixedPeerId).trim();
+    const peerId = normalizePeerId(this.el.peerIdInput.value || this.fixedPeerId);
     if (!peerId) {
       this.setOverlayError('Enter a device ID');
       return;
@@ -1058,7 +1066,39 @@ export class RdApp {
    * key and mouse traffic — a pure merge, no synthetic key down/up, so a
    * dropped session can never leave a modifier stuck on the peer.
    */
+  /**
+   * Diagnostic log, off unless ?debug=1 or window.__rdDebug is set.
+   *
+   * Read live rather than cached at mount so the flag can be flipped mid
+   * session from the console — the interesting failures only exist once a
+   * session is running, and a reload throws them away.
+   */
+  private dbg(tag: string, data: unknown): void {
+    if (!debugEnabled(location.search, window)) return;
+    console.log(`[rd:${tag}]`, data);
+  }
+
+  /** Throttle for the per-event input log, which would otherwise flood. */
+  private lastDbgMouseMs = 0;
+
   private post(cmd: UiCommand): void {
+    if (cmd.c === 'mouse') {
+      const now = Date.now();
+      if (now - this.lastDbgMouseMs > 1000) {
+        this.lastDbgMouseMs = now;
+        // The whole question in one line: the coordinate actually leaving the
+        // client, the display index it was mapped against, and that display's
+        // origin. If x/y sit inside display 0 while current is 1, the mapping
+        // is using the wrong rect; if current is still 0, the switch never
+        // reached us.
+        this.dbg('mouse', {
+          sent: { x: cmd.x, y: cmd.y },
+          current: this.current,
+          rect: this.currentRect(),
+          displays: this.displays.map((d) => ({ x: d.x, y: d.y, w: d.width, h: d.height })),
+        });
+      }
+    }
     if (this.viewOnly && (cmd.c === 'mouse' || cmd.c === 'key' || cmd.c === 'ctrlAltDel')) return;
     if ((this.latchCtrl || this.latchAlt) && (cmd.c === 'mouse' || cmd.c === 'key')) {
       const extra: number[] = [];
@@ -1086,6 +1126,7 @@ export class RdApp {
         this.setState(ev.state, ev.detail);
         break;
       case 'peerInfo': {
+        this.dbg('peerInfo', { current: ev.current, displays: ev.displays });
         this.displays = ev.displays;
         this.current = ev.current;
         this.peerWho = ev.username ? `${ev.username}@${ev.hostname}` : ev.hostname;
@@ -1104,8 +1145,14 @@ export class RdApp {
         // its geometry over the PeerInfo snapshot, which can be stale by the
         // time a switch happens (resolution changed, monitor re-arranged, a
         // display that was offline at login).
+        this.dbg('switchDisplay', ev);
         this.current = ev.index;
         applySwitchDisplay(this.displays, ev);
+        // On the MSE fallback the muxer is built around the stream it was
+        // started with, so a new frame size has to start a new one. The worker
+        // holds the forwarded stream until the next key frame, which is what
+        // rebuilds this on the following push.
+        this.teardownMse();
         this.refreshPeerSub();
         break;
       }

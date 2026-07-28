@@ -561,3 +561,121 @@ describe('uac video kick', () => {
     expect(rig.video().resets).toBe(0);
   });
 });
+
+describe('display switch kicks the video', () => {
+  /*
+   * A display switch restarts the host's capture pipeline AND changes the
+   * frame size, so the decoder is left configured for a stream that no longer
+   * exists. Without a kick the picture freezes on the last frame of the old
+   * monitor — which reads to a user as "the switch did nothing", because a
+   * frozen picture and an unchanged picture look identical.
+   *
+   * Same failure the uac kick above exists for; a display switch was simply
+   * never wired to it.
+   */
+  it('resets the decoder and requests a keyframe on switchDisplay', async () => {
+    const rig = makeRig();
+    await connect(rig);
+    rig.session().calls.length = 0;
+    rig.session().sinks.emit({
+      t: 'switchDisplay',
+      index: 1,
+      x: 1920,
+      y: 0,
+      width: 2560,
+      height: 1440,
+      cursorEmbedded: false,
+    });
+    expect(rig.video().resets).toBe(1);
+    expect(rig.session().names()).toContain('refresh');
+  });
+
+  it('forwards the event to the UI as well as kicking', async () => {
+    const rig = makeRig();
+    await connect(rig);
+    const ev = {
+      t: 'switchDisplay' as const,
+      index: 0,
+      x: 0,
+      y: 0,
+      width: 1920,
+      height: 1080,
+      cursorEmbedded: false,
+    };
+    rig.session().sinks.emit(ev);
+    // The kick must not swallow the event: the UI needs it to know which
+    // display it is now looking at, which is what input coordinates use.
+    expect(rig.posts.at(-1)).toEqual(ev);
+  });
+});
+
+describe('cursor id cache', () => {
+  /*
+   * The host sends each cursor bitmap ONCE and refers to it by id thereafter —
+   * server/input_service.rs MouseCursorSub::send: "only send id out, require
+   * client side cache also". Ignoring cursor_id froze the pointer on whichever
+   * shape last arrived as full data.
+   */
+  it('replays a cached cursor when the host sends only an id', async () => {
+    const rig = makeRig();
+    await connect(rig);
+    rig.session().sinks.onCursor!({ id: 7n, width: 8, height: 8 } as CursorData);
+    await tick();
+    const posted = rig.posts.at(-1);
+
+    rig.session().sinks.onCursorId!(7n);
+    expect(rig.posts.at(-1)).toEqual(posted);
+  });
+
+  it('distinguishes ids, so the right shape comes back', async () => {
+    // One fake whose output changes per call, so the two ids genuinely carry
+    // different bitmaps rather than the same string twice.
+    let shape = 'arrow';
+    const rig = makeRig({ cursorToPng: async () => ({ pngDataUrl: shape, hotx: 1, hoty: 2 }) });
+    await connect(rig);
+    rig.session().sinks.onCursor!({ id: 1n } as CursorData);
+    await tick();
+    shape = 'ibeam';
+    rig.session().sinks.onCursor!({ id: 2n } as CursorData);
+    await tick();
+
+    rig.session().sinks.onCursorId!(1n);
+    expect(rig.posts.at(-1)).toMatchObject({ pngDataUrl: 'arrow' });
+    rig.session().sinks.onCursorId!(2n);
+    expect(rig.posts.at(-1)).toMatchObject({ pngDataUrl: 'ibeam' });
+  });
+
+  it('keeps the current cursor on an unknown id rather than clearing it', async () => {
+    // A miss is survivable and there is no way to ask for the bitmap again,
+    // so emitting nothing beats emitting a blank cursor.
+    const rig = makeRig();
+    await connect(rig);
+    rig.session().sinks.onCursor!({ id: 1n } as CursorData);
+    await tick();
+    const before = rig.posts.length;
+    rig.session().sinks.onCursorId!(999n);
+    expect(rig.posts.length).toBe(before);
+  });
+
+  it('does not cache a cursor that failed to render', async () => {
+    const rig = makeRig({ cursorToPng: async () => Promise.reject(new Error('bad')) });
+    await connect(rig);
+    rig.session().sinks.onCursor!({ id: 5n } as CursorData);
+    await tick();
+    const before = rig.posts.length;
+    rig.session().sinks.onCursorId!(5n);
+    expect(rig.posts.length).toBe(before);
+  });
+});
+
+describe('cursor caching never blocks display', () => {
+  it('still draws a cursor that carries no id', async () => {
+    // Regression: keying the cache before posting meant a CursorData without
+    // an id threw, the catch swallowed it, and no cursor was drawn at all.
+    const rig = makeRig();
+    await connect(rig);
+    rig.session().sinks.onCursor!({ width: 8, height: 8 } as CursorData);
+    await tick();
+    expect(rig.posts.at(-1)).toMatchObject({ t: 'cursor' });
+  });
+});

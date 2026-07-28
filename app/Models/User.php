@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\AddressBook;
 use App\Support\Permissions;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -56,6 +57,27 @@ class User extends Authenticatable
      */
     protected static function booted(): void
     {
+        // A personal address book is private to one user and readable by nobody
+        // else, so it has no meaning once that user is gone — it just becomes a
+        // row labelled "unknown" that no permission check can ever reach.
+        // Cleared here rather than in the console so it holds for every deletion
+        // path, including artisan and future callers.
+        //
+        // Shared books are deliberately left alone: their access comes from
+        // rules, not ownership, so they keep working for everyone they were
+        // shared with, and an admin can still manage them.
+        static::deleting(function (User $user) {
+            AddressBook::where('owner_user_id', $user->id)
+                ->where('is_personal', true)
+                ->get()
+                ->each(function (AddressBook $book) {
+                    $book->entries()->delete();
+                    $book->tags()->delete();
+                    $book->rules()->delete();
+                    $book->delete();
+                });
+        });
+
         static::deleted(fn () => Strategy::recomputeAll());
     }
 

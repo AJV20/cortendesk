@@ -705,13 +705,20 @@ describe('outbound controls', () => {
     h.session.refresh();
     h.session.setQuality(ImageQuality.Balanced);
     const sw = h.peer.open(h.nextRelay());
+    // switchDisplay emits a capture_displays straight after, to prune the
+    // capture set — see 'prunes the capture set' below.
+    const cd = h.peer.open(h.nextRelay());
     const rf = h.peer.open(h.nextRelay());
     const q = h.peer.open(h.nextRelay());
-    if (sw.union?.$case !== 'misc' || rf.union?.$case !== 'misc' || q.union?.$case !== 'misc') {
+    if (
+      sw.union?.$case !== 'misc' || cd.union?.$case !== 'misc' ||
+      rf.union?.$case !== 'misc' || q.union?.$case !== 'misc'
+    ) {
       throw new Error('expected misc frames');
     }
     expect(sw.union.misc.union?.$case).toBe('switch_display');
     if (sw.union.misc.union?.$case === 'switch_display') expect(sw.union.misc.union.switch_display.display).toBe(2);
+    expect(cd.union.misc.union?.$case).toBe('capture_displays');
     expect(rf.union.misc.union).toEqual({ $case: 'refresh_video', refresh_video: true });
     expect(q.union.misc.union?.$case).toBe('option');
     if (q.union.misc.union?.$case === 'option') expect(q.union.misc.union.option.image_quality).toBe(ImageQuality.Balanced);
@@ -952,6 +959,69 @@ describe('display switching', () => {
       expect(ev.y).toBe(-200);
       expect(ev.cursorEmbedded).toBe(true);
     }
+  });
+
+  it('prunes the capture set so the old display stops broadcasting', async () => {
+    // connection.rs switch_display_to only unsubscribes the old video service
+    // for clients BELOW 1.2.4; we advertise 1.4.0, so the host waits for a
+    // CaptureDisplays and leaves the old service running until it arrives.
+    // Without this the old service replayed a stale switch_display snapshot
+    // that put the display index -- and therefore all input -- back on the
+    // monitor we had just left.
+    const h = await establishLoggedIn();
+    h.session.switchDisplay(1);
+    const first = h.peer.open(h.nextRelay());
+    const second = h.peer.open(h.nextRelay());
+    expect(first.union?.$case).toBe('misc');
+    expect(second.union?.$case).toBe('misc');
+    if (second.union?.$case === 'misc' && second.union.misc.union?.$case === 'capture_displays') {
+      const cd = second.union.misc.union.capture_displays;
+      expect(cd.set).toEqual([1]);
+      expect(cd.add).toEqual([]);
+      expect(cd.sub).toEqual([]);
+    } else {
+      throw new Error('expected a capture_displays after switch_display');
+    }
+  });
+
+  it('ignores a stale switch_display for a display we did not ask for', async () => {
+    // The real trace: the host confirmed display 1, then the old display's
+    // service replayed its snapshot naming display 0, and we followed it.
+    const h = await establishLoggedIn();
+    h.session.switchDisplay(1);
+    h.peer.open(h.nextRelay());
+    h.peer.open(h.nextRelay());
+    const before = h.events.length;
+
+    await h.session.onRelayBytes(
+      h.peer.seal({
+        union: { $case: 'misc', misc: { union: { $case: 'switch_display',
+          switch_display: { display: 0, x: 0, y: 0, width: 1920, height: 1080, cursor_embedded: false } } } },
+      }),
+    );
+    expect(h.events.length).toBe(before); // dropped, not emitted
+
+    // The one we actually asked for still gets through.
+    await h.session.onRelayBytes(
+      h.peer.seal({
+        union: { $case: 'misc', misc: { union: { $case: 'switch_display',
+          switch_display: { display: 1, x: 1920, y: 0, width: 3840, height: 2160, cursor_embedded: false } } } },
+      }),
+    );
+    expect(h.events.at(-1)).toMatchObject({ t: 'switchDisplay', index: 1, x: 1920 });
+  });
+
+  it('follows a host-initiated switch once nothing is pending', async () => {
+    // The guard must not deafen us permanently: a switch we never requested
+    // (monitor unplugged, host-side change) is legitimate news.
+    const h = await establishLoggedIn();
+    await h.session.onRelayBytes(
+      h.peer.seal({
+        union: { $case: 'misc', misc: { union: { $case: 'switch_display',
+          switch_display: { display: 0, x: 0, y: 0, width: 1920, height: 1080, cursor_embedded: false } } } },
+      }),
+    );
+    expect(h.events.at(-1)).toMatchObject({ t: 'switchDisplay', index: 0 });
   });
 
   it('never populates width/height on an outgoing switch request', async () => {

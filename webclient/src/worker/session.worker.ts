@@ -357,10 +357,21 @@ export class WorkerHost {
           if (ev.t === 'state' && (ev.state === 'streaming' || ev.state === 'error' || ev.state === 'closed')) {
             this.clearConnectTimer();
           }
-          // A UAC secure-desktop switch (either direction) restarts the host's
-          // capture pipeline; without a kick the stream can stay frozen until
-          // reconnect. Reset the decoder and ask for a fresh keyframe.
-          if (ev.t === 'uac' || (ev.t === 'msgbox' && /uac/i.test(ev.msgtype))) {
+          // Anything that restarts the host's capture pipeline leaves our
+          // decoder configured for a stream that no longer exists, and without
+          // a kick it stays frozen until reconnect. Two things do that:
+          //
+          //  - a UAC secure-desktop switch, either direction;
+          //  - a display switch, which additionally changes the frame size,
+          //    so the decoder must be reconfigured and not merely fed.
+          //
+          // reset() drops the decoder and re-arms awaitingKey; refresh() asks
+          // the peer for the key frame it then needs.
+          if (
+            ev.t === 'uac' ||
+            ev.t === 'switchDisplay' ||
+            (ev.t === 'msgbox' && /uac/i.test(ev.msgtype))
+          ) {
             this.kickVideo();
           }
           this.deps.post(ev);
@@ -375,6 +386,7 @@ export class WorkerHost {
         onCursor: (c) => {
           void this.postCursor(c);
         },
+        onCursorId: (id) => this.postCursorId(id),
         onClipboard: (cb) => this.postClipboard(cb),
         onFileResponse: (fr) => this.postFileResponse(fr),
         onFileSendConfirm: (c) =>
@@ -487,13 +499,56 @@ export class WorkerHost {
     });
   }
 
+  /**
+   * Rendered cursors, keyed by the host's cursor id.
+   *
+   * The host sends each cursor's bitmap ONCE and refers to it by id from then
+   * on — server/input_service.rs MouseCursorSub::send, whose own comment reads
+   * "only send id out, require client side cache also". Without this cache the
+   * pointer freezes on whichever shape last arrived as full data, which is
+   * most obvious after a display switch: by then the host has cached nearly
+   * every shape, so almost nothing arrives as a bitmap any more.
+   */
+  private readonly cursorCache = new Map<string, { pngDataUrl: string; hotx: number; hoty: number }>();
+
+  /**
+   * Bound on the cache. Real hosts cycle through a couple of dozen shapes, so
+   * this is far above normal use — it exists so a peer that minted a new id
+   * per frame could not grow it without limit for the life of a session.
+   */
+  private static readonly MAX_CURSORS = 128;
+
   private async postCursor(c: CursorData): Promise<void> {
+    let entry: { pngDataUrl: string; hotx: number; hoty: number };
     try {
-      const { pngDataUrl, hotx, hoty } = await this.deps.cursorToPng(c);
-      this.deps.post({ t: 'cursor', pngDataUrl, hotx, hoty });
+      entry = await this.deps.cursorToPng(c);
     } catch {
-      // cursor rendering is best-effort; pointer position still flows via cursorPos
+      return; // cursor rendering is best-effort; position still flows via cursorPos
     }
+    // Show it first, cache second. Caching is an optimisation for later ids and
+    // must never be able to stop the cursor being drawn now — an earlier
+    // version keyed the Map before posting, so a CursorData without an id threw
+    // and the catch swallowed the cursor entirely.
+    this.deps.post({ t: 'cursor', ...entry });
+    if (c.id === undefined || c.id === null) return;
+    if (this.cursorCache.size >= WorkerHost.MAX_CURSORS) {
+      // Oldest first: insertion order is Map's iteration order.
+      const oldest = this.cursorCache.keys().next();
+      if (!oldest.done) this.cursorCache.delete(oldest.value);
+    }
+    this.cursorCache.set(c.id.toString(), entry);
+  }
+
+  /**
+   * The host referring to a cursor it has already sent us.
+   *
+   * A miss is possible and survivable — we may have evicted it, or the entry
+   * failed to render — and there is no protocol message to ask for the bitmap
+   * again. Keeping the current cursor is better than clearing it.
+   */
+  private postCursorId(id: bigint): void {
+    const hit = this.cursorCache.get(id.toString());
+    if (hit) this.deps.post({ t: 'cursor', ...hit });
   }
 
   private postFileResponse(fr: FileResponse): void {
@@ -551,6 +606,10 @@ export class WorkerHost {
     if (this.tornDown) return;
     this.tornDown = true;
     this.clearConnectTimer();
+    // The host's cursor cache is per-connection and starts empty, so it will
+    // resend every bitmap on the next one. Keeping ours would risk answering a
+    // reused id with the previous session's shape.
+    this.cursorCache.clear();
     this.video?.close();
     this.video = null;
     this.audio?.close();

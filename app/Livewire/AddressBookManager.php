@@ -270,8 +270,14 @@ class AddressBookManager extends Component
     public function deleteBook(): void
     {
         $book = $this->authorizeBook(AddressBookRule::PERM_FULL);
-        if (! $book || $book->is_personal) {
-            return; // personal address books can never be deleted
+        if (! $book) {
+            return;
+        }
+        // A personal book belongs to its owner and is not the admin's to remove
+        // — unless that owner is gone, in which case it is unreachable data that
+        // nothing else can ever clean up.
+        if ($book->is_personal && ! $book->isOrphaned()) {
+            return;
         }
 
         $bookName = $book->name;
