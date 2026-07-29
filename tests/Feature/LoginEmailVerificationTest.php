@@ -99,6 +99,22 @@ it('emails a code and holds the sign-in at the challenge', function () {
     expect(capturedCode())->toMatch('/^\d{6}$/');
 });
 
+it('renders the challenge page with the masked address', function () {
+    // Regression: a missing space (`code@if`) left the @if uncompiled but its
+    // @endif compiled, so the page 500'd with an orphan `endif` (issue #17).
+    // Nothing else rendered this view — POST-only coverage let it ship.
+    Mail::fake();
+    enableEmailVerification();
+    verifiableUser();
+
+    passwordLogin();
+
+    test()->get(route('login.email'))
+        ->assertOk()
+        ->assertSee('6-digit code')
+        ->assertSee('o'.str_repeat('•', 7).'@example.com');
+});
+
 it('completes the sign-in with the right code and trusts the browser', function () {
     Mail::fake();
     enableEmailVerification();

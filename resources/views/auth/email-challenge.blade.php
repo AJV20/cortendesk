@@ -17,7 +17,7 @@
             <div class="text-center mb-4">
                 <h4 class="rd-auth-title">Check your email</h4>
                 <p class="rd-auth-sub">
-                    This browser is new to the console, so we emailed a 6-digit code@if ($sentTo) to <span class="rd-mono">{{ $sentTo }}</span>@endif. Enter it below.
+                    This browser is new to the console, so we emailed a 6-digit code @if ($sentTo) to <span class="rd-mono">{{ $sentTo }}</span>@endif. Enter it below.
                 </p>
             </div>
 
