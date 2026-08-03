@@ -5,6 +5,7 @@ namespace App\Http\Middleware;
 use App\Models\Setting;
 use App\Models\User;
 use App\Services\OidcService;
+use App\Support\LivewireRequest;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -60,7 +61,7 @@ class RequireTwoFactor
     private function isAllowed(Request $request): bool
     {
         // Livewire component round-trips (the setup wizard talks over these).
-        if ($request->is('livewire/*')) {
+        if (LivewireRequest::isComponentUpdate($request)) {
             return true;
         }
 

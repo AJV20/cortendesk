@@ -31,6 +31,15 @@
         </div>
     @endif
 
+    {{-- Nothing was written if any field failed — say so where it can be seen.
+         save() also jumps $tab to the failing field, since one giant validate()
+         covers every tab and the error may otherwise render off-screen. --}}
+    @if ($errors->any())
+        <div class="alert alert-danger py-2">
+            <i class="ri-error-warning-line me-1"></i>Settings were <strong>not</strong> saved — fix the highlighted field below.
+        </div>
+    @endif
+
     {{-- Tab nav. Active tab lives in the $tab Livewire prop (survives save re-renders). --}}
     @php
         $tabs = [

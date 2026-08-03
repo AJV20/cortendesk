@@ -3,6 +3,7 @@
 namespace App\Http\Middleware;
 
 use App\Services\OidcService;
+use App\Support\LivewireRequest;
 use App\Support\LoginEmailVerification;
 use Closure;
 use Illuminate\Http\Request;
@@ -50,7 +51,7 @@ class RequireEmailAddress
     /** Screens a user without an address may still reach, so they can fix it. */
     private function isAllowed(Request $request): bool
     {
-        if ($request->is('livewire/*')) {
+        if (LivewireRequest::isComponentUpdate($request)) {
             return true;
         }
 

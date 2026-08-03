@@ -51,7 +51,7 @@ WebSocket bridge to your RustDesk server built in). Releases are published to
 GHCR — or build it yourself:
 
 ```bash
-docker pull ghcr.io/marcpope/cortendesk:1.0.4   # or build locally:
+docker pull ghcr.io/marcpope/cortendesk:1.0.5   # or build locally:
 docker build -t cortendesk .
 docker run -d -p 8080:8080 -v cortendesk-data:/data \
   -e CORTENDESK_ID_SERVER=hbbs.example.com:21116 \
@@ -189,7 +189,7 @@ The browser client ships prebuilt in `public/rdclient/`. To hack on it:
 ```bash
 cd webclient
 npm install
-npm run build        # or: npm test / npm run typecheck
+npm run build        # or: npm run typecheck
 ```
 
 ## License

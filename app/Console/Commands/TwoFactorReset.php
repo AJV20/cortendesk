@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Models\Setting;
 use App\Models\User;
 use Illuminate\Console\Command;
 
@@ -29,6 +30,16 @@ class TwoFactorReset extends Command
 
         if (! $user->hasTwoFactorEnabled() && $user->totp_secret === null && $user->recoveryCodes()->doesntExist()) {
             $this->info("User \"{$username}\" does not have two-factor authentication set up. Nothing to do.");
+
+            // The locked-out-but-nothing-to-reset combination (#18) means the
+            // REQUIREMENT is what's in the way, not an enrollment — point at
+            // the command that clears that, or this dead end reads as "wipe
+            // the database".
+            if (Setting::get('two_factor_required', '0') === '1'
+                || Setting::get('two_factor_required_admins', '0') === '1') {
+                $this->warn('However, this console REQUIRES two-factor authentication, so un-enrolled users are held at the setup screen.');
+                $this->line('Run "php artisan cortendesk:2fa-requirement off" to stop requiring it.');
+            }
 
             return self::SUCCESS;
         }

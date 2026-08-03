@@ -3,6 +3,7 @@
 namespace App\Http\Middleware;
 
 use App\Services\MailSettings;
+use App\Support\LivewireRequest;
 use App\Support\LoginEmailVerification;
 use Closure;
 use Illuminate\Http\Request;
@@ -52,7 +53,7 @@ class RequireMailHealthy
     /** Where they may go: the settings screen, their own account, and out. */
     private function isAllowed(Request $request): bool
     {
-        if ($request->is('livewire/*')) {
+        if (LivewireRequest::isComponentUpdate($request)) {
             return true;
         }
 

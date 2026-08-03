@@ -191,38 +191,64 @@ class SettingsPage extends Component
         $this->relayServers = array_values($this->relayServers);
     }
 
+    /**
+     * Which tab renders a validated field. One validate() spans every tab, so
+     * a failure can belong to a pane the operator is not looking at — save()
+     * jumps there, or the only visible symptom is a Save button that does
+     * nothing (#18's reporter met this shape on the security tab).
+     */
+    private static function tabForField(string $field): ?string
+    {
+        $root = strtok($field, '.');
+
+        return match (true) {
+            str_starts_with($root, 'oidc') => 'sso',
+            str_starts_with($root, 'smtp') => 'email',
+            $root === 'logRetentionDays' => 'maintenance',
+            in_array($root, ['twoFactorRequired', 'twoFactorRequiredAdmins', 'emailLoginVerification', 'emailTrustedDeviceDays'], true) => 'security',
+            in_array($root, ['idServer', 'relayServer', 'publicKey', 'onlineWindow', 'rdgenUrl', 'relayServers', 'requireDeviceApproval'], true) => 'server',
+            default => null,
+        };
+    }
+
     public function save(): void
     {
         $this->authorizeConsole('setting', 'rw');
 
-        $this->validate([
-            'idServer' => 'nullable|string|max:255',
-            'relayServer' => 'nullable|string|max:255',
-            'publicKey' => 'nullable|string|max:255',
-            'onlineWindow' => 'required|integer|min:20|max:600',
-            'rdgenUrl' => 'nullable|url|max:255',
-            'logRetentionDays' => 'required|integer|min:0|max:3650',
-            'relayServers' => 'array',
-            'relayServers.*.address' => 'nullable|string|max:255',
-            'relayServers.*.geo' => 'nullable|string|max:64',
-            'oidcDiscoveryUrl' => 'nullable|url|max:255',
-            'oidcPublicBaseUrl' => 'nullable|url|max:255',
-            'oidcClientId' => 'nullable|string|max:255',
-            'oidcClientSecret' => 'nullable|string|max:512',
-            'oidcScopes' => 'nullable|string|max:255',
-            'oidcButtonLabel' => 'nullable|string|max:64',
-            'oidcNewUserPolicy' => 'required|in:deny,pending,active',
-            'oidcDefaultGroupId' => 'nullable|integer|min:0',
-            'oidcAllowedDomains' => 'nullable|string|max:512',
-            'smtpHost' => 'nullable|string|max:255',
-            'smtpPort' => 'required|integer|min:1|max:65535',
-            'smtpEncryption' => 'required|in:starttls,ssl,none',
-            'smtpUsername' => 'nullable|string|max:255',
-            'smtpPassword' => 'nullable|string|max:512',
-            'smtpFromAddress' => 'nullable|email|max:255',
-            'smtpFromName' => 'nullable|string|max:64',
-            'emailTrustedDeviceDays' => 'required|integer|min:1|max:365',
-        ]);
+        try {
+            $this->validate([
+                'idServer' => 'nullable|string|max:255',
+                'relayServer' => 'nullable|string|max:255',
+                'publicKey' => 'nullable|string|max:255',
+                'onlineWindow' => 'required|integer|min:20|max:600',
+                'rdgenUrl' => 'nullable|url|max:255',
+                'logRetentionDays' => 'required|integer|min:0|max:3650',
+                'relayServers' => 'array',
+                'relayServers.*.address' => 'nullable|string|max:255',
+                'relayServers.*.geo' => 'nullable|string|max:64',
+                'oidcDiscoveryUrl' => 'nullable|url|max:255',
+                'oidcPublicBaseUrl' => 'nullable|url|max:255',
+                'oidcClientId' => 'nullable|string|max:255',
+                'oidcClientSecret' => 'nullable|string|max:512',
+                'oidcScopes' => 'nullable|string|max:255',
+                'oidcButtonLabel' => 'nullable|string|max:64',
+                'oidcNewUserPolicy' => 'required|in:deny,pending,active',
+                'oidcDefaultGroupId' => 'nullable|integer|min:0',
+                'oidcAllowedDomains' => 'nullable|string|max:512',
+                'smtpHost' => 'nullable|string|max:255',
+                'smtpPort' => 'required|integer|min:1|max:65535',
+                'smtpEncryption' => 'required|in:starttls,ssl,none',
+                'smtpUsername' => 'nullable|string|max:255',
+                'smtpPassword' => 'nullable|string|max:512',
+                'smtpFromAddress' => 'nullable|email|max:255',
+                'smtpFromName' => 'nullable|string|max:64',
+                'emailTrustedDeviceDays' => 'required|integer|min:1|max:365',
+            ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            $this->tab = self::tabForField((string) array_key_first($e->errors())) ?? $this->tab;
+
+            throw $e;
+        }
 
         // Turning SSO on without the three fields needed to reach a provider
         // would hide the password form behind a door that doesn't open.
@@ -230,6 +256,7 @@ class SettingsPage extends Component
             $missingSecret = $this->oidcClientSecret === '' && ! $this->oidcClientSecretSet;
 
             if ($this->oidcDiscoveryUrl === '' || $this->oidcClientId === '' || $missingSecret) {
+                $this->tab = 'sso';
                 $this->addError('oidcDiscoveryUrl', 'Provider URL, client ID and client secret are all required to enable SSO.');
 
                 return;
@@ -239,6 +266,7 @@ class SettingsPage extends Component
         // Switching email on without somewhere to send from would silently
         // swallow every invitation and sign-in code.
         if ($this->smtpEnabled && (trim($this->smtpHost) === '' || trim($this->smtpFromAddress) === '')) {
+            $this->tab = 'email';
             $this->addError('smtpHost', 'Host and From address are both required to enable email.');
 
             return;
