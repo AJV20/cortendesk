@@ -22,6 +22,13 @@ class Setting extends Model
     public static function put(string $key, ?string $value): void
     {
         static::query()->updateOrCreate(['key' => $key], ['value' => $value]);
+
+        // Device memoizes the online window per process; without this flush a
+        // long-lived process (schedule:work, queue workers, the test runner)
+        // would keep judging presence by the OLD value after a settings save.
+        if ($key === 'online_window') {
+            Device::flushOnlineWindowCache();
+        }
     }
 
     /**

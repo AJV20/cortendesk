@@ -21,12 +21,23 @@ class Device extends Model
 
     private static ?int $onlineWindowCache = null;
 
-    /** Effective online window: settings table → config → constant. */
+    /**
+     * Effective online window: settings table → config → constant. Memoized
+     * per process so per-row isOnline() calls in a list don't each query the
+     * settings table; Setting::put() flushes it, which is what lets the
+     * long-lived scheduler (`schedule:work` inside the container) see a
+     * changed setting without a restart.
+     */
     public static function onlineWindow(): int
     {
         return self::$onlineWindowCache ??= (int) (
             Setting::get('online_window', (string) config('cortendesk.online_window', self::ONLINE_WINDOW)) ?: self::ONLINE_WINDOW
         );
+    }
+
+    public static function flushOnlineWindowCache(): void
+    {
+        self::$onlineWindowCache = null;
     }
 
     protected $fillable = [
@@ -122,19 +133,19 @@ class Device extends Model
     public function isOnline(): bool
     {
         return $this->last_online_at !== null
-            && $this->last_online_at->gt(now()->subSeconds(self::ONLINE_WINDOW));
+            && $this->last_online_at->gt(now()->subSeconds(self::onlineWindow()));
     }
 
     public function scopeOnline(Builder $query): Builder
     {
-        return $query->where('last_online_at', '>', now()->subSeconds(self::ONLINE_WINDOW));
+        return $query->where('last_online_at', '>', now()->subSeconds(self::onlineWindow()));
     }
 
     public function scopeOffline(Builder $query): Builder
     {
         return $query->where(function (Builder $q) {
             $q->whereNull('last_online_at')
-                ->orWhere('last_online_at', '<=', now()->subSeconds(self::ONLINE_WINDOW));
+                ->orWhere('last_online_at', '<=', now()->subSeconds(self::onlineWindow()));
         });
     }
 
