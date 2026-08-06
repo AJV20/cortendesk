@@ -173,6 +173,23 @@ class Device extends Model
         });
     }
 
+    /**
+     * RustDesk-style platform name ("Windows", "Mac OS") — the form clients
+     * sync into address books and match their own icons against. Address-book
+     * entries must store this, not platform()'s console-internal slug.
+     */
+    public function rustdeskPlatform(): string
+    {
+        return match ($this->platform()) {
+            'windows' => 'Windows',
+            'macos' => 'Mac OS',
+            'linux' => 'Linux',
+            'android' => 'Android',
+            'ios' => 'iOS',
+            default => '',
+        };
+    }
+
     /** Platform slug used to pick an OS icon: windows, macos, linux, android, ios. */
     public function platform(): string
     {

@@ -2836,3 +2836,10 @@ html[data-sidenav-size="sm-hover"]:not([data-layout="topnav"]) .wrapper .leftsid
         height: 40px;
     }
 }
+
+/* Bulk-selection column on the device table (issue #15): as narrow as the
+   checkbox, so twelve data columns don't lose width to it. */
+.rd-selcol {
+    width: 28px;
+    padding-right: 0 !important;
+}

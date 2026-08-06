@@ -66,6 +66,14 @@
 
         @unless ($trashed)
             <div class="rd-toolbar">
+                <a href="javascript:void(0);" class="fs-13 text-muted d-none d-md-inline"
+                   wire:click="$toggle('columnsOpen')">
+                    <i class="ri-layout-column-line me-1"></i>Columns
+                </a>
+                <a href="javascript:void(0);" class="fs-13 text-muted" wire:click="exportCsv"
+                   title="Download the current view as CSV">
+                    <i class="ri-download-2-line me-1"></i>Export CSV
+                </a>
                 @if ($pendingCount > 0)
                     <a href="javascript:void(0);" class="fs-13 text-warning fw-semibold" wire:click="$set('pendingTab', true)">
                         <i class="ri-time-line me-1"></i>Pending approval
@@ -76,6 +84,32 @@
                     <i class="ri-delete-bin-line me-1"></i>Recycle Bin ({{ $trashedCount }})
                 </a>
             </div>
+
+            {{-- Column picker (issue #16). A plain inline panel, not a Bootstrap
+                 dropdown: Livewire re-renders on every checkbox and a JS-owned
+                 dropdown would snap shut after each click. Desktop-only, like
+                 the table it configures — the mobile cards have a fixed layout. --}}
+            @if ($columnsOpen)
+                <div class="rd-toolbar d-none d-md-flex">
+                    <div class="rd-inset w-100">
+                        <div class="d-flex flex-wrap gap-3 align-items-center">
+                            @foreach (\App\Livewire\DeviceList::COLUMNS as $key => $label)
+                                @continue ($key === 'owner' && ! auth()->user()?->is_admin)
+                                <div class="form-check form-check-inline m-0">
+                                    <input type="checkbox" class="form-check-input" id="col-{{ $key }}"
+                                           value="{{ $key }}" wire:model.live="columns">
+                                    <label class="form-check-label fs-13" for="col-{{ $key }}">{{ $label }}</label>
+                                </div>
+                            @endforeach
+                            <div class="ms-auto d-flex gap-2">
+                                <button type="button" class="btn btn-sm btn-outline-light" wire:click="resetColumns">Defaults</button>
+                                <button type="button" class="btn btn-sm btn-light" wire:click="$set('columnsOpen', false)">Done</button>
+                            </div>
+                        </div>
+                        <div class="form-text">Your selection is saved to your account.</div>
+                    </div>
+                </div>
+            @endif
         @else
             <div class="rd-toolbar">
                 <div class="alert alert-warning py-2 mb-0 w-100">
@@ -84,18 +118,58 @@
             </div>
         @endunless
 
+        {{-- Bulk actions bar (issue #15) — appears when rows are selected. --}}
+        @if (! $trashed && ($selected !== [] || $bulkResult !== ''))
+            <div class="rd-toolbar d-none d-md-flex">
+                @if ($selected !== [])
+                    <span class="fs-13 fw-semibold">{{ count($selected) }} selected</span>
+                    <button type="button" class="btn btn-sm btn-light" wire:click="openAbPicker">
+                        <i class="ri-contacts-book-2-line me-1"></i>Add to Address Book…
+                    </button>
+                    @if (auth()->user()?->consoleAllows('device', 'rw'))
+                        <button type="button" class="btn btn-sm btn-outline-danger" wire:click="bulkDelete"
+                                wire:confirm="Move {{ count($selected) }} selected device(s) to the recycle bin?">
+                            <i class="ri-delete-bin-line me-1"></i>Delete
+                        </button>
+                    @endif
+                    <a href="javascript:void(0);" class="fs-13 text-muted" wire:click="clearSelection">Clear</a>
+                @endif
+                @if ($bulkResult !== '')
+                    <span class="fs-13 text-success"><i class="ri-check-line me-1"></i>{{ $bulkResult }}</span>
+                @endif
+            </div>
+        @endif
+
         {{-- Desktop table (md and up) --}}
         <div class="table-responsive d-none d-md-block">
             <table class="table table-hover table-centered mb-0">
                 <thead>
                 <tr>
+                    <th class="rd-selcol">
+                        @unless ($trashed)
+                            @php $pageIds = $devices->pluck('id')->map(fn ($i) => (string) $i); @endphp
+                            @if ($pageIds->isNotEmpty() && $pageIds->diff($selected)->isEmpty())
+                                <input type="checkbox" class="form-check-input" checked
+                                       wire:click="clearSelection" title="Clear selection">
+                            @else
+                                <input type="checkbox" class="form-check-input"
+                                       wire:click="selectPage" title="Select every row on this page">
+                            @endif
+                        @endunless
+                    </th>
                     <th>ID</th>
-                    <th>Device</th>
-                    <th>Alias</th>
-                    <th>Group</th>
-                    @if (auth()->user()?->is_admin)<th>Owner</th>@endif
-                    <th>Version</th>
-                    <th>Last Seen</th>
+                    @if ($cols['device'])<th>Device</th>@endif
+                    @if ($cols['alias'])<th>Alias</th>@endif
+                    @if ($cols['group'])<th>Group</th>@endif
+                    @if ($cols['owner'])<th>Owner</th>@endif
+                    @if ($cols['version'])<th>Version</th>@endif
+                    @if ($cols['username'])<th>User</th>@endif
+                    @if ($cols['ip'])<th>IP</th>@endif
+                    @if ($cols['cpu'])<th>CPU</th>@endif
+                    @if ($cols['memory'])<th>Memory</th>@endif
+                    @if ($cols['uuid'])<th>UUID</th>@endif
+                    @if ($cols['first_seen'])<th>First Seen</th>@endif
+                    @if ($cols['last_seen'])<th>Last Seen</th>@endif
                     <th>Status</th>
                     <th class="text-end">Action</th>
                 </tr>
@@ -103,6 +177,12 @@
                 <tbody>
                 @forelse ($devices as $device)
                     <tr wire:key="d{{ $device->id }}">
+                        <td class="rd-selcol">
+                            @unless ($trashed)
+                                <input type="checkbox" class="form-check-input" value="{{ $device->id }}"
+                                       wire:model.live="selected">
+                            @endunless
+                        </td>
                         <td>
                             <x-platform-icon :platform="$device->platform()" class="me-1"/>
                             @if ($trashed)
@@ -112,15 +192,17 @@
                                    title="Connect with RustDesk">{{ $device->rustdesk_id }}</a>
                             @endif
                         </td>
-                        <td>
-                            <span class="rd-cell-title">{{ $device->hostname ?: '—' }}</span>
-                            <span class="rd-cell-sub">
-                                {{ $device->os ? \Illuminate\Support\Str::limit($device->os, 28) : 'unknown OS' }}@if ($device->username) · {{ $device->username }}@endif
-                            </span>
-                        </td>
-                        <td>{{ $device->alias ?: '—' }}</td>
-                        <td>{{ $device->group?->name ?: '—' }}</td>
-                        @if (auth()->user()?->is_admin)
+                        @if ($cols['device'])
+                            <td>
+                                <span class="rd-cell-title">{{ $device->hostname ?: '—' }}</span>
+                                <span class="rd-cell-sub">
+                                    {{ $device->os ? \Illuminate\Support\Str::limit($device->os, 28) : 'unknown OS' }}@if ($device->username) · {{ $device->username }}@endif
+                                </span>
+                            </td>
+                        @endif
+                        @if ($cols['alias'])<td>{{ $device->alias ?: '—' }}</td>@endif
+                        @if ($cols['group'])<td>{{ $device->group?->name ?: '—' }}</td>@endif
+                        @if ($cols['owner'])
                             <td>
                                 @if ($device->user)
                                     <span class="badge bg-info-subtle text-info">{{ $device->user->username }}</span>
@@ -129,12 +211,28 @@
                                 @endif
                             </td>
                         @endif
-                        <td><span class="badge bg-secondary-subtle text-secondary">{{ $device->version ?: '?' }}</span></td>
-                        <td>
-                            <span title="{{ $device->last_online_at }}">
-                                {{ $device->last_online_at?->diffForHumans() ?? 'never' }}
-                            </span>
-                        </td>
+                        @if ($cols['version'])
+                            <td><span class="badge bg-secondary-subtle text-secondary">{{ $device->version ?: '?' }}</span></td>
+                        @endif
+                        @if ($cols['username'])<td>{{ $device->username ?: '—' }}</td>@endif
+                        @if ($cols['ip'])<td class="rd-mono fs-13">{{ $device->last_online_ip ?: '—' }}</td>@endif
+                        @if ($cols['cpu'])
+                            <td><span class="fs-13" title="{{ $device->cpu }}">{{ $device->cpu ? \Illuminate\Support\Str::limit($device->cpu, 24) : '—' }}</span></td>
+                        @endif
+                        @if ($cols['memory'])<td class="fs-13">{{ $device->memory ?: '—' }}</td>@endif
+                        @if ($cols['uuid'])
+                            <td><span class="rd-mono fs-13" title="{{ $device->uuid }}">{{ $device->uuid ? \Illuminate\Support\Str::limit($device->uuid, 12) : '—' }}</span></td>
+                        @endif
+                        @if ($cols['first_seen'])
+                            <td><span title="{{ $device->created_at }}">{{ $device->created_at?->format('Y-m-d') ?? '—' }}</span></td>
+                        @endif
+                        @if ($cols['last_seen'])
+                            <td>
+                                <span title="{{ $device->last_online_at }}">
+                                    {{ $device->last_online_at?->diffForHumans() ?? 'never' }}
+                                </span>
+                            </td>
+                        @endif
                         <td>
                             @if ($trashed)
                                 <span class="badge bg-warning-subtle text-warning">Deleted</span>
@@ -178,7 +276,7 @@
                     </tr>
                 @empty
                     <tr>
-                        <td colspan="{{ auth()->user()?->is_admin ? 9 : 8 }}" class="rd-empty-cell">
+                        <td colspan="{{ $colspan }}" class="rd-empty-cell">
                             <div class="rd-empty">
                                 <div class="rd-empty-icon"><i class="{{ $trashed ? 'ri-delete-bin-line' : 'ri-computer-line' }}"></i></div>
                                 <p class="rd-empty-title">{{ $trashed ? 'Recycle bin is empty.' : 'No devices match your filters.' }}</p>
@@ -278,6 +376,43 @@
             {{ $devices->links() }}
         </div>
     </div>
+
+    {{-- "Add to Address Book" picker (issue #15) --}}
+    @if ($abPickerOpen)
+        <div class="modal fade show d-block" tabindex="-1" style="background: rgba(0,0,0,.6);" wire:keydown.escape="closeAbPicker">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <form wire:submit="addSelectedToBook">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Add {{ count($selected) }} {{ Str::plural('device', count($selected)) }} to an address book</h5>
+                            <button type="button" class="btn-close" wire:click="closeAbPicker"></button>
+                        </div>
+                        <div class="modal-body">
+                            <label class="form-label">Address book</label>
+                            <select class="form-select @error('abBookId') is-invalid @enderror" wire:model="abBookId">
+                                <option value="0">Choose…</option>
+                                @foreach ($books as $book)
+                                    <option value="{{ $book->id }}">
+                                        {{ $book->name }}{{ $book->is_personal ? ' (personal)' : '' }}
+                                    </option>
+                                @endforeach
+                            </select>
+                            @error('abBookId') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                            <div class="form-text">
+                                Only books you can add entries to are listed. Devices already in the
+                                chosen book are skipped, and each entry carries the device's alias,
+                                hostname, platform and user.
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-light" wire:click="closeAbPicker">Cancel</button>
+                            <button type="submit" class="btn btn-primary">Add</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    @endif
 
     {{-- Add / Edit modal --}}
     @if ($editingId !== null)

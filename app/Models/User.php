@@ -17,7 +17,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
-#[Fillable(['username', 'name', 'email', 'password', 'avatar', 'is_admin', 'role_id', 'is_active', 'note'])]
+#[Fillable(['username', 'name', 'email', 'password', 'avatar', 'is_admin', 'role_id', 'is_active', 'note', 'devices_columns'])]
 #[Hidden(['password', 'remember_token', 'totp_secret'])]
 class User extends Authenticatable
 {
@@ -45,6 +45,8 @@ class User extends Authenticatable
             'totp_secret' => 'encrypted',
             'totp_enabled' => 'boolean',
             'totp_confirmed_at' => 'datetime',
+            // Devices-screen column selection (issue #16); null = defaults.
+            'devices_columns' => 'array',
         ];
     }
 
