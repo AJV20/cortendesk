@@ -1,10 +1,28 @@
-# CortenDesk + MySQL. For a zero-dependency trial, the image also runs
-# standalone on SQLite:  docker run -p 8080:8080 -v cortendesk-data:/data cortendesk
+# CortenDesk + MySQL. One image: console, ID server and relay.
+#
+# Set APP_URL to the address your clients and browsers reach — everything else
+# is derived from it, including what hbbs tells clients about the relay. Leave
+# it as localhost and sessions that need the relay will hang.
+#
+# For a zero-dependency trial the image also runs standalone on SQLite:
+#   docker run -p 8080:8080 -p 21115-21119:21115-21119 -p 21116:21116/udp \
+#     -e APP_URL=http://your-host:8080 -v cortendesk-data:/data \
+#     ghcr.io/marcpope/cortendesk:latest
 services:
   cortendesk:
     build: .
     ports:
       - "8080:8080"
+      # hbbs: NAT test, signalling (tcp+udp). hbbr: the relay.
+      - "21115:21115"
+      - "21116:21116"
+      - "21116:21116/udp"
+      - "21117:21117"
+      # WebSocket, for the in-browser client. Only needed if something outside
+      # this container talks to them directly — nginx here already bridges
+      # /ws/id and /ws/relay over loopback.
+      - "21118:21118"
+      - "21119:21119"
     environment:
       APP_URL: http://localhost:8080
       DB_CONNECTION: mysql
@@ -12,15 +30,25 @@ services:
       DB_DATABASE: cortendesk
       DB_USERNAME: cortendesk
       DB_PASSWORD: cortendesk-change-me
-      # Your RustDesk server:
-      CORTENDESK_ID_SERVER: hbbs.example.com:21116
-      CORTENDESK_RELAY_SERVER: hbbs.example.com:21117
-      CORTENDESK_PUBLIC_KEY: ""
-      # Web client wss endpoints as seen by BROWSERS (your TLS proxy):
+      # The ID server, relay and key default to this host and the key pair in
+      # the volume. Set them only to point at servers you run yourself, with
+      # CORTENDESK_EMBEDDED_SERVER: "false".
+      #
+      # CORTENDESK_EMBEDDED_SERVER: "false"
+      # CORTENDESK_ID_SERVER: hbbs.example.com:21116
+      # CORTENDESK_RELAY_SERVER: hbbs.example.com:21117
+      # CORTENDESK_PUBLIC_KEY: ""
+      #
+      # Web client wss endpoints as seen by BROWSERS. Derived from APP_URL when
+      # empty; set them if your TLS proxy serves them somewhere else.
       CORTENDESK_WS_ID_URL: ""
       CORTENDESK_WS_RELAY_URL: ""
     volumes:
       - cortendesk-data:/data
+      # Upgrading from separate hbbs/hbbr containers? Mount their data
+      # directory here and the key pair and peer database carry over, so every
+      # device keeps its ID and needs no reconfiguring:
+      # - ./data:/data/rustdesk
     depends_on:
       db:
         condition: service_healthy
@@ -28,6 +56,10 @@ services:
 
   db:
     image: mysql:8.4
+    # MySQL keeps 30 days of binary logs by default. Nothing replicates from a
+    # single-server install, and on a small disk they are the thing most likely
+    # to fill it — which stalls every write, not just the logging.
+    command: --binlog-expire-logs-seconds=259200
     environment:
       MYSQL_DATABASE: cortendesk
       MYSQL_USER: cortendesk

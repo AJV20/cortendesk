@@ -1,10 +1,14 @@
 # CortenDesk
 
-**A professional, self-hosted web console for RustDesk servers — with a fully native in-browser remote desktop client.**
+**A complete, self-hosted drop-in replacement for the open-source RustDesk server — ID server, relay and professional console in one image, with a fully native in-browser remote desktop client.**
 
 <img width="100%" alt="CortenDesk - A Rust Desk Pro Console Alternative made entriely for the Open Source Rust Desk Server, API Relay and Client hbbs/hbbr" src="https://github.com/user-attachments/assets/7eb7ad86-48f5-42ea-b2d6-662a2a8a1dab" />
 
-### CortenDesk gives the free, open-source RustDesk server (`hbbs`/`hbbr`) a clean and professional GUI Console: device fleet management, users and scoped access, address books, audit logs, and a web client that can view, control, and transfer files to your devices straight from the browser — no installer, no Electron, no paid tier.
+### CortenDesk is everything a self-hosted RustDesk deployment needs, in a single container: the ID/rendezvous server (`hbbs`), the relay (`hbbr`), and a clean, professional console — device fleet management, users and scoped access, address books, audit logs, and a web client that can view, control, and transfer files to your devices straight from the browser. No installer, no Electron, no paid tier. Stock RustDesk clients connect to it unchanged.
+
+**It replaces the open-source server, and fixes what that server gets wrong.** The bundled `hbbs`/`hbbr` are [CortenDesk Server](https://github.com/marcpope/cortendesk-server), our AGPL fork of `rustdesk-server`. The headline fix: the open-source `hbbs` never completes the signalling key exchange that RustDesk clients 1.4.1 and newer start whenever they are signed in to a console, so **every connection from a signed-in client fails** with `Failed to secure tcp: deadline has elapsed` — which breaks the address book, the main reason to sign in at all. Upstream treats that as out of scope. We implemented the missing half.
+
+Already running your own `hbbs`/`hbbr`? Set `CORTENDESK_EMBEDDED_SERVER=false` and CortenDesk is the console alone, exactly as before.
 
 Built on Laravel + Livewire with precompiled assets: **there is no frontend build step**. Clone, configure, migrate, serve.
 
@@ -41,32 +45,55 @@ Built on Laravel + Livewire with precompiled assets: **there is no frontend buil
 - PHP **8.4+** with Composer
 - MySQL/MariaDB (SQLite works for evaluation)
 - nginx + php-fpm (or any Laravel-capable web server)
-- A running open-source **RustDesk server** (`hbbs`/`hbbr`), reachable from your devices
-- For the web client: a proxy bridging WebSockets to hbbs/hbbr ports 21118/21119 — `wss://` over HTTPS, or `ws://` if you serve the console over plain HTTP — sample config below
+- A RustDesk server (`hbbs`/`hbbr`) — **included in the Docker image**; only needed separately for a manual install
+- For the web client: a proxy bridging WebSockets to hbbs/hbbr ports 21118/21119 — `wss://` over HTTPS, or `ws://` if you serve the console over plain HTTP — sample config below. The Docker image already does this internally.
 
 ## Quick start with Docker
 
-The repo ships a self-contained image (php-fpm + nginx, web client included,
-WebSocket bridge to your RustDesk server built in). Releases are published to
-GHCR — or build it yourself:
+One image, one command. It brings up the console, the ID server and the relay,
+generates the server key pair on first boot, and wires all three together:
 
 ```bash
-docker pull ghcr.io/marcpope/cortendesk:1.1.2   # or build locally:
-docker build -t cortendesk .
-docker run -d -p 8080:8080 -v cortendesk-data:/data \
-  -e CORTENDESK_ID_SERVER=hbbs.example.com:21116 \
-  -e CORTENDESK_RELAY_SERVER=hbbs.example.com:21117 \
-  -e CORTENDESK_PUBLIC_KEY="<contents of id_ed25519.pub>" \
-  cortendesk
+docker run -d --name cortendesk \
+  -e APP_URL=https://rd.example.com \
+  -p 8080:8080 -p 21115-21119:21115-21119 -p 21116:21116/udp \
+  -v cortendesk-data:/data \
+  ghcr.io/marcpope/cortendesk:1.5.0
 ```
+
+`APP_URL` is the only setting that matters: it is the address your clients and
+browsers reach, and the ID server, the relay address handed to clients, and the
+web client's WebSocket URLs are all derived from it. Leave it as `localhost` and
+sessions that need the relay will hang.
 
 First boot creates **admin / changeme** (override with `CORTENDESK_ADMIN_USER`
 / `CORTENDESK_ADMIN_PASSWORD`) and uses SQLite in the `/data` volume — see
-`docker-compose.yml` for a MySQL setup. The container bridges `/ws/id` and
-`/ws/relay` to your hbbs/hbbr (host taken from `CORTENDESK_ID_SERVER`, or set
-`RUSTDESK_WS_HOST`). Put a TLS reverse proxy in front and set
-`CORTENDESK_WS_ID_URL` / `CORTENDESK_WS_RELAY_URL` to the resulting
-`wss://your-host/ws/*` URLs — browsers require wss for the web client.
+`docker-compose.yml` for a MySQL setup. Read the generated public key off the
+Settings screen, or from `/data/rustdesk/id_ed25519.pub`; it is what you put in
+each client's **Key** field.
+
+Ports: 8080 console and client API; 21115 NAT test; 21116 signalling, TCP **and
+UDP**; 21117 relay; 21118/21119 the WebSocket pair (only needed if something
+outside the container talks to them directly — nginx here already bridges
+`/ws/id` and `/ws/relay` over loopback). Put a TLS reverse proxy in front of
+8080 and the web client works with no further configuration.
+
+**Bringing your own server.** Point CortenDesk at `hbbs`/`hbbr` you already run:
+
+```bash
+-e CORTENDESK_EMBEDDED_SERVER=false \
+-e CORTENDESK_ID_SERVER=hbbs.example.com:21116 \
+-e CORTENDESK_RELAY_SERVER=hbbs.example.com:21117 \
+-e CORTENDESK_PUBLIC_KEY="<contents of id_ed25519.pub>"
+```
+
+**Coming from separate hbbs/hbbr containers.** Stop them, then mount their data
+directory at `/data/rustdesk`. The key pair and peer database are adopted as
+they are, so every device keeps its ID and needs no reconfiguring:
+
+```bash
+-v /path/to/your/rustdesk/data:/data/rustdesk
+```
 
 ## Manual installation
 

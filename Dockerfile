@@ -1,11 +1,21 @@
-# CortenDesk — self-hosted RustDesk web console (app + native web client).
+# CortenDesk — self-hosted RustDesk console, ID server and relay in one image.
 #
 #   docker build -t cortendesk .
-#   docker run -p 8080:8080 -v cortendesk-data:/data cortendesk
+#   docker run -p 8080:8080 -p 21115-21119:21115-21119 -p 21116:21116/udp \
+#     -v cortendesk-data:/data cortendesk
 #
-# Zero-config run uses SQLite in the /data volume and creates admin/changeme
-# on first boot. See docker-compose.yml for a MySQL setup, and README.md for
-# the reverse-proxy (TLS + wss) notes.
+# Zero-config run uses SQLite in the /data volume, generates the server key on
+# first boot and creates admin/changeme. See docker-compose.yml for a MySQL
+# setup, and README.md for the reverse-proxy (TLS + wss) notes.
+
+# ---- stage 0: the ID and relay servers ---------------------------------------
+# Prebuilt static binaries, lifted out of a published image — nothing is
+# compiled here. Source: github.com/marcpope/cortendesk-server (AGPL-3.0, a
+# fork of rustdesk-server). Pinned to an exact version on purpose: the server
+# has its own release cadence, and a console release should never quietly
+# change which server it ships.
+ARG SERVER_VERSION=1.0.0
+FROM ghcr.io/marcpope/cortendesk-server:${SERVER_VERSION} AS server
 
 # ---- stage 1: composer dependencies -----------------------------------------
 FROM composer:2 AS deps
@@ -29,13 +39,15 @@ RUN apk add --no-cache nginx supervisor icu-libs gettext \
 
 WORKDIR /app
 COPY --from=deps /app /app
+COPY --from=server /usr/bin/hbbs /usr/bin/hbbr /usr/bin/cortendesk-utils /usr/bin/
 COPY docker/php.ini /usr/local/etc/php/conf.d/cortendesk.ini
 COPY docker/nginx.conf.template /etc/nginx/nginx.conf.template
 COPY docker/supervisord.conf /etc/supervisord.conf
+COPY docker/rustdesk-server.conf /etc/cortendesk/rustdesk-server.conf
 COPY docker/entrypoint.sh /entrypoint.sh
 
-RUN chmod +x /entrypoint.sh \
-    && mkdir -p /data /run/nginx \
+RUN chmod +x /entrypoint.sh /usr/bin/hbbs /usr/bin/hbbr \
+    && mkdir -p /data /run/nginx /etc/supervisor.d \
     && chown -R www-data:www-data /data /app/storage /app/bootstrap/cache
 
 # Container-friendly defaults; override any of these at run time.
@@ -48,9 +60,18 @@ ENV APP_ENV=production \
     SESSION_DRIVER=file \
     CACHE_STORE=file \
     QUEUE_CONNECTION=sync \
-    CORTENDESK_NATIVE_WEBCLIENT=true
+    CORTENDESK_NATIVE_WEBCLIENT=true \
+    CORTENDESK_EMBEDDED_SERVER=true
 
-EXPOSE 8080
+# Carried through so the console can report which server it is running, and so
+# `docker inspect` answers the question without a shell.
+ARG SERVER_VERSION=1.0.0
+ENV CORTENDESK_SERVER_VERSION=${SERVER_VERSION}
+
+# 8080 console/API. 21115 NAT test, 21116 tcp+udp signalling, 21118 ws (hbbs);
+# 21117 relay, 21119 ws (hbbr). The ws pair only needs to be reachable from
+# this container — nginx bridges /ws/id and /ws/relay to them over loopback.
+EXPOSE 8080 21115 21116 21116/udp 21117 21118 21119
 VOLUME /data
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s \
