@@ -51,7 +51,7 @@ WebSocket bridge to your RustDesk server built in). Releases are published to
 GHCR — or build it yourself:
 
 ```bash
-docker pull ghcr.io/marcpope/cortendesk:1.1.1   # or build locally:
+docker pull ghcr.io/marcpope/cortendesk:1.1.2   # or build locally:
 docker build -t cortendesk .
 docker run -d -p 8080:8080 -v cortendesk-data:/data \
   -e CORTENDESK_ID_SERVER=hbbs.example.com:21116 \

@@ -132,6 +132,20 @@ body.authentication-bg::before {
 /* Hide in the condensed (icons-only) sidebar — no room for the label. */
 html[data-sidenav-size="condensed"]:not([data-layout=topnav]) .rd-sidebar-version { display: none; }
 
+/* The theme reserves room for the footer with a padding-bottom on the fixed
+   .leftside-menu, and the scrolling menu container is .h-100 — 100% of that
+   already-shortened content box. But the logo sits ABOVE the container inside
+   the same box and is in normal flow (position:sticky), so the container ends
+   up one topbar-height taller than the space it has: its last ~65px scroll
+   underneath the pinned footer, where nothing can be tapped. Invisible on a
+   tall window because the menu doesn't scroll at all; on a phone it swallows
+   the final item whole (issue #21 — Build Installers, or Settings when no
+   installer builder is configured). Subtracting the logo gives the container
+   its real height. Bootstrap's .h-100 is !important, hence the override. */
+.leftside-menu #leftside-menu-container.h-100 {
+    height: calc(100% - var(--ct-topbar-height)) !important;
+}
+
 /* =========================================================================
    CORTENDESK DESIGN SYSTEM — FOUNDATION
    =========================================================================
