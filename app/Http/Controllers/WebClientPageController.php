@@ -9,8 +9,8 @@ class WebClientPageController extends Controller
 {
     /**
      * Full-screen native web client page. WebSocket endpoints come from
-     * explicit config when set, otherwise derived from the ID server host
-     * (production terminates TLS at the nginx proxy: wss://<host>/ws/*).
+     * explicit config when set, otherwise from the address this console is
+     * served on — /ws/id and /ws/relay are bridged on that same origin.
      */
     public function show(Request $request): View
     {
@@ -18,9 +18,9 @@ class WebClientPageController extends Controller
         $wsRelayUrl = config('cortendesk.ws_relay_url');
 
         if (! $wsIdUrl || ! $wsRelayUrl) {
-            $host = $this->idServerHost();
-            $wsIdUrl = $wsIdUrl ?: ($host ? "wss://{$host}/ws/id" : '');
-            $wsRelayUrl = $wsRelayUrl ?: ($host ? "wss://{$host}/ws/relay" : '');
+            $base = $this->wsBase($request);
+            $wsIdUrl = $wsIdUrl ?: ($base ? "{$base}/ws/id" : '');
+            $wsRelayUrl = $wsRelayUrl ?: ($base ? "{$base}/ws/relay" : '');
         }
 
         $user = $request->user();
@@ -35,19 +35,37 @@ class WebClientPageController extends Controller
         ]);
     }
 
-    /** Hostname of the configured ID server, without any :port suffix. */
-    private function idServerHost(): string
+    /**
+     * WebSocket origin for the bridge, e.g. "ws://10.0.0.5:8080".
+     *
+     * Taken from APP_URL, which is what the deployment declares as its public
+     * address and what drives the ID server and relay too; the current request
+     * covers a missing or unparseable one. Both the scheme and the port carry
+     * over: this used to be hardcoded to wss on an implicit 443, which broke
+     * every install not behind TLS on the default port (#23).
+     */
+    private function wsBase(Request $request): string
     {
-        $server = trim((string) config('cortendesk.id_server'));
-        if ($server === '') {
+        $parts = parse_url(trim((string) config('app.url')));
+
+        if (! is_array($parts) || empty($parts['host'])) {
+            $parts = parse_url($request->getSchemeAndHttpHost());
+        }
+
+        if (! is_array($parts) || empty($parts['host'])) {
             return '';
         }
 
-        // Accept "host", "host:port", or a full URL.
-        if (str_contains($server, '://')) {
-            return (string) (parse_url($server, PHP_URL_HOST) ?: '');
+        $secure = ($parts['scheme'] ?? 'http') === 'https';
+        $scheme = $secure ? 'wss' : 'ws';
+        $port = $parts['port'] ?? null;
+
+        // A default port is implied by the scheme; anything else has to be
+        // spelled out or the browser dials 80/443.
+        if ($port === ($secure ? 443 : 80)) {
+            $port = null;
         }
 
-        return explode(':', $server, 2)[0];
+        return $scheme.'://'.$parts['host'].($port ? ':'.$port : '');
     }
 }
