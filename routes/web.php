@@ -105,6 +105,8 @@ Route::middleware('auth')->group(function () {
         ->middleware('console-can:user,r');
     Route::view('/settings', 'settings.index')->name('settings')
         ->middleware('console-can:setting,r');
+    Route::view('/setup', 'setup.index')->name('setup')
+        ->middleware('console-can:setting,r');
 
     // Login history and the console audit trail are the sensitive half of the
     // `audit` area, so they need "Manage" rather than "View".

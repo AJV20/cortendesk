@@ -3,6 +3,13 @@
 @section('title', 'Overview')
 
 @section('content')
+    @if (\App\Livewire\SetupWizard::shouldPrompt(auth()->user()))
+        <div class="alert alert-info d-flex flex-wrap align-items-center gap-2">
+            <i class="ri-guide-line fs-20"></i>
+            <div class="flex-grow-1"><strong>Connect your first device.</strong> The setup guide provides the exact RustDesk network values and confirms the first heartbeat.</div>
+            <a href="{{ route('setup') }}" class="btn btn-sm btn-primary">Open setup guide</a>
+        </div>
+    @endif
     {{-- Only shown to someone who can actually fix it. Everything listed here
          is a feature that exists and silently cannot run without a relay. --}}
     @if (auth()->user()?->consoleAllows('setting', 'rw') && ! app(\App\Services\MailSettings::class)->isEnabled())
