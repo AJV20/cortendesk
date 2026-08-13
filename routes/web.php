@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\ClientOidcController;
 use App\Http\Controllers\Api\WebClientController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\DiagnosticsController;
 use App\Http\Controllers\InvitationController;
 use App\Http\Controllers\OidcController;
 use App\Http\Controllers\PasswordResetController;
@@ -104,6 +105,10 @@ Route::middleware('auth')->group(function () {
     Route::view('/users', 'users.index')->name('users')
         ->middleware('console-can:user,r');
     Route::view('/settings', 'settings.index')->name('settings')
+        ->middleware('console-can:setting,r');
+    Route::get('/diagnostics', [DiagnosticsController::class, 'index'])->name('diagnostics')
+        ->middleware('console-can:setting,r');
+    Route::get('/diagnostics/export', [DiagnosticsController::class, 'export'])->name('diagnostics.export')
         ->middleware('console-can:setting,r');
 
     // Login history and the console audit trail are the sensitive half of the
