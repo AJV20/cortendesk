@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\AlarmLog;
 use App\Models\AuditConnection;
 use App\Models\AuditFileTransfer;
+use App\Models\Device;
+use App\Services\AppriseNotifications;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -111,13 +113,33 @@ class AuditController extends Controller
             return response()->json((object) []);
         }
 
-        AlarmLog::create([
+        $alarm = AlarmLog::create([
             'rustdesk_id' => $id,
             'uuid' => (string) $request->input('uuid', ''),
             'typ' => (int) $request->input('typ', 0),
             'info' => (string) $request->input('info', ''),
             'conn_id' => (int) $request->input('conn_id', 0) ?: null,
         ]);
+
+        $notifications = app(AppriseNotifications::class);
+        $device = Device::query()->where('rustdesk_id', $id)->first();
+        $notifications->send(
+            'security.alarm',
+            $alarm->typeLabel(),
+            'Device '.$id.' reported a security alarm.',
+            'alarm:'.$alarm->id,
+            $device,
+        );
+
+        if ($alarm->typ === 1) {
+            $notifications->send(
+                'remote_connection.failure',
+                'Repeated remote connection failures',
+                'Device '.$id.' reported more than 30 failed connection attempts.',
+                'device:'.$id,
+                $device,
+            );
+        }
 
         return response()->json((object) []);
     }

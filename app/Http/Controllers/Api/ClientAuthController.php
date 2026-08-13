@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\ClientToken;
 use App\Models\LoginLog;
 use App\Models\User;
+use App\Services\AppriseNotifications;
 use App\Services\OidcService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -71,6 +72,13 @@ class ClientAuthController extends Controller
         ]);
 
         if (! $ok) {
+            app(AppriseNotifications::class)->send(
+                'console.login_failed',
+                'Failed console login',
+                'A RustDesk client sign-in attempt failed.',
+                'client-login:'.sha1(mb_strtolower($username).'|'.$request->ip()),
+            );
+
             // The client shows this message verbatim (after i18n lookup).
             return response()->json(['error' => 'Wrong credentials']);
         }

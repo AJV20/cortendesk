@@ -7,6 +7,7 @@ use App\Models\AlarmLog;
 use App\Models\LoginLog;
 use App\Models\TrustedDevice;
 use App\Models\User;
+use App\Services\AppriseNotifications;
 use App\Services\MailSettings;
 use App\Services\OidcService;
 use App\Support\LoginEmailVerification;
@@ -111,6 +112,12 @@ class AuthController extends Controller
         ]);
 
         if (! $ok || ! $user) {
+            app(AppriseNotifications::class)->send(
+                'console.login_failed',
+                'Failed console login',
+                'A web-console sign-in attempt failed.',
+                'web-login:'.sha1(mb_strtolower($credentials['username']).'|'.$ip),
+            );
             RateLimiter::hit($accountKey, self::DECAY);
             RateLimiter::hit($addressKey, self::DECAY);
 

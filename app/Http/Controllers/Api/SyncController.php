@@ -2,10 +2,12 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Console\Commands\CheckDeviceNotifications;
 use App\Http\Controllers\Controller;
 use App\Models\AuditConnection;
 use App\Models\Device;
 use App\Models\Strategy;
+use App\Services\AppriseNotifications;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 
@@ -57,6 +59,7 @@ class SyncController extends Controller
         }
 
         $device->forceFill($update)->saveQuietly();
+        CheckDeviceNotifications::reportOnline($device, app(AppriseNotifications::class));
 
         $response = [];
 
@@ -143,15 +146,26 @@ class SyncController extends Controller
             // Deployment approval gate (PLAN B3): when enabled, a first-seen
             // id+uuid is quarantined as 'pending' — registered but excluded from
             // scoping/address books/group tab/device list until an operator
-            // approves it. The plain-text ack stays identical so the client sees
-            // no difference (heartbeat/sysinfo remain fully transparent).
+            // approves it on the Devices → Pending tab. The plain-text ack stays
+            // identical so the client sees no difference.
             $attributes['status'] = Device::approvalGateEnabled()
                 ? Device::STATUS_PENDING
                 : Device::STATUS_ACTIVE;
 
-            Device::create(['rustdesk_id' => $id] + $attributes);
+            $device = Device::create(['rustdesk_id' => $id] + $attributes);
+
+            if ($device->isPending()) {
+                app(AppriseNotifications::class)->send(
+                    'device.pending_approval',
+                    'Device pending approval',
+                    CheckDeviceNotifications::deviceLabel($device).' is awaiting approval.',
+                    'device:'.$device->rustdesk_id,
+                    $device,
+                );
+            }
         } else {
             $device->update($attributes);
+            CheckDeviceNotifications::reportOnline($device, app(AppriseNotifications::class));
         }
 
         return response('SYSINFO_UPDATED');

@@ -18,3 +18,6 @@ Schedule::command('cortendesk:prune-invitations')->dailyAt('04:20');
 // Sessions on devices that have gone silent (issue #10). Frequent, not nightly:
 // this drives what the dashboard reports as happening right now.
 Schedule::command('cortendesk:close-stale-sessions')->everyFiveMinutes()->withoutOverlapping();
+
+// Presence transitions for configurable Apprise notifications.
+Schedule::command('cortendesk:check-device-notifications')->everyMinute()->withoutOverlapping();

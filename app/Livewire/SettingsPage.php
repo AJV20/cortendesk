@@ -4,13 +4,18 @@ namespace App\Livewire;
 
 use App\Livewire\Concerns\AuthorizesConsole;
 use App\Models\ConsoleAudit;
+use App\Models\Device;
+use App\Models\DeviceGroup;
+use App\Models\NotificationDelivery;
 use App\Models\Setting;
 use App\Models\UserGroup;
+use App\Services\AppriseNotifications;
 use App\Services\MailSettings;
 use App\Services\OidcService;
 use App\Support\LoginEmailVerification;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\Url;
 use Livewire\Component;
 
@@ -114,6 +119,43 @@ class SettingsPage extends Component
     /** Emailed 6-digit code on a browser the console has not seen before. */
     public bool $emailLoginVerification = false;
 
+    // ---- Apprise notifications -------------------------------------------
+
+    public bool $appriseEnabled = false;
+
+    /** Write-only saved transport fields; blank preserves encrypted values. */
+    public string $appriseEndpoint = '';
+
+    public string $appriseMode = 'config';
+
+    public string $appriseConfigKey = '';
+
+    public string $appriseUrls = '';
+
+    public bool $appriseEndpointSet = false;
+
+    public bool $appriseConfigKeySet = false;
+
+    public bool $appriseUrlsSet = false;
+
+    public int $appriseCooldownMinutes = 15;
+
+    /** @var array<string, bool> */
+    public array $appriseEvents = [];
+
+    /** @var array<string, string> */
+    public array $appriseScopes = [];
+
+    /** @var array<string, array<int, int|string>> */
+    public array $appriseScopeGroups = [];
+
+    /** @var array<string, array<int, int|string>> */
+    public array $appriseScopeDevices = [];
+
+    public string $appriseTestMessage = '';
+
+    public bool $appriseTestOk = false;
+
     public int $emailTrustedDeviceDays = 30;
 
     public bool $saved = false;
@@ -167,6 +209,20 @@ class SettingsPage extends Component
         $this->emailLoginVerification = Setting::get('email_login_verification', '0') === '1';
         $this->emailTrustedDeviceDays = (int) (Setting::get('email_trusted_device_days', '30') ?: 30);
 
+        $this->appriseEnabled = Setting::get('apprise_enabled', '0') === '1';
+        $this->appriseMode = Setting::get('apprise_delivery_mode', 'config') === 'urls' ? 'urls' : 'config';
+        $this->appriseEndpointSet = trim((string) Setting::get('apprise_endpoint', '')) !== '';
+        $this->appriseConfigKeySet = trim((string) Setting::get('apprise_config_key', '')) !== '';
+        $this->appriseUrlsSet = trim((string) Setting::get('apprise_urls', '')) !== '';
+        $this->appriseCooldownMinutes = (int) (Setting::get('apprise_cooldown_minutes', '15') ?: 15);
+        foreach (AppriseNotifications::EVENTS as $event => $_label) {
+            $suffix = str_replace('.', '_', $event);
+            $this->appriseEvents[$suffix] = Setting::get('apprise_event_'.$suffix, '0') === '1';
+            $this->appriseScopes[$suffix] = Setting::get('apprise_scope_'.$suffix, 'all') === 'selected' ? 'selected' : 'all';
+            $this->appriseScopeGroups[$suffix] = json_decode((string) Setting::get('apprise_scope_groups_'.$suffix, '[]'), true) ?: [];
+            $this->appriseScopeDevices[$suffix] = json_decode((string) Setting::get('apprise_scope_devices_'.$suffix, '[]'), true) ?: [];
+        }
+
         $stored = json_decode(Setting::get('relay_servers', '') ?: '[]', true);
         $this->relayServers = is_array($stored) ? array_values(array_map(fn ($r) => [
             'address' => (string) ($r['address'] ?? ''),
@@ -204,6 +260,7 @@ class SettingsPage extends Component
         return match (true) {
             str_starts_with($root, 'oidc') => 'sso',
             str_starts_with($root, 'smtp') => 'email',
+            str_starts_with($root, 'apprise') => 'notifications',
             $root === 'logRetentionDays' => 'maintenance',
             in_array($root, ['twoFactorRequired', 'twoFactorRequiredAdmins', 'emailLoginVerification', 'emailTrustedDeviceDays'], true) => 'security',
             in_array($root, ['idServer', 'relayServer', 'publicKey', 'onlineWindow', 'rdgenUrl', 'relayServers', 'requireDeviceApproval'], true) => 'server',
@@ -243,8 +300,13 @@ class SettingsPage extends Component
                 'smtpFromAddress' => 'nullable|email|max:255',
                 'smtpFromName' => 'nullable|string|max:64',
                 'emailTrustedDeviceDays' => 'required|integer|min:1|max:365',
+                'appriseEndpoint' => 'nullable|url:http,https|max:2048',
+                'appriseMode' => 'required|in:config,urls',
+                'appriseConfigKey' => 'nullable|string|max:255',
+                'appriseUrls' => 'nullable|string|max:10000',
+                'appriseCooldownMinutes' => 'required|integer|min:0|max:1440',
             ]);
-        } catch (\Illuminate\Validation\ValidationException $e) {
+        } catch (ValidationException $e) {
             $this->tab = self::tabForField((string) array_key_first($e->errors())) ?? $this->tab;
 
             throw $e;
@@ -325,6 +387,34 @@ class SettingsPage extends Component
         Setting::put('smtp_from_address', trim($this->smtpFromAddress));
         Setting::put('smtp_from_name', trim($this->smtpFromName));
         Setting::put('email_trusted_device_days', (string) $this->emailTrustedDeviceDays);
+
+        Setting::put('apprise_enabled', $this->appriseEnabled ? '1' : '0');
+        Setting::put('apprise_delivery_mode', $this->appriseMode);
+        Setting::put('apprise_cooldown_minutes', (string) $this->appriseCooldownMinutes);
+        foreach (AppriseNotifications::EVENTS as $event => $_label) {
+            $suffix = str_replace('.', '_', $event);
+            Setting::put('apprise_event_'.$suffix, ! empty($this->appriseEvents[$suffix]) ? '1' : '0');
+            $scope = ($this->appriseScopes[$suffix] ?? 'all') === 'selected' ? 'selected' : 'all';
+            Setting::put('apprise_scope_'.$suffix, $scope);
+            Setting::put('apprise_scope_groups_'.$suffix, json_encode(array_values(array_unique(array_map('intval', $this->appriseScopeGroups[$suffix] ?? [])))));
+            Setting::put('apprise_scope_devices_'.$suffix, json_encode(array_values(array_unique(array_map('intval', $this->appriseScopeDevices[$suffix] ?? [])))));
+        }
+        if ($this->appriseEndpoint !== '') {
+            Setting::put('apprise_endpoint', Crypt::encryptString(trim($this->appriseEndpoint)));
+            $this->appriseEndpoint = '';
+            $this->appriseEndpointSet = true;
+        }
+        if ($this->appriseConfigKey !== '') {
+            Setting::put('apprise_config_key', Crypt::encryptString(trim($this->appriseConfigKey)));
+            $this->appriseConfigKey = '';
+            $this->appriseConfigKeySet = true;
+        }
+        if ($this->appriseUrls !== '') {
+            $urls = preg_split('/[\r\n]+/', trim($this->appriseUrls)) ?: [];
+            Setting::put('apprise_urls', Crypt::encryptString(json_encode(array_values(array_filter(array_map('trim', $urls))))));
+            $this->appriseUrls = '';
+            $this->appriseUrlsSet = true;
+        }
 
         // Blank means "leave the stored password alone" — same rule as the SSO
         // client secret above.
@@ -416,6 +506,17 @@ class SettingsPage extends Component
         ConsoleAudit::record('settings.mail-test', 'Sent a test email to '.$to, 'settings', null);
     }
 
+    public function sendTestNotification(): void
+    {
+        $this->authorizeConsole('setting', 'rw');
+        $delivery = app(AppriseNotifications::class)->test();
+        $this->appriseTestOk = $delivery->status === NotificationDelivery::STATUS_SENT;
+        $this->appriseTestMessage = $this->appriseTestOk
+            ? 'Test notification sent.'
+            : ($delivery->error ?: 'Notification delivery failed.');
+        ConsoleAudit::record('settings.notification-test', 'Sent an Apprise test notification', 'settings', null);
+    }
+
     public function render()
     {
         return view('livewire.settings-page', [
@@ -424,6 +525,10 @@ class SettingsPage extends Component
             'oidcCallbackUrl' => route('login.oidc.callback'),
             'mailEnabled' => app(MailSettings::class)->isEnabled(),
             'usersWithoutEmail' => LoginEmailVerification::usersWithoutEmail(),
+            'appriseEventLabels' => AppriseNotifications::EVENTS,
+            'appriseDeviceGroups' => DeviceGroup::query()->orderBy('name')->get(['id', 'name']),
+            'appriseDevices' => Device::query()->approved()->orderByRaw("COALESCE(NULLIF(alias, ''), NULLIF(hostname, ''), rustdesk_id)")->get(['id', 'rustdesk_id', 'alias', 'hostname']),
+            'notificationDeliveries' => NotificationDelivery::query()->latest()->limit(10)->get(),
         ]);
     }
 }
