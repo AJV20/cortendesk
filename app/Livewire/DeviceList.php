@@ -44,10 +44,38 @@ class DeviceList extends Component
     /** What the table showed before it was configurable — and still the default. */
     public const DEFAULT_COLUMNS = ['device', 'alias', 'group', 'owner', 'version', 'last_seen'];
 
+    /**
+     * Sort keys the browser may ask for, mapped to fixed SQL identifiers —
+     * never request data, so a tampered payload cannot reach the query. The
+     * three sentinel values are resolved in applySort(), which orders those by
+     * a correlated subquery rather than a join so the paginator count stays
+     * right. Order here is the order the mobile picker lists them in.
+     */
+    public const SORTABLE = [
+        'id' => 'devices.rustdesk_id',
+        'device' => 'devices.hostname',
+        'alias' => 'devices.alias',
+        'group' => '__group__',
+        'owner' => '__owner__',
+        'version' => 'devices.version',
+        'first_seen' => 'devices.created_at',
+        'last_seen' => 'devices.last_online_at',
+        'status' => '__presence__',
+    ];
+
     /** Keys of the columns currently shown (checkbox array binding). */
     public array $columns = [];
 
     public bool $columnsOpen = false;
+
+    /**
+     * Current ordering (issue #27). The default reproduces what the list did
+     * before it was sortable, so an existing install looks unchanged until
+     * someone picks a column.
+     */
+    public string $sortField = 'last_seen';
+
+    public string $sortDirection = 'desc';
 
     /**
      * Selected device ids for bulk actions (issue #15). Checkbox values arrive
@@ -117,6 +145,61 @@ class DeviceList extends Component
         $this->columns = is_array($saved)
             ? array_values(array_intersect(array_keys(self::COLUMNS), $saved))
             : self::DEFAULT_COLUMNS;
+
+        // A saved sort that is no longer allowed — a removed key, or owner
+        // sorting on a user who has since lost admin — falls back to the
+        // default rather than erroring or leaking an ordering they cannot pick.
+        $savedSort = (string) (auth()->user()?->devices_sort ?? '');
+        if ($this->canSortBy($savedSort)) {
+            $this->sortField = $savedSort;
+            $this->sortDirection = auth()->user()?->devices_sort_direction === 'desc' ? 'desc' : 'asc';
+        }
+    }
+
+    /** Pick a column, or reverse it when it is already the active one. */
+    public function sortBy(string $field): void
+    {
+        if (! $this->canSortBy($field)) {
+            return;
+        }
+
+        $this->sortDirection = $this->sortField === $field && $this->sortDirection === 'asc' ? 'desc' : 'asc';
+        $this->sortField = $field;
+        $this->persistSort();
+    }
+
+    /**
+     * Pick a column without reversing it. The mobile picker is a select, so
+     * choosing the option you are already on must not flip the direction —
+     * that is what the separate reverse button is for.
+     */
+    public function selectSort(string $field): void
+    {
+        if (! $this->canSortBy($field) || $this->sortField === $field) {
+            return;
+        }
+
+        $this->sortField = $field;
+        $this->sortDirection = 'asc';
+        $this->persistSort();
+    }
+
+    private function persistSort(): void
+    {
+        auth()->user()->forceFill([
+            'devices_sort' => $this->sortField,
+            'devices_sort_direction' => $this->sortDirection,
+        ])->save();
+
+        $this->resetPage();
+        $this->clearSelection();
+    }
+
+    /** Owner ordering exposes who owns what, so it stays admin-only. */
+    private function canSortBy(string $field): bool
+    {
+        return isset(self::SORTABLE[$field])
+            && ($field !== 'owner' || (bool) auth()->user()?->is_admin);
     }
 
     /** Persist the column selection so it survives sign-out (issue #16). */
@@ -538,7 +621,7 @@ class DeviceList extends Component
      */
     private function filteredQuery(User $user)
     {
-        return Device::query()
+        $query = Device::query()
             ->visibleTo($user)
             ->with(['group', 'user'])
             ->when($this->trashed, fn ($q) => $q->onlyTrashed())
@@ -556,9 +639,59 @@ class DeviceList extends Component
             ->when(! $this->trashed && $this->status === 'offline', fn ($q) => $q->offline())
             ->when($this->group > 0, fn ($q) => $q->where('device_group_id', $this->group))
             ->when($this->owner === -1, fn ($q) => $q->whereNull('user_id'))
-            ->when($this->owner > 0, fn ($q) => $q->where('user_id', $this->owner))
-            ->orderByRaw('last_online_at IS NULL')
-            ->orderByDesc('last_online_at');
+            ->when($this->owner > 0, fn ($q) => $q->where('user_id', $this->owner));
+
+        return $this->applySort($query);
+    }
+
+    /**
+     * Order by the chosen column, blanks last, with a rustdesk_id tie-breaker.
+     *
+     * The tie-breaker is the point of the exercise (issue #27): without it,
+     * rows with equal keys come back in whatever order the engine feels like
+     * and the list reshuffles under wire:poll while you are editing it.
+     */
+    private function applySort($query)
+    {
+        // Re-validated rather than trusted: the properties are public, so a
+        // crafted Livewire payload can set them to anything.
+        $field = $this->canSortBy($this->sortField) ? $this->sortField : 'last_seen';
+        $direction = $this->sortDirection === 'asc' ? 'asc' : 'desc';
+
+        if ($field === 'status') {
+            // Presence is derived, not stored, so it sorts by the same window
+            // the badge uses rather than by raw last_online_at.
+            $query->orderByRaw(
+                "CASE WHEN devices.last_online_at > ? THEN 1 ELSE 0 END {$direction}",
+                [now()->subSeconds(Device::onlineWindow())],
+            );
+        } elseif ($field === 'group' || $field === 'owner') {
+            [$model, $column, $fk] = $field === 'group'
+                ? [DeviceGroup::class, 'name', 'devices.device_group_id']
+                : [User::class, 'username', 'devices.user_id'];
+
+            $query->orderByRaw("{$fk} is null")
+                ->orderBy(
+                    $model::query()
+                        ->select($column)
+                        ->whereColumn((new $model)->getTable().'.id', $fk),
+                    $direction
+                );
+        } else {
+            $column = self::SORTABLE[$field];
+
+            // Empty strings sort with the blanks, not between them: a device
+            // that reported an empty hostname is missing one, not named "".
+            if (in_array($field, ['device', 'alias', 'version'], true)) {
+                $query->orderByRaw("case when {$column} is null or {$column} = '' then 1 else 0 end");
+            } elseif ($field === 'last_seen') {
+                $query->orderByRaw("{$column} is null");
+            }
+
+            $query->orderBy($column, $direction);
+        }
+
+        return $query->orderBy('devices.rustdesk_id');
     }
 
     /**

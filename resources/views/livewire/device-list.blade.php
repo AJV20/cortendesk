@@ -50,6 +50,26 @@
                     @endforeach
                 </select>
             @endif
+            {{--
+                Sorting on a phone: the card list has no headings to click, so
+                the picker and the reverse arrow stand in for them. Options come
+                from the component's own allowlist so the two cannot drift.
+            --}}
+            <div class="rd-sort-mobile d-md-none">
+                <select class="form-select rd-toolbar-filter" aria-label="Sort devices by"
+                        wire:change="selectSort($event.target.value)">
+                    @foreach (\App\Livewire\DeviceList::SORTABLE as $key => $unused)
+                        @continue($key === 'owner' && ! auth()->user()?->is_admin)
+                        <option value="{{ $key }}" @selected($sortField === $key)>
+                            Sort: {{ $key === 'id' ? 'ID' : (\App\Livewire\DeviceList::COLUMNS[$key] ?? 'Status') }}
+                        </option>
+                    @endforeach
+                </select>
+                <button type="button" class="btn btn-outline-light" wire:click="sortBy('{{ $sortField }}')"
+                        aria-label="Reverse sort order" title="Reverse sort order">
+                    <i class="{{ $sortDirection === 'asc' ? 'ri-sort-asc' : 'ri-sort-desc' }}"></i>
+                </button>
+            </div>
             <div class="rd-toolbar-actions">
                 <button type="button" class="btn btn-outline-light" wire:click="resetFilters">Reset</button>
                 @if ($trashed)
@@ -157,20 +177,23 @@
                             @endif
                         @endunless
                     </th>
-                    <th>ID</th>
-                    @if ($cols['device'])<th>Device</th>@endif
-                    @if ($cols['alias'])<th>Alias</th>@endif
-                    @if ($cols['group'])<th>Group</th>@endif
-                    @if ($cols['owner'])<th>Owner</th>@endif
-                    @if ($cols['version'])<th>Version</th>@endif
+                    <x-sortable-th field="id" :sort="$sortField" :dir="$sortDirection">ID</x-sortable-th>
+                    @foreach (['device' => 'Device', 'alias' => 'Alias', 'group' => 'Group', 'owner' => 'Owner', 'version' => 'Version'] as $key => $label)
+                        @if ($cols[$key])
+                            <x-sortable-th :field="$key" :sort="$sortField" :dir="$sortDirection">{{ $label }}</x-sortable-th>
+                        @endif
+                    @endforeach
                     @if ($cols['username'])<th>User</th>@endif
                     @if ($cols['ip'])<th>IP</th>@endif
                     @if ($cols['cpu'])<th>CPU</th>@endif
                     @if ($cols['memory'])<th>Memory</th>@endif
                     @if ($cols['uuid'])<th>UUID</th>@endif
-                    @if ($cols['first_seen'])<th>First Seen</th>@endif
-                    @if ($cols['last_seen'])<th>Last Seen</th>@endif
-                    <th>Status</th>
+                    @foreach (['first_seen' => 'First Seen', 'last_seen' => 'Last Seen'] as $key => $label)
+                        @if ($cols[$key])
+                            <x-sortable-th :field="$key" :sort="$sortField" :dir="$sortDirection">{{ $label }}</x-sortable-th>
+                        @endif
+                    @endforeach
+                    <x-sortable-th field="status" :sort="$sortField" :dir="$sortDirection">Status</x-sortable-th>
                     <th class="text-end">Action</th>
                 </tr>
                 </thead>

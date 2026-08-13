@@ -1937,6 +1937,62 @@ html[data-sidenav-size="sm-hover"]:not([data-layout="topnav"]) .wrapper .leftsid
     }
 }
 
+/* Sorting controls. The picker and its reverse button travel together — the
+   button is meaningless on its own, and letting it wrap to another line puts an
+   unlabelled arrow somewhere the eye has to hunt for it. */
+.rd-sort-mobile {
+    display: flex;
+    flex: 1 1 100%;
+    align-items: center;
+    gap: 8px;
+}
+
+.rd-sort-mobile > .rd-toolbar-filter {
+    flex: 1 1 auto;
+}
+
+/* Clickable table headings. Attex styles th text directly, so the button has
+   to inherit rather than bring btn styling of its own — a stack of utility
+   classes cancelling Bootstrap out reads worse and breaks when Attex moves. */
+.rd-sort-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    cursor: pointer;
+}
+
+.rd-sort-btn:hover {
+    color: var(--rd-shell-accent);
+}
+
+.rd-sort-btn:focus-visible {
+    outline: 2px solid var(--rd-shell-accent);
+    outline-offset: 2px;
+    border-radius: 3px;
+}
+
+/* The caret is present on every heading and only shown on the active one, so
+   sorting a column does not change its width. */
+.rd-sort-btn > i {
+    visibility: hidden;
+    font-size: 14px;
+}
+
+.rd-sort-active {
+    color: var(--rd-shell-accent);
+}
+
+.rd-sort-active > i {
+    visibility: visible;
+}
+
 /* --- Flush table --------------------------------------------------------
    The table now spans the panel, so the outer cells re-create the card's
    own horizontal padding. */
