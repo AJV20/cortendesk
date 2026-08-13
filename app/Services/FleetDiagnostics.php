@@ -38,8 +38,10 @@ class FleetDiagnostics
             $schedulerAt = null;
         }
 
-        $websocketIdConfigured = trim((string) config('cortendesk.ws_id_url')) !== '';
-        $websocketRelayConfigured = trim((string) config('cortendesk.ws_relay_url')) !== '';
+        $appHostConfigured = filter_var((string) config('app.url'), FILTER_VALIDATE_URL) !== false
+            && parse_url((string) config('app.url'), PHP_URL_HOST) !== null;
+        $websocketIdConfigured = trim((string) config('cortendesk.ws_id_url')) !== '' || $appHostConfigured;
+        $websocketRelayConfigured = trim((string) config('cortendesk.ws_relay_url')) !== '' || $appHostConfigured;
         $mail = app(MailSettings::class);
         $smtpConfigured = $mail->isConfigured();
         $smtpObserved = trim((string) Setting::get('smtp_ok_at', '')) !== ''
@@ -57,7 +59,7 @@ class FleetDiagnostics
                     'ok' => (bool) config('cortendesk.native_webclient') && $websocketIdConfigured && $websocketRelayConfigured,
                     'id_configured' => $websocketIdConfigured,
                     'relay_configured' => $websocketRelayConfigured,
-                    'note' => 'Readiness only; remote WebSocket endpoints are not contacted.',
+                    'note' => 'Readiness only; explicit endpoints or the APP_URL same-origin fallback are accepted. Remote endpoints are not contacted.',
                 ],
             ],
             'scheduler' => ['ok' => $schedulerFresh, 'last_seen_at' => $schedulerAt],

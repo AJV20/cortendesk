@@ -68,7 +68,10 @@ class FleetDiagnosticsTest extends TestCase
         $report = app(FleetDiagnostics::class)->report();
         $this->assertNull($report['smtp']['healthy']);
         $this->assertSame(1, $report['fleet']['silent_over_24h']);
-        $this->assertFalse($report['services']['websocket_bridge']['ok']);
+        $this->assertTrue($report['services']['websocket_bridge']['ok']);
+
+        config(['app.url' => '', 'cortendesk.ws_id_url' => '', 'cortendesk.ws_relay_url' => '']);
+        $this->assertFalse(app(FleetDiagnostics::class)->report()['services']['websocket_bridge']['ok']);
     }
 
     public function test_sanitized_export_excludes_hosts_ips_urls_and_keys(): void
