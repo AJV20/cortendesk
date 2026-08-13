@@ -50,6 +50,22 @@
                     @endforeach
                 </select>
             @endif
+            <select class="form-select rd-toolbar-filter d-md-none"
+                    wire:change="selectSort($event.target.value)" aria-label="Sort devices by">
+                <option value="id" @selected($sortField === 'id')>Sort: ID</option>
+                <option value="device" @selected($sortField === 'device')>Sort: Device</option>
+                <option value="alias" @selected($sortField === 'alias')>Sort: Alias</option>
+                <option value="group" @selected($sortField === 'group')>Sort: Group</option>
+                @if (auth()->user()?->is_admin)<option value="owner" @selected($sortField === 'owner')>Sort: Owner</option>@endif
+                <option value="version" @selected($sortField === 'version')>Sort: Version</option>
+                <option value="first_seen" @selected($sortField === 'first_seen')>Sort: First seen</option>
+                <option value="last_seen" @selected($sortField === 'last_seen')>Sort: Last seen</option>
+                <option value="status" @selected($sortField === 'status')>Sort: Status</option>
+            </select>
+            <button type="button" class="btn btn-outline-light d-md-none" wire:click="sortBy('{{ $sortField }}')"
+                    aria-label="Reverse device sort order" title="Reverse sort order">
+                <i class="{{ $sortDirection === 'asc' ? 'ri-sort-asc' : 'ri-sort-desc' }}"></i>
+            </button>
             <div class="rd-toolbar-actions">
                 <button type="button" class="btn btn-outline-light" wire:click="resetFilters">Reset</button>
                 @if ($trashed)
@@ -157,20 +173,22 @@
                             @endif
                         @endunless
                     </th>
-                    <th>ID</th>
-                    @if ($cols['device'])<th>Device</th>@endif
-                    @if ($cols['alias'])<th>Alias</th>@endif
-                    @if ($cols['group'])<th>Group</th>@endif
-                    @if ($cols['owner'])<th>Owner</th>@endif
-                    @if ($cols['version'])<th>Version</th>@endif
+                    <th aria-sort="{{ $sortField === 'id' ? ($sortDirection === 'asc' ? 'ascending' : 'descending') : 'none' }}">
+                        <button type="button" class="btn btn-link text-reset p-0 text-decoration-none" wire:click="sortBy('id')">ID @if ($sortField === 'id')<i class="{{ $sortDirection === 'asc' ? 'ri-arrow-up-s-line' : 'ri-arrow-down-s-line' }}"></i>@endif</button>
+                    </th>
+                    @if ($cols['device'])<th aria-sort="{{ $sortField === 'device' ? ($sortDirection === 'asc' ? 'ascending' : 'descending') : 'none' }}"><button type="button" class="btn btn-link text-reset p-0 text-decoration-none" wire:click="sortBy('device')">Device @if ($sortField === 'device')<i class="{{ $sortDirection === 'asc' ? 'ri-arrow-up-s-line' : 'ri-arrow-down-s-line' }}"></i>@endif</button></th>@endif
+                    @if ($cols['alias'])<th aria-sort="{{ $sortField === 'alias' ? ($sortDirection === 'asc' ? 'ascending' : 'descending') : 'none' }}"><button type="button" class="btn btn-link text-reset p-0 text-decoration-none" wire:click="sortBy('alias')">Alias @if ($sortField === 'alias')<i class="{{ $sortDirection === 'asc' ? 'ri-arrow-up-s-line' : 'ri-arrow-down-s-line' }}"></i>@endif</button></th>@endif
+                    @if ($cols['group'])<th aria-sort="{{ $sortField === 'group' ? ($sortDirection === 'asc' ? 'ascending' : 'descending') : 'none' }}"><button type="button" class="btn btn-link text-reset p-0 text-decoration-none" wire:click="sortBy('group')">Group @if ($sortField === 'group')<i class="{{ $sortDirection === 'asc' ? 'ri-arrow-up-s-line' : 'ri-arrow-down-s-line' }}"></i>@endif</button></th>@endif
+                    @if ($cols['owner'])<th aria-sort="{{ $sortField === 'owner' ? ($sortDirection === 'asc' ? 'ascending' : 'descending') : 'none' }}"><button type="button" class="btn btn-link text-reset p-0 text-decoration-none" wire:click="sortBy('owner')">Owner @if ($sortField === 'owner')<i class="{{ $sortDirection === 'asc' ? 'ri-arrow-up-s-line' : 'ri-arrow-down-s-line' }}"></i>@endif</button></th>@endif
+                    @if ($cols['version'])<th aria-sort="{{ $sortField === 'version' ? ($sortDirection === 'asc' ? 'ascending' : 'descending') : 'none' }}"><button type="button" class="btn btn-link text-reset p-0 text-decoration-none" wire:click="sortBy('version')">Version @if ($sortField === 'version')<i class="{{ $sortDirection === 'asc' ? 'ri-arrow-up-s-line' : 'ri-arrow-down-s-line' }}"></i>@endif</button></th>@endif
                     @if ($cols['username'])<th>User</th>@endif
                     @if ($cols['ip'])<th>IP</th>@endif
                     @if ($cols['cpu'])<th>CPU</th>@endif
                     @if ($cols['memory'])<th>Memory</th>@endif
                     @if ($cols['uuid'])<th>UUID</th>@endif
-                    @if ($cols['first_seen'])<th>First Seen</th>@endif
-                    @if ($cols['last_seen'])<th>Last Seen</th>@endif
-                    <th>Status</th>
+                    @if ($cols['first_seen'])<th aria-sort="{{ $sortField === 'first_seen' ? ($sortDirection === 'asc' ? 'ascending' : 'descending') : 'none' }}"><button type="button" class="btn btn-link text-reset p-0 text-decoration-none" wire:click="sortBy('first_seen')">First Seen @if ($sortField === 'first_seen')<i class="{{ $sortDirection === 'asc' ? 'ri-arrow-up-s-line' : 'ri-arrow-down-s-line' }}"></i>@endif</button></th>@endif
+                    @if ($cols['last_seen'])<th aria-sort="{{ $sortField === 'last_seen' ? ($sortDirection === 'asc' ? 'ascending' : 'descending') : 'none' }}"><button type="button" class="btn btn-link text-reset p-0 text-decoration-none" wire:click="sortBy('last_seen')">Last Seen @if ($sortField === 'last_seen')<i class="{{ $sortDirection === 'asc' ? 'ri-arrow-up-s-line' : 'ri-arrow-down-s-line' }}"></i>@endif</button></th>@endif
+                    <th aria-sort="{{ $sortField === 'status' ? ($sortDirection === 'asc' ? 'ascending' : 'descending') : 'none' }}"><button type="button" class="btn btn-link text-reset p-0 text-decoration-none" wire:click="sortBy('status')">Status @if ($sortField === 'status')<i class="{{ $sortDirection === 'asc' ? 'ri-arrow-up-s-line' : 'ri-arrow-down-s-line' }}"></i>@endif</button></th>
                     <th class="text-end">Action</th>
                 </tr>
                 </thead>

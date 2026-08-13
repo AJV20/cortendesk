@@ -44,10 +44,31 @@ class DeviceList extends Component
     /** What the table showed before it was configurable — and still the default. */
     public const DEFAULT_COLUMNS = ['device', 'alias', 'group', 'owner', 'version', 'last_seen'];
 
+    /**
+     * Sort keys accepted from the browser. Values are fixed SQL identifiers,
+     * never request data, so sortBy() cannot turn a Livewire payload into SQL.
+     */
+    public const SORTABLE = [
+        'id' => 'devices.rustdesk_id',
+        'device' => 'devices.hostname',
+        'alias' => 'devices.alias',
+        'group' => '__group__',
+        'owner' => '__owner__',
+        'version' => 'devices.version',
+        'first_seen' => 'devices.created_at',
+        'last_seen' => 'devices.last_online_at',
+        'status' => '__presence__',
+    ];
+
     /** Keys of the columns currently shown (checkbox array binding). */
     public array $columns = [];
 
     public bool $columnsOpen = false;
+
+    /** Current deterministic device ordering (issue #27). */
+    public string $sortField = 'last_seen';
+
+    public string $sortDirection = 'desc';
 
     /**
      * Selected device ids for bulk actions (issue #15). Checkbox values arrive
@@ -117,6 +138,61 @@ class DeviceList extends Component
         $this->columns = is_array($saved)
             ? array_values(array_intersect(array_keys(self::COLUMNS), $saved))
             : self::DEFAULT_COLUMNS;
+
+        $savedSort = (string) (auth()->user()?->devices_sort ?? '');
+        $savedDirection = (string) (auth()->user()?->devices_sort_direction ?? '');
+        if ($this->canSortBy($savedSort)) {
+            $this->sortField = $savedSort;
+            $this->sortDirection = in_array($savedDirection, ['asc', 'desc'], true)
+                ? $savedDirection
+                : 'asc';
+        }
+    }
+
+    /** Select a column, or reverse it when the current column is selected. */
+    public function sortBy(string $field): void
+    {
+        if (! $this->canSortBy($field)) {
+            return;
+        }
+
+        if ($this->sortField === $field) {
+            $this->sortDirection = $this->sortDirection === 'asc' ? 'desc' : 'asc';
+        } else {
+            $this->sortField = $field;
+            $this->sortDirection = 'asc';
+        }
+
+        auth()->user()->forceFill([
+            'devices_sort' => $this->sortField,
+            'devices_sort_direction' => $this->sortDirection,
+        ])->save();
+
+        $this->resetPage();
+        $this->clearSelection();
+    }
+
+    /** Choose a field on mobile without also reversing its direction. */
+    public function selectSort(string $field): void
+    {
+        if (! $this->canSortBy($field) || $this->sortField === $field) {
+            return;
+        }
+
+        $this->sortField = $field;
+        $this->sortDirection = 'asc';
+        auth()->user()->forceFill([
+            'devices_sort' => $this->sortField,
+            'devices_sort_direction' => $this->sortDirection,
+        ])->save();
+        $this->resetPage();
+        $this->clearSelection();
+    }
+
+    private function canSortBy(string $field): bool
+    {
+        return isset(self::SORTABLE[$field])
+            && ($field !== 'owner' || auth()->user()?->is_admin);
     }
 
     /** Persist the column selection so it survives sign-out (issue #16). */
@@ -538,7 +614,7 @@ class DeviceList extends Component
      */
     private function filteredQuery(User $user)
     {
-        return Device::query()
+        $query = Device::query()
             ->visibleTo($user)
             ->with(['group', 'user'])
             ->when($this->trashed, fn ($q) => $q->onlyTrashed())
@@ -556,9 +632,48 @@ class DeviceList extends Component
             ->when(! $this->trashed && $this->status === 'offline', fn ($q) => $q->offline())
             ->when($this->group > 0, fn ($q) => $q->where('device_group_id', $this->group))
             ->when($this->owner === -1, fn ($q) => $q->whereNull('user_id'))
-            ->when($this->owner > 0, fn ($q) => $q->where('user_id', $this->owner))
-            ->orderByRaw('last_online_at IS NULL')
-            ->orderByDesc('last_online_at');
+            ->when($this->owner > 0, fn ($q) => $q->where('user_id', $this->owner));
+
+        return $this->applySort($query);
+    }
+
+    /** Apply a validated sort with nulls last and a stable ID tie-breaker. */
+    private function applySort($query)
+    {
+        $field = $this->canSortBy($this->sortField) ? $this->sortField : 'last_seen';
+        $direction = in_array($this->sortDirection, ['asc', 'desc'], true)
+            ? $this->sortDirection
+            : 'desc';
+
+        if ($field === 'status') {
+            $cutoff = now()->subSeconds(Device::onlineWindow());
+            $query->orderByRaw(
+                "CASE WHEN devices.last_online_at > ? THEN 1 ELSE 0 END {$direction}",
+                [$cutoff],
+            );
+        } elseif ($field === 'group') {
+            $name = DeviceGroup::query()
+                ->select('name')
+                ->whereColumn('device_groups.id', 'devices.device_group_id');
+            $query->orderByRaw('devices.device_group_id IS NULL')
+                ->orderBy($name, $direction);
+        } elseif ($field === 'owner') {
+            $username = User::query()
+                ->select('username')
+                ->whereColumn('users.id', 'devices.user_id');
+            $query->orderByRaw('devices.user_id IS NULL')
+                ->orderBy($username, $direction);
+        } else {
+            $column = self::SORTABLE[$field];
+            if (in_array($field, ['device', 'alias', 'version'], true)) {
+                $query->orderByRaw("CASE WHEN {$column} IS NULL OR {$column} = '' THEN 1 ELSE 0 END");
+            } elseif ($field === 'last_seen') {
+                $query->orderByRaw("{$column} IS NULL");
+            }
+            $query->orderBy($column, $direction);
+        }
+
+        return $query->orderBy('devices.rustdesk_id');
     }
 
     /**

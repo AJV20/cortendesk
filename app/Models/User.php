@@ -2,7 +2,6 @@
 
 namespace App\Models;
 
-use App\Models\AddressBook;
 use App\Support\Permissions;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -17,7 +16,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
-#[Fillable(['username', 'name', 'email', 'password', 'avatar', 'is_admin', 'role_id', 'is_active', 'note', 'devices_columns'])]
+#[Fillable(['username', 'name', 'email', 'password', 'avatar', 'is_admin', 'role_id', 'is_active', 'note', 'devices_columns', 'devices_sort', 'devices_sort_direction'])]
 #[Hidden(['password', 'remember_token', 'totp_secret'])]
 class User extends Authenticatable
 {
