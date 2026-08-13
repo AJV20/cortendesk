@@ -101,6 +101,15 @@ class AppriseNotifications
             $value,
         ) ?? '[redacted error]';
 
+        // Error responses are often JSON. Redact quoted sensitive keys before
+        // the generic key=value pass so echoed credentials never reach the
+        // delivery table, logs, or Settings UI.
+        $value = preg_replace(
+            '/("(?:token|secret|password|authorization|api[_-]?key|access[_-]?token)"\s*:\s*)"(?:\\\\.|[^"\\\\])*"/i',
+            '$1"[redacted]"',
+            $value,
+        ) ?? '[redacted error]';
+
         return preg_replace(
             '/\b(token|secret|password|authorization|api[_-]?key|access[_-]?token)\s*[=:]\s*[^\s,;]+/i',
             '$1=[redacted]',

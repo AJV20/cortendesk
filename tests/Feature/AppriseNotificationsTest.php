@@ -185,6 +185,23 @@ class AppriseNotificationsTest extends TestCase
             && ! str_contains((string) $context['error'], 'private.example.test'));
     }
 
+    public function test_json_error_bodies_cannot_leak_quoted_secrets(): void
+    {
+        $this->configureApprise(['security_alarm']);
+        Http::fake(['*' => Http::response([
+            'access_token' => 'top-secret',
+            'password' => 'hunter2',
+            'message' => 'delivery rejected',
+        ], 400)]);
+
+        $delivery = app(AppriseNotifications::class)->send('security.alarm', 'Alarm', 'Body', 'alarm:6');
+
+        $this->assertSame('failed', $delivery?->status);
+        $this->assertStringNotContainsString('top-secret', (string) $delivery?->error);
+        $this->assertStringNotContainsString('hunter2', (string) $delivery?->error);
+        $this->assertStringContainsString('[redacted]', (string) $delivery?->error);
+    }
+
     public function test_presence_command_detects_offline_and_recovery_once_each(): void
     {
         $this->configureApprise(['device_offline', 'device_online']);
