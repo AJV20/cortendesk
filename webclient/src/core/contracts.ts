@@ -1,3 +1,5 @@
+import type { SupportedDecoding_PreferCodec } from '../gen/message';
+
 // CortenDesk web client — CROSS-MODULE CONTRACT.
 //
 // SCAFFOLD-OWNED. Every module imports from this file; NO ONE else edits it.
@@ -5,7 +7,8 @@
 // session worker, and between the sans-IO protocol core and its callers.
 
 export type SessionConfig = { peerId:string; serverKeyB64:string; wsIdUrl:string; wsRelayUrl:string; password:string; myId:string; myName:string; savedHashHex?:string; connType?:'default'|'fileTransfer' };
-export type DisplayInfo = { index:number; x:number; y:number; width:number; height:number; name:string; scale:number };
+export type ResolutionInfo = { width:number; height:number };
+export type DisplayInfo = { index:number; x:number; y:number; width:number; height:number; name:string; scale:number; online:boolean; cursorEmbedded:boolean; originalResolution?:ResolutionInfo; resolutions:ResolutionInfo[] };
 export type SessionStats = { codec:string; width:number; height:number; fps:number; mbps:number; framesDropped:number; startedAtMs:number };
 export type SessionState = 'connecting'|'rendezvous'|'relay'|'handshake'|'login'|'streaming'|'error'|'closed'|'needAccept';
 // File transfer: plain-object mirrors of the protobuf FileEntry/FileDirectory
@@ -15,13 +18,15 @@ export type FtEntry = { kind:FtEntryKind; name:string; size:number; modifiedSec:
 export type FtDirectory = { id:number; path:string; entries:FtEntry[] };
 export type SessionEvent =                       // worker -> main
   | { t:'state'; state:SessionState; detail?:string }
-  | { t:'peerInfo'; displays:DisplayInfo[]; username:string; hostname:string; platform:string; version:string; current:number }
+  | { t:'peerInfo'; displays:DisplayInfo[]; username:string; hostname:string; platform:string; platformAdditions:string; version:string; current?:number }
   // The peer's authoritative answer to a display switch. It is the ONLY reply
   // the host sends (server/video_service.rs make_display_changed_msg), and it
   // carries the real geometry of what is now being captured — which is what
   // input coordinates must be mapped against. A locally-assumed index is not
   // enough: the host can refuse the switch, or report different geometry.
-  | { t:'switchDisplay'; index:number; x:number; y:number; width:number; height:number; cursorEmbedded:boolean }
+  | { t:'switchDisplay'; index:number; x:number; y:number; width:number; height:number; cursorEmbedded:boolean; originalResolution?:ResolutionInfo; resolutions:ResolutionInfo[] }
+  | { t:'followDisplay'; index:number }
+  | { t:'codecSupport'; codecs:Array<'auto'|'vp9'|'h264'|'h265'|'vp8'|'av1'> }
   | { t:'stats'; stats:SessionStats }
   | { t:'cursor'; pngDataUrl:string; hotx:number; hoty:number } | { t:'cursorPos'; x:number; y:number }
   | { t:'clipboard'; text:string } | { t:'permission'; kind:string; enabled:boolean }
@@ -47,6 +52,11 @@ export type UiCommand =                           // main -> worker
   | { c:'key'; down:boolean; press:boolean; keyKind:'chr'|'control'|'unicode'; value:number; modifiers:number[] }
   | { c:'switchDisplay'; index:number } | { c:'ctrlAltDel' } | { c:'refresh' }
   | { c:'quality'; imageQuality:number } | { c:'clipboardText'; text:string } | { c:'disconnect' }
+  | { c:'displayResolution'; display:number; width:number; height:number }
+  | { c:'virtualDisplay'; display:number; on:boolean }
+  | { c:'customQuality'; quality:number } | { c:'customFps'; fps:number }
+  | { c:'preferredCodec'; prefer:SupportedDecoding_PreferCodec }
+  | { c:'displayOption'; option:'showRemoteCursor'|'followRemoteCursor'|'followRemoteWindow'; enabled:boolean }
   | { c:'chat'; text:string }             // outbound message to the remote peer
   // file transfer connections only (no canvas; connect with config.connType='fileTransfer'):
   | { c:'connectFile'; config:SessionConfig }

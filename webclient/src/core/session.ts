@@ -15,12 +15,16 @@ import {
   Misc,
   MouseEvent,
   OptionMessage,
+  OptionMessage_BoolOption,
   PeerInfo,
   PermissionInfo_Permission,
   SupportedDecoding,
   SupportedDecoding_PreferCodec,
   CaptureDisplays,
+  DisplayResolution,
+  Resolution,
   SwitchDisplay,
+  ToggleVirtualDisplay,
   VideoFrame,
 } from '../gen/message';
 import { ConnType } from '../gen/rendezvous';
@@ -393,9 +397,18 @@ export class Session {
           width: s.width,
           height: s.height,
           cursorEmbedded: s.cursor_embedded,
+          originalResolution: s.original_resolution
+            ? { width: s.original_resolution.width, height: s.original_resolution.height }
+            : undefined,
+          resolutions: (s.resolutions?.resolutions ?? []).map((r) => ({ width: r.width, height: r.height })),
         });
         return;
       }
+      case 'follow_current_display':
+        if (Number.isSafeInteger(u.follow_current_display) && u.follow_current_display >= 0) {
+          this.sinks.emit({ t: 'followDisplay', index: u.follow_current_display });
+        }
+        return;
       default:
         return; // TODO: back_notification, supported_encoding, ...
     }
@@ -410,6 +423,7 @@ export class Session {
   }
 
   private emitPeerInfo(pi: PeerInfo): void {
+    const resolutions = (pi.resolutions?.resolutions ?? []).map((r) => ({ width: r.width, height: r.height }));
     const displays: DisplayInfo[] = pi.displays.map((d, index) => ({
       index,
       x: d.x,
@@ -418,6 +432,12 @@ export class Session {
       height: d.height,
       name: d.name,
       scale: d.scale || 1,
+      online: d.online,
+      cursorEmbedded: d.cursor_embedded,
+      originalResolution: d.original_resolution
+        ? { width: d.original_resolution.width, height: d.original_resolution.height }
+        : undefined,
+      resolutions: index === pi.current_display ? resolutions : [],
     }));
     this.sinks.emit({
       t: 'peerInfo',
@@ -425,8 +445,9 @@ export class Session {
       username: pi.username,
       hostname: pi.hostname,
       platform: pi.platform,
+      platformAdditions: pi.platform_additions,
       version: pi.version,
-      current: pi.current_display,
+      ...(this.state === 'streaming' ? {} : { current: pi.current_display }),
     });
   }
 
@@ -501,6 +522,33 @@ export class Session {
     });
   }
 
+  changeDisplayResolution(display: number, width: number, height: number): boolean {
+    if (
+      !Number.isSafeInteger(display) || display < 0 ||
+      !Number.isSafeInteger(width) || !Number.isSafeInteger(height) ||
+      width < 1 || height < 1 || width > 16384 || height > 16384
+    ) {
+      return false;
+    }
+    this.sendMisc({
+      $case: 'change_display_resolution',
+      change_display_resolution: DisplayResolution.fromPartial({
+        display,
+        resolution: Resolution.fromPartial({ width, height }),
+      }),
+    });
+    return true;
+  }
+
+  toggleVirtualDisplay(display: number, on: boolean): boolean {
+    if (!Number.isSafeInteger(display) || display < -1) return false;
+    this.sendMisc({
+      $case: 'toggle_virtual_display',
+      toggle_virtual_display: ToggleVirtualDisplay.fromPartial({ display, on }),
+    });
+    return true;
+  }
+
   ctrlAltDel(): void {
     this.sendMessage({
       $case: 'key_event',
@@ -522,6 +570,49 @@ export class Session {
       $case: 'option',
       option: OptionMessage.fromPartial({ image_quality: imageQuality as ImageQuality }),
     });
+  }
+
+  setCustomQuality(quality: number): boolean {
+    if (!Number.isSafeInteger(quality) || quality < 10 || quality > 100) return false;
+    this.sendMisc({
+      $case: 'option',
+      option: OptionMessage.fromPartial({ custom_image_quality: quality << 8 }),
+    });
+    return true;
+  }
+
+  setCustomFps(fps: number): boolean {
+    if (!Number.isSafeInteger(fps) || fps < 5 || fps > 120) return false;
+    this.sendMisc({
+      $case: 'option',
+      option: OptionMessage.fromPartial({ custom_fps: fps }),
+    });
+    return true;
+  }
+
+  setDisplayOption(
+    option: 'showRemoteCursor' | 'followRemoteCursor' | 'followRemoteWindow',
+    enabled: boolean,
+  ): void {
+    const value = enabled ? OptionMessage_BoolOption.Yes : OptionMessage_BoolOption.No;
+    const partial = option === 'showRemoteCursor'
+      ? { show_remote_cursor: value }
+      : option === 'followRemoteCursor'
+        ? { follow_remote_cursor: value }
+        : { follow_remote_window: value };
+    this.sendMisc({ $case: 'option', option: OptionMessage.fromPartial(partial) });
+  }
+
+  setPreferredCodec(prefer: SupportedDecoding_PreferCodec): boolean {
+    const supported = prefer === SupportedDecoding_PreferCodec.Auto ||
+      (prefer === SupportedDecoding_PreferCodec.VP9 && this.decoding.ability_vp9 > 0) ||
+      (prefer === SupportedDecoding_PreferCodec.H264 && this.decoding.ability_h264 > 0) ||
+      (prefer === SupportedDecoding_PreferCodec.H265 && this.decoding.ability_h265 > 0) ||
+      (prefer === SupportedDecoding_PreferCodec.VP8 && this.decoding.ability_vp8 > 0) ||
+      (prefer === SupportedDecoding_PreferCodec.AV1 && this.decoding.ability_av1 > 0);
+    if (!supported) return false;
+    this.setSupportedDecoding(SupportedDecoding.fromPartial({ ...this.decoding, prefer }));
+    return true;
   }
 
   sendClipboardText(text: string): void {

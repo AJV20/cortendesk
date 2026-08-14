@@ -1330,3 +1330,25 @@
 .rd-pane *::-webkit-scrollbar-corner {
   background: transparent;
 }
+
+#rd-remote-cursor {
+  position: absolute;
+  z-index: 35;
+  pointer-events: none;
+  transform-origin: top left;
+  max-width: none;
+  user-select: none;
+}
+#rd-remote-cursor[hidden] { display: none; }
+.rd-display-slider {
+  display: grid;
+  grid-template-columns: minmax(92px, auto) minmax(90px, 1fr) 30px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  color: var(--rd-muted);
+  font-size: 12px;
+}
+.rd-display-slider input { min-width: 90px; accent-color: var(--rd-accent); }
+.rd-display-slider output { text-align: right; font-variant-numeric: tabular-nums; }
+.rd-mon-tile:disabled { opacity: 0.48; cursor: not-allowed; }

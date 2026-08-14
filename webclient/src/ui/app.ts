@@ -30,7 +30,7 @@ import type {
 } from '../core/contracts';
 import { attachInput, type DisplayRect } from '../input/mouse-keyboard';
 import { readLocalClipboardText } from '../input/clipboard-cursor';
-import { ControlKey } from '../gen/message';
+import { ControlKey, SupportedDecoding_PreferCodec } from '../gen/message';
 import {
   overlayVersion,
   QUALITY,
@@ -58,6 +58,16 @@ import {
 import { FilePanel } from './file-panel';
 import { MseVideoPlayer } from '../media/mse-video';
 import { mseH264Available } from '../media/video';
+import {
+  adaptFps,
+  buildResolutionChoices,
+  canUseRemoteCursor,
+  codecPreferenceValue,
+  mapRemoteCursorToCanvas,
+  mergeDisplayRefresh,
+  mergePlatformAdditions,
+  parseVirtualDisplayCapability,
+} from './display-controls';
 
 // Back-compat: everything that used to live here is re-exported for tests and
 // external importers.
@@ -80,6 +90,7 @@ type Els = {
   edge: HTMLElement;
   overlay: HTMLElement;
   toast: HTMLElement;
+  remoteCursor: HTMLImageElement;
   peerLabel: HTMLElement;
   peerSub: HTMLElement;
   btnMonitors: HTMLButtonElement;
@@ -166,6 +177,20 @@ export class RdApp {
   private inputMode: InputMode = 'pointer';
   private fitMode: FitMode = 'fit';
   private quality: number = QUALITY.balanced;
+  private customQuality = 75;
+  private customFps = 30;
+  private adaptiveFpsTarget = 30;
+  private adaptiveFps = false;
+  private adaptiveStableSamples = 0;
+  private lastDroppedFrames = 0;
+  private codecSupport: Array<'auto'|'vp9'|'h264'|'h265'|'vp8'|'av1'> = ['auto'];
+  private preferredCodec = 'auto';
+  private showRemoteCursor = false;
+  private followRemoteCursor = false;
+  private followRemoteWindow = false;
+  private cursorScale = 1;
+  private remoteCursorHot = { x: 0, y: 0 };
+  private platformAdditions = '';
   private sideTab: SideTab = 'files';
   private chatLog: ChatEntry[] = [];
   private chatUnread = 0;
@@ -286,6 +311,15 @@ export class RdApp {
     const edge = make('rd-edge');
     const overlay = make('rd-overlay');
     const toast = make('rd-toast');
+    let remoteCursor = document.getElementById('rd-remote-cursor') as HTMLImageElement | null;
+    if (!remoteCursor || remoteCursor.tagName !== 'IMG') {
+      remoteCursor?.remove();
+      remoteCursor = document.createElement('img');
+      remoteCursor.id = 'rd-remote-cursor';
+      remoteCursor.alt = '';
+      remoteCursor.hidden = true;
+      viewport.appendChild(remoteCursor);
+    }
     // The dock sits BELOW the viewport in normal flow, never over it — an
     // overlay here hides exactly the strip of remote screen (the Windows
     // taskbar) an operator most often needs.
@@ -307,6 +341,7 @@ export class RdApp {
       edge,
       overlay,
       toast,
+      remoteCursor,
     } as Els; // remaining refs filled by render*()
   }
 
@@ -713,9 +748,9 @@ export class RdApp {
     };
   }
 
-  private menuItem(icon: IconName | null, label: string, checked = false): string {
+  private menuItem(icon: IconName | null, label: string, checked = false, action?: string): string {
     return (
-      `<button type="button" class="rd-mi${checked ? ' rd-checked' : ''}" role="menuitem">` +
+      `<button type="button" class="rd-mi${checked ? ' rd-checked' : ''}" role="menuitem"${action ? ` data-action="${escapeHtml(action)}"` : ''}>` +
       `${icon ? iconHtml(icon) : '<span class="rd-mi-pad"></span>'}` +
       `<span class="rd-mi-label">${escapeHtml(label)}</span>` +
       `${checked ? iconHtml('check') : ''}</button>`
@@ -724,32 +759,82 @@ export class RdApp {
 
   private openMonitorPop(): void {
     this.openPop(this.el.btnMonitors, (pop) => {
-      // DisplayInfo carries index/geometry/name only — the protocol sends no
-      // per-monitor preview, so these are honest tiles, not fake thumbnails.
+      const currentDisplay = this.displays[this.current];
+      const virtual = parseVirtualDisplayCapability(this.peerPlatform, this.platformAdditions);
+      const isVirtualDisplay = !!virtual && currentDisplay?.originalResolution?.width === 0 && currentDisplay.originalResolution.height === 0;
+      const fit = { width: Math.round(this.el.viewport.clientWidth), height: Math.round(this.el.viewport.clientHeight) };
+      const resolutions = currentDisplay ? buildResolutionChoices({
+        supported: currentDisplay.resolutions,
+        original: currentDisplay.originalResolution,
+        fit,
+        isVirtual: isVirtualDisplay,
+      }) : [];
+      const resolutionHtml = currentDisplay && resolutions.length
+        ? '<div class="rd-pop-sep"></div><div class="rd-pop-title">Resolution</div>' + resolutions.map((resolution) =>
+            `<button type="button" class="rd-mi rd-resolution" data-width="${resolution.width}" data-height="${resolution.height}"><span class="rd-mi-pad"></span><span class="rd-mi-label">${escapeHtml(resolution.label)}</span></button>`,
+          ).join('') +
+          (isVirtualDisplay ? '<button type="button" class="rd-mi" data-custom-resolution><span class="rd-mi-pad"></span><span class="rd-mi-label">Custom resolution…</span></button>' : '')
+        : '';
+      const virtualHtml = virtual
+        ? '<div class="rd-pop-sep"></div><div class="rd-pop-title">Virtual displays</div>' +
+          (virtual.impl === 'rustdesk_idd'
+            ? [1, 2, 3, 4].map((id) => this.menuItem(null, `Virtual display ${id}`, virtual.rustdeskIds.includes(id), `virtual:${id}`)).join('') +
+              this.menuItem(null, 'Unplug all virtual displays', false, 'virtual:all')
+            : this.menuItem(null, 'Add virtual display', false, 'virtual:add') +
+              this.menuItem(null, 'Remove virtual display', false, 'virtual:remove') +
+              this.menuItem(null, 'Unplug all virtual displays', false, 'virtual:all'))
+        : '';
       pop.innerHTML =
         '<div class="rd-pop-title">Select monitor</div>' +
-        this.displays
-          .map((d, i) => {
-            const label = d.name?.trim() || `Monitor ${i + 1}`;
-            return (
-              `<button type="button" class="rd-mon-tile${i === this.current ? ' rd-checked' : ''}" data-idx="${i}" role="menuitem">` +
-              `<span class="rd-mon-num">${i + 1}</span>` +
-              `<span class="rd-mon-meta"><span class="rd-mon-name">${escapeHtml(label)}</span>` +
-              `<span class="rd-mon-res">${d.width}×${d.height}</span></span>` +
-              `${i === this.current ? iconHtml('check') : ''}</button>`
-            );
-          })
-          .join('');
-      for (const b of pop.querySelectorAll<HTMLButtonElement>('.rd-mon-tile')) {
-        b.addEventListener('click', () => {
-          const i = Number(b.dataset.idx);
-          this.post({ c: 'switchDisplay', index: i });
-          // Deliberately NOT setting this.current here. The host decides which
-          // display is captured and answers with Misc.switch_display; assuming
-          // success locally meant input started mapping to the new monitor's
-          // origin while the video still showed the old one — a switch the host
-          // declines never corrects itself. The confirmation arrives in
-          // milliseconds and updates both together.
+        this.displays.map((display, index) => {
+          const label = display.name?.trim() || `Monitor ${index + 1}`;
+          return (
+            `<button type="button" class="rd-mon-tile${index === this.current ? ' rd-checked' : ''}" data-idx="${index}" role="menuitem"${display.online ? '' : ' disabled'}>` +
+            `<span class="rd-mon-num">${index + 1}</span>` +
+            `<span class="rd-mon-meta"><span class="rd-mon-name">${escapeHtml(label)}</span>` +
+            `<span class="rd-mon-res">${display.width}×${display.height}${display.online ? '' : ' · offline'}</span></span>` +
+            `${index === this.current ? iconHtml('check') : ''}</button>`
+          );
+        }).join('') + resolutionHtml + virtualHtml;
+      for (const button of pop.querySelectorAll<HTMLButtonElement>('.rd-mon-tile')) {
+        button.addEventListener('click', () => {
+          this.post({ c: 'switchDisplay', index: Number(button.dataset.idx) });
+          // Wait for Misc.switch_display before changing geometry/input mapping.
+          this.closePop();
+        });
+      }
+      for (const button of pop.querySelectorAll<HTMLButtonElement>('.rd-resolution')) {
+        button.addEventListener('click', () => {
+          this.post({
+            c: 'displayResolution', display: this.current,
+            width: Number(button.dataset.width), height: Number(button.dataset.height),
+          });
+          this.toast('Resolution change requested');
+          this.closePop();
+        });
+      }
+      pop.querySelector<HTMLButtonElement>('[data-custom-resolution]')?.addEventListener('click', () => {
+        const value = window.prompt('Custom resolution (width×height)', `${currentDisplay?.width ?? 1920}×${currentDisplay?.height ?? 1080}`);
+        const match = value?.trim().match(/^(\d{2,5})\s*[x×]\s*(\d{2,5})$/i);
+        if (!match) return;
+        const width = Number(match[1]);
+        const height = Number(match[2]);
+        if (width < 1 || height < 1 || width > 16384 || height > 16384) return;
+        this.post({ c: 'displayResolution', display: this.current, width, height });
+        this.closePop();
+      });
+      for (const button of pop.querySelectorAll<HTMLButtonElement>('[data-action^="virtual:"]')) {
+        button.addEventListener('click', () => {
+          const action = button.dataset.action?.slice('virtual:'.length);
+          if (!virtual || !action) return;
+          if (action === 'all') this.post({ c: 'virtualDisplay', display: -1, on: false });
+          else if (action === 'add') this.post({ c: 'virtualDisplay', display: 0, on: true });
+          else if (action === 'remove') this.post({ c: 'virtualDisplay', display: 0, on: false });
+          else {
+            const display = Number(action);
+            this.post({ c: 'virtualDisplay', display, on: !virtual.rustdeskIds.includes(display) });
+          }
+          this.toast('Virtual-display change requested');
           this.closePop();
         });
       }
@@ -759,29 +844,103 @@ export class RdApp {
   private openMorePop(anchor: HTMLElement): void {
     this.openPop(anchor, (pop) => {
       const fs = !!document.fullscreenElement;
+      const canRemoteCursor = canUseRemoteCursor(this.peerPlatform, this.displays[this.current]);
+      const codecHtml = this.codecSupport.map((codec) =>
+        this.menuItem(null, codec === 'auto' ? 'Automatic codec' : codec.toUpperCase(), this.preferredCodec === codec, `codec:${codec}`),
+      ).join('');
       pop.innerHTML =
-        this.menuItem('refresh', 'Refresh video') +
-        this.menuItem(fs ? 'fullscreenExit' : 'fullscreen', fs ? 'Exit fullscreen' : 'Fullscreen') +
+        this.menuItem('refresh', 'Refresh video', false, 'refresh') +
+        this.menuItem(fs ? 'fullscreenExit' : 'fullscreen', fs ? 'Exit fullscreen' : 'Fullscreen', false, 'fullscreen') +
         '<div class="rd-pop-sep"></div><div class="rd-pop-title">Image quality</div>' +
-        this.menuItem(null, 'Best', this.quality === QUALITY.best) +
-        this.menuItem(null, 'Balanced', this.quality === QUALITY.balanced) +
-        this.menuItem(null, 'Speed', this.quality === QUALITY.speed);
-      const items = pop.querySelectorAll<HTMLButtonElement>('.rd-mi');
-      items[0]?.addEventListener('click', () => {
+        this.menuItem(null, 'Best', this.quality === QUALITY.best, 'quality:best') +
+        this.menuItem(null, 'Balanced', this.quality === QUALITY.balanced, 'quality:balanced') +
+        this.menuItem(null, 'Speed', this.quality === QUALITY.speed, 'quality:speed') +
+        `<label class="rd-display-slider"><span>Custom quality</span><input data-action="customQuality" type="range" min="10" max="100" value="${this.customQuality}"><output>${this.customQuality}</output></label>` +
+        '<div class="rd-pop-sep"></div><div class="rd-pop-title">Frame rate and codec</div>' +
+        this.menuItem(null, 'Adaptive FPS', this.adaptiveFps, 'adaptiveFps') +
+        `<label class="rd-display-slider"><span>${this.adaptiveFps ? 'Maximum FPS' : 'Custom FPS'}</span><input data-action="customFps" type="range" min="5" max="120" step="5" value="${this.customFps}"><output>${this.customFps}</output></label>` +
+        codecHtml +
+        (canRemoteCursor
+          ? '<div class="rd-pop-sep"></div><div class="rd-pop-title">Remote cursor</div>' +
+            this.menuItem(null, 'Show remote cursor', this.showRemoteCursor, 'showRemoteCursor') +
+            this.menuItem(null, 'Follow remote cursor', this.followRemoteCursor, 'followRemoteCursor') +
+            (this.displays.length > 1 ? this.menuItem(null, 'Follow remote window focus', this.followRemoteWindow, 'followRemoteWindow') : '') +
+            this.menuItem(null, 'Enlarge remote cursor', this.cursorScale > 1, 'cursorScale')
+          : '');
+      pop.querySelector<HTMLButtonElement>('[data-action="refresh"]')?.addEventListener('click', () => {
         this.post({ c: 'refresh' });
         this.closePop();
       });
-      items[1]?.addEventListener('click', () => {
+      pop.querySelector<HTMLButtonElement>('[data-action="fullscreen"]')?.addEventListener('click', () => {
         void this.toggleFullscreen();
         this.closePop();
       });
-      const qv = [QUALITY.best, QUALITY.balanced, QUALITY.speed];
-      [items[2], items[3], items[4]].forEach((b, i) => {
-        b?.addEventListener('click', () => {
-          this.quality = qv[i]!;
+      const qualityValues: Record<string, number> = { best: QUALITY.best, balanced: QUALITY.balanced, speed: QUALITY.speed };
+      for (const button of pop.querySelectorAll<HTMLButtonElement>('[data-action^="quality:"]')) {
+        button.addEventListener('click', () => {
+          const key = button.dataset.action?.slice('quality:'.length) ?? '';
+          this.quality = qualityValues[key] ?? QUALITY.balanced;
           this.post({ c: 'quality', imageQuality: this.quality });
           this.closePop();
         });
+      }
+      const customQuality = pop.querySelector<HTMLInputElement>('[data-action="customQuality"]');
+      customQuality?.addEventListener('input', () => {
+        const output = customQuality.parentElement?.querySelector('output');
+        if (output) output.textContent = customQuality.value;
+      });
+      customQuality?.addEventListener('change', () => {
+        this.customQuality = Number(customQuality.value);
+        this.post({ c: 'customQuality', quality: this.customQuality });
+      });
+      pop.querySelector<HTMLButtonElement>('[data-action="adaptiveFps"]')?.addEventListener('click', () => {
+        this.adaptiveFps = !this.adaptiveFps;
+        this.adaptiveFpsTarget = this.customFps;
+        this.adaptiveStableSamples = 0;
+        this.lastDroppedFrames = this.stats?.framesDropped ?? 0;
+        this.post({ c: 'customFps', fps: this.adaptiveFpsTarget });
+        this.toast(this.adaptiveFps ? 'Adaptive FPS enabled; bitrate remains host-managed' : 'Fixed FPS enabled');
+        this.closePop();
+      });
+      const customFps = pop.querySelector<HTMLInputElement>('[data-action="customFps"]');
+      customFps?.addEventListener('input', () => {
+        const output = customFps.parentElement?.querySelector('output');
+        if (output) output.textContent = customFps.value;
+      });
+      customFps?.addEventListener('change', () => {
+        this.customFps = Number(customFps.value);
+        this.adaptiveFpsTarget = this.customFps;
+        this.adaptiveStableSamples = 0;
+        this.post({ c: 'customFps', fps: this.adaptiveFpsTarget });
+      });
+      for (const button of pop.querySelectorAll<HTMLButtonElement>('[data-action^="codec:"]')) {
+        button.addEventListener('click', () => {
+          const codec = button.dataset.action?.slice('codec:'.length) ?? '';
+          const prefer = codecPreferenceValue(codec);
+          if (prefer === null || !this.codecSupport.includes(codec as never)) return;
+          this.preferredCodec = codec;
+          this.post({ c: 'preferredCodec', prefer });
+          this.closePop();
+        });
+      }
+      const toggleDisplayOption = (action: 'showRemoteCursor'|'followRemoteCursor'|'followRemoteWindow'): void => {
+        const enabled = !this[action];
+        this[action] = enabled;
+        if (action === 'followRemoteCursor' && enabled && !this.showRemoteCursor) {
+          this.showRemoteCursor = true;
+          this.post({ c: 'displayOption', option: 'showRemoteCursor', enabled: true });
+        }
+        this.post({ c: 'displayOption', option: action, enabled });
+        if (action === 'showRemoteCursor' && !enabled) this.el.remoteCursor.hidden = true;
+        this.closePop();
+      };
+      for (const action of ['showRemoteCursor', 'followRemoteCursor', 'followRemoteWindow'] as const) {
+        pop.querySelector<HTMLButtonElement>(`[data-action="${action}"]`)?.addEventListener('click', () => toggleDisplayOption(action));
+      }
+      pop.querySelector<HTMLButtonElement>('[data-action="cursorScale"]')?.addEventListener('click', () => {
+        this.cursorScale = this.cursorScale > 1 ? 1 : 2;
+        this.updateRemoteCursorTransform();
+        this.closePop();
       });
     });
   }
@@ -1018,6 +1177,17 @@ export class RdApp {
     this.setLatches(false, false);
     this.peerWho = '';
     this.peerPlatform = '';
+    this.platformAdditions = '';
+    this.codecSupport = ['auto'];
+    this.preferredCodec = 'auto';
+    this.showRemoteCursor = false;
+    this.followRemoteCursor = false;
+    this.followRemoteWindow = false;
+    this.adaptiveFps = false;
+    this.adaptiveFpsTarget = this.customFps;
+    this.adaptiveStableSamples = 0;
+    this.lastDroppedFrames = 0;
+    this.el.remoteCursor.hidden = true;
     this.sessionHashHex = config.savedHashHex;
     this.stats = undefined;
     this.streamStartMs = 0;
@@ -1082,6 +1252,8 @@ export class RdApp {
   private lastDbgMouseMs = 0;
 
   private post(cmd: UiCommand): void {
+    const sendsRemoteInput = cmd.c === 'mouse' || cmd.c === 'key' || cmd.c === 'ctrlAltDel';
+    if (sendsRemoteInput && this.displays[this.current]?.online !== true) return;
     if (cmd.c === 'mouse') {
       const now = Date.now();
       if (now - this.lastDbgMouseMs > 1000) {
@@ -1127,16 +1299,25 @@ export class RdApp {
         break;
       case 'peerInfo': {
         this.dbg('peerInfo', { current: ev.current, displays: ev.displays });
-        this.displays = ev.displays;
-        this.current = ev.current;
+        this.displays = ev.current === undefined
+          ? mergeDisplayRefresh(this.displays, ev.displays, this.current)
+          : ev.displays;
+        if (ev.current !== undefined) this.current = ev.current;
         this.peerWho = ev.username ? `${ev.username}@${ev.hostname}` : ev.hostname;
         this.peerPlatform = ev.platform || '';
+        this.platformAdditions = mergePlatformAdditions(this.platformAdditions, ev.platformAdditions);
+        if (!canUseRemoteCursor(this.peerPlatform, this.displays[this.current])) {
+          this.el.remoteCursor.hidden = true;
+        }
         this.el.peerLabel.textContent = this.peerWho || this.peerId;
         this.refreshPeerSub();
         this.el.statVersion.textContent = ev.version || '—';
         this.el.statUser.textContent = this.peerWho || '—';
         this.el.statPlatform.textContent = this.peerPlatform || '—';
-        this.el.btnMonitors.hidden = this.displays.length < 2;
+        const currentDisplay = this.displays[this.current];
+        const hasDisplayControls = !!currentDisplay?.resolutions.length || !!currentDisplay?.originalResolution ||
+          !!parseVirtualDisplayCapability(this.peerPlatform, this.platformAdditions);
+        this.el.btnMonitors.hidden = this.displays.length < 2 && !hasDisplayControls;
         document.title = `${this.peerId} — CortenDesk`;
         break;
       }
@@ -1148,6 +1329,7 @@ export class RdApp {
         this.dbg('switchDisplay', ev);
         this.current = ev.index;
         applySwitchDisplay(this.displays, ev);
+        if (ev.cursorEmbedded) this.el.remoteCursor.hidden = true;
         // On the MSE fallback the muxer is built around the stream it was
         // started with, so a new frame size has to start a new one. The worker
         // holds the forwarded stream until the next key frame, which is what
@@ -1156,14 +1338,30 @@ export class RdApp {
         this.refreshPeerSub();
         break;
       }
+      case 'followDisplay':
+        if ((this.followRemoteWindow || this.followRemoteCursor) && ev.index !== this.current && this.displays[ev.index]?.online) {
+          this.post({ c: 'switchDisplay', index: ev.index });
+        }
+        break;
+      case 'codecSupport':
+        this.codecSupport = ev.codecs;
+        if (!this.codecSupport.includes(this.preferredCodec as never)) this.preferredCodec = 'auto';
+        break;
       case 'stats':
         this.onStats(ev.stats);
         break;
-      case 'cursor':
-        this.canvas.style.cursor = cursorCss(ev.pngDataUrl, ev.hotx, ev.hoty);
+      case 'cursor': {
+        const css = cursorCss(ev.pngDataUrl, ev.hotx, ev.hoty);
+        this.canvas.style.cursor = css;
+        this.videoEl.style.cursor = css;
+        this.el.remoteCursor.src = ev.pngDataUrl;
+        this.remoteCursorHot = { x: ev.hotx, y: ev.hoty };
+        this.updateRemoteCursorTransform();
         break;
+      }
       case 'cursorPos':
-        break; // remote pointer position; local pointer is authoritative here
+        this.positionRemoteCursor(ev.x, ev.y);
+        break;
       case 'clipboard':
         void navigator.clipboard
           ?.writeText(ev.text)
@@ -1282,6 +1480,55 @@ export class RdApp {
     this.el.statFps.textContent = String(Math.round(s.fps));
     this.el.statBitrate.textContent = formatMbps(s.mbps);
     this.el.statDropped.textContent = String(s.framesDropped);
+    if (this.adaptiveFps) {
+      const next = adaptFps({
+        target: this.adaptiveFpsTarget,
+        droppedDelta: Math.max(0, s.framesDropped - this.lastDroppedFrames),
+        stableSamples: this.adaptiveStableSamples,
+        cap: this.customFps,
+      });
+      this.adaptiveStableSamples = next.stableSamples;
+      if (next.target !== this.adaptiveFpsTarget) {
+        this.adaptiveFpsTarget = next.target;
+        this.post({ c: 'customFps', fps: this.adaptiveFpsTarget });
+      }
+      this.lastDroppedFrames = s.framesDropped;
+    }
+  }
+
+  private positionRemoteCursor(x: number, y: number): void {
+    const display = this.displays[this.current];
+    if (!this.showRemoteCursor || !display || !canUseRemoteCursor(this.peerPlatform, display)) {
+      this.el.remoteCursor.hidden = true;
+      return;
+    }
+    const surface = this.videoEl.hidden ? this.canvas : this.videoEl;
+    const canvasRect = surface.getBoundingClientRect();
+    const viewportRect = this.el.viewport.getBoundingClientRect();
+    const point = mapRemoteCursorToCanvas(
+      { x, y },
+      display,
+      {
+        left: canvasRect.left - viewportRect.left,
+        top: canvasRect.top - viewportRect.top,
+        width: canvasRect.width,
+        height: canvasRect.height,
+      },
+    );
+    if (!point) {
+      this.el.remoteCursor.hidden = true;
+      return;
+    }
+    this.el.remoteCursor.style.left = `${point.x}px`;
+    this.el.remoteCursor.style.top = `${point.y}px`;
+    this.el.remoteCursor.hidden = false;
+    this.updateRemoteCursorTransform();
+  }
+
+  private updateRemoteCursorTransform(): void {
+    const x = -this.remoteCursorHot.x * this.cursorScale;
+    const y = -this.remoteCursorHot.y * this.cursorScale;
+    this.el.remoteCursor.style.transform = `translate(${x}px, ${y}px) scale(${this.cursorScale})`;
   }
 
   // --- permissions / misc ------------------------------------------------------

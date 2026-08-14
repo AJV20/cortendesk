@@ -188,7 +188,12 @@ export function debugEnabled(search: string, win: unknown): boolean {
  */
 export function applySwitchDisplay(
   displays: DisplayInfo[],
-  ev: { index: number; x: number; y: number; width: number; height: number },
+  ev: {
+    index: number; x: number; y: number; width: number; height: number;
+    cursorEmbedded?: boolean;
+    originalResolution?: { width: number; height: number };
+    resolutions?: Array<{ width: number; height: number }>;
+  },
 ): void {
   const d = displays[ev.index];
   if (!d) return;
@@ -196,6 +201,9 @@ export function applySwitchDisplay(
   d.y = ev.y;
   if (ev.width > 0) d.width = ev.width;
   if (ev.height > 0) d.height = ev.height;
+  if (ev.cursorEmbedded !== undefined) d.cursorEmbedded = ev.cursorEmbedded;
+  if (ev.originalResolution) d.originalResolution = ev.originalResolution;
+  if (ev.resolutions) d.resolutions = ev.resolutions;
 }
 
 export type IconName =
