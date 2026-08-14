@@ -62,6 +62,8 @@ import {
   type RdGlobalConfig,
 } from './common';
 import { FilePanel } from './file-panel';
+import { TerminalPanel } from './terminal-panel';
+import { CameraPanel } from './camera-panel';
 import { MseVideoPlayer } from '../media/mse-video';
 import { mseH264Available } from '../media/video';
 
@@ -180,6 +182,8 @@ export class RdApp {
   private restartFlow: RestartFlow | undefined;
 
   private filePanel: FilePanel | undefined;
+  private terminalPanel: TerminalPanel | undefined;
+  private cameraPanel: CameraPanel | undefined;
   private videoEl!: HTMLVideoElement;
   /** Set only on insecure origins, where WebCodecs is unavailable. */
   private msePlayer: MseVideoPlayer | undefined;
@@ -637,6 +641,36 @@ export class RdApp {
     this.filePanel.open();
   }
 
+  private openTerminalPanel(): void {
+    if (!this.terminalPanel) {
+      this.terminalPanel = new TerminalPanel({
+        root: this.el.root,
+        workerUrl: this.workerUrl,
+        toast: (message) => this.toast(message),
+        getConfig: () => {
+          if (!this.cfg || this.state !== 'streaming' || this.permissions.Terminal === false) return null;
+          return buildSessionConfig(this.cfg, this.peerId, '', this.sessionHashHex, 'terminal');
+        },
+      });
+    }
+    this.terminalPanel.open();
+  }
+
+  private openCameraPanel(): void {
+    if (!this.cameraPanel) {
+      this.cameraPanel = new CameraPanel({
+        root: this.el.root,
+        workerUrl: this.workerUrl,
+        toast: (message) => this.toast(message),
+        getConfig: () => {
+          if (!this.cfg || this.state !== 'streaming' || this.permissions.Camera === false) return null;
+          return buildSessionConfig(this.cfg, this.peerId, '', this.sessionHashHex, 'viewCamera');
+        },
+      });
+    }
+    this.cameraPanel.open();
+  }
+
   // --- chat -----------------------------------------------------------------------
 
   private sendChatFromInput(): void {
@@ -743,10 +777,17 @@ export class RdApp {
     };
   }
 
-  private menuItem(icon: IconName | null, label: string, checked = false, securityId?: string): string {
-    const data = securityId ? ` data-security="${escapeHtml(securityId)}"` : '';
+  private menuItem(
+    icon: IconName | null,
+    label: string,
+    checked = false,
+    securityId?: string,
+    action?: string,
+  ): string {
+    const security = securityId ? ` data-security="${escapeHtml(securityId)}"` : '';
+    const advanced = action ? ` data-action="${escapeHtml(action)}"` : '';
     return (
-      `<button type="button" class="rd-mi${checked ? ' rd-checked' : ''}" role="menuitem"${data}>` +
+      `<button type="button" class="rd-mi${checked ? ' rd-checked' : ''}" role="menuitem"${security}${advanced}>` +
       `${icon ? iconHtml(icon) : '<span class="rd-mi-pad"></span>'}` +
       `<span class="rd-mi-label">${escapeHtml(label)}</span>` +
       `${checked ? iconHtml('check') : ''}</button>`
@@ -804,6 +845,14 @@ export class RdApp {
         ? '<div class="rd-pop-sep"></div><div class="rd-pop-title">Remote controls</div>'
           + security.map((item) => this.menuItem(null, item.label, item.checked, item.id)).join('')
         : '';
+      const canTerminal = this.permissions.Terminal !== false;
+      const canCamera = this.permissions.Camera !== false;
+      const tools =
+        canTerminal || canCamera
+          ? '<div class="rd-pop-sep"></div><div class="rd-pop-title">Tools</div>' +
+            (canTerminal ? this.menuItem(null, 'Remote terminal', false, undefined, 'terminal') : '') +
+            (canCamera ? this.menuItem(null, 'View camera', false, undefined, 'camera') : '')
+          : '';
       pop.innerHTML =
         this.menuItem('refresh', 'Refresh video') +
         this.menuItem(fs ? 'fullscreenExit' : 'fullscreen', fs ? 'Exit fullscreen' : 'Fullscreen') +
@@ -811,7 +860,8 @@ export class RdApp {
         this.menuItem(null, 'Best', this.quality === QUALITY.best) +
         this.menuItem(null, 'Balanced', this.quality === QUALITY.balanced) +
         this.menuItem(null, 'Speed', this.quality === QUALITY.speed) +
-        securityHtml;
+        securityHtml +
+        tools;
       const items = pop.querySelectorAll<HTMLButtonElement>('.rd-mi');
       items[0]?.addEventListener('click', () => {
         this.post({ c: 'refresh' });
@@ -832,6 +882,14 @@ export class RdApp {
       for (const button of pop.querySelectorAll<HTMLButtonElement>('[data-security]')) {
         button.addEventListener('click', () => this.activateSecurityControl(button.dataset.security!));
       }
+      pop.querySelector<HTMLButtonElement>('[data-action="terminal"]')?.addEventListener('click', () => {
+        this.closePop();
+        this.openTerminalPanel();
+      });
+      pop.querySelector<HTMLButtonElement>('[data-action="camera"]')?.addEventListener('click', () => {
+        this.closePop();
+        this.openCameraPanel();
+      });
     });
   }
 
@@ -1751,6 +1809,10 @@ export class RdApp {
     this.teardown();
     this.filePanel?.destroy();
     this.filePanel = undefined;
+    this.terminalPanel?.destroy();
+    this.terminalPanel = undefined;
+    this.cameraPanel?.destroy();
+    this.cameraPanel = undefined;
     this.closePop();
     if (this.ticker) clearInterval(this.ticker);
   }

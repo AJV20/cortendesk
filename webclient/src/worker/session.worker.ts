@@ -64,6 +64,10 @@ export interface SessionLike {
   setLockAfterSessionEnd(on: boolean): void;
   sendClipboardText(text: string): void;
   sendChat(text: string): void;
+  openTerminal(terminalId: number, rows: number, cols: number): void;
+  sendTerminalData(terminalId: number, data: Uint8Array): void;
+  resizeTerminal(terminalId: number, rows: number, cols: number): void;
+  closeTerminal(terminalId: number): void;
   sendFileAction(union: NonNullable<FileAction['union']>): void;
   sendFileResponse(union: NonNullable<FileResponse['union']>): void;
   disconnect(): void;
@@ -162,7 +166,20 @@ export class WorkerHost {
         void this.connect(cmd.config, cmd.canvas);
         return;
       case 'connectFile':
+      case 'connectTerminal':
         void this.connect(cmd.config, undefined);
+        return;
+      case 'terminalOpen':
+        this.session?.openTerminal(cmd.terminalId, cmd.rows, cmd.cols);
+        return;
+      case 'terminalData':
+        this.session?.sendTerminalData(cmd.terminalId, cmd.data);
+        return;
+      case 'terminalResize':
+        this.session?.resizeTerminal(cmd.terminalId, cmd.rows, cmd.cols);
+        return;
+      case 'terminalClose':
+        this.session?.closeTerminal(cmd.terminalId);
         return;
       case 'ftReadDir':
         this.session?.sendFileAction({
@@ -321,8 +338,8 @@ export class WorkerHost {
     }
   }
 
-  // canvas === undefined -> file-transfer connection: no video/audio pipelines,
-  // no codec probe; the message layer is FileAction/FileResponse instead.
+  // canvas === undefined -> non-video connection (file transfer or terminal):
+  // no video/audio pipelines and no codec probe.
   private async connect(config: SessionConfig, canvas: OffscreenCanvas | undefined): Promise<void> {
     if (this.connectStarted) {
       this.deps.post({ t: 'state', state: 'error', detail: 'worker already connected' });
@@ -393,6 +410,24 @@ export class WorkerHost {
             (ev.t === 'msgbox' && /uac/i.test(ev.msgtype))
           ) {
             this.kickVideo();
+          }
+          if (ev.t === 'terminalData') {
+            let data = ev.data;
+            try {
+              if (ev.compressed) data = zstdDecode(data);
+            } catch (error) {
+              this.deps.post({
+                t: 'terminalError',
+                terminalId: ev.terminalId,
+                message: `Could not decompress terminal output: ${errMsg(error)}`,
+              });
+              return;
+            }
+            this.deps.post(
+              { ...ev, data, compressed: false },
+              [data.buffer as ArrayBuffer],
+            );
+            return;
           }
           this.deps.post(ev);
         },
