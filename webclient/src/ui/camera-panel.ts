@@ -1,4 +1,5 @@
 import type { DisplayInfo, SessionConfig, SessionEvent, UiCommand } from '../core/contracts';
+import { disconnectIndependentWorker } from './advanced-worker-lifecycle';
 import { MseVideoPlayer } from '../media/mse-video';
 
 export function buildCameraConfig(source: SessionConfig): SessionConfig {
@@ -62,7 +63,7 @@ export class CameraPanel {
     const offscreen = this.canvas.transferControlToOffscreen();
     this.worker = new Worker(this.deps.workerUrl, { type: 'module' });
     this.worker.onmessage = (event: MessageEvent<CameraWorkerEvent>) => this.onEvent(event.data);
-    this.worker.onerror = () => this.setStatus('Camera worker failed');
+    this.worker.onerror = () => this.fail('Camera worker failed');
     this.worker.postMessage(
       { c: 'connect', config: buildCameraConfig(config), canvas: offscreen } satisfies UiCommand,
       [offscreen],
@@ -73,10 +74,14 @@ export class CameraPanel {
     switch (event.t) {
       case 'state':
         this.connected = event.state === 'streaming';
-        this.setStatus(event.detail || (this.connected ? 'Live' : event.state));
+        if (event.state === 'error' || event.state === 'closed') {
+          this.fail(event.detail || (event.state === 'closed' ? 'Camera disconnected' : 'Camera connection failed'));
+        } else {
+          this.setStatus(event.detail || (this.connected ? 'Live' : event.state));
+        }
         break;
       case 'loginError':
-        this.setStatus(event.message);
+        this.fail(event.message);
         break;
       case 'peerInfo':
         this.renderSources(event.displays, event.current);
@@ -122,16 +127,26 @@ export class CameraPanel {
     });
   }
 
+  private stopWorker(): void {
+    const worker = this.worker;
+    this.worker = undefined;
+    if (worker) disconnectIndependentWorker(worker);
+    this.mse?.close();
+    this.mse = undefined;
+    this.connected = false;
+  }
+
+  private fail(message: string): void {
+    this.setStatus(message);
+    this.stopWorker();
+  }
+
   private setStatus(message: string): void {
     if (this.status) this.status.textContent = message;
   }
 
   destroy(): void {
-    this.worker?.postMessage({ c: 'disconnect' } satisfies UiCommand);
-    this.worker?.terminate();
-    this.worker = undefined;
-    this.mse?.close();
-    this.mse = undefined;
+    this.stopWorker();
     this.shell?.remove();
     this.shell = undefined;
     this.canvas = undefined;

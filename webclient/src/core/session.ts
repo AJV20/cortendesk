@@ -37,6 +37,7 @@ import {
   buildRestartRemoteDevice,
   parsePrivacyModeImpls,
 } from './session-controls';
+import { parseAdvancedPeerCapabilities } from './advanced-capabilities';
 
 export const CLIENT_VERSION = '1.4.0';
 
@@ -502,6 +503,7 @@ export class Session {
   }
 
   private emitPeerInfo(pi: PeerInfo): void {
+    const advanced = parseAdvancedPeerCapabilities(pi.platform_additions);
     const displays: DisplayInfo[] = pi.displays.map((d, index) => ({
       index,
       x: d.x,
@@ -521,6 +523,8 @@ export class Session {
       current: pi.current_display,
       privacyModeSupported: pi.features?.privacy_mode ?? false,
       privacyModeImpls: parsePrivacyModeImpls(pi.platform_additions),
+      terminalSupported: pi.features?.terminal ?? false,
+      viewCameraSupported: advanced.viewCamera,
     });
   }
 
