@@ -29,6 +29,7 @@ import { buildPublicKeyMessage, verifyPeerSignedId, verifyServerRelayPk } from '
 import { buildLoginRequest, computeLoginH1, loginHashFromH1 } from './auth';
 import { buildPunchHoleRequest, parseRendezvous } from './signaling';
 import { buildRequestRelay } from './relay';
+import { parseAdvancedPeerCapabilities } from './advanced-capabilities';
 
 export const CLIENT_VERSION = '1.4.0';
 
@@ -462,6 +463,7 @@ export class Session {
   }
 
   private emitPeerInfo(pi: PeerInfo): void {
+    const advanced = parseAdvancedPeerCapabilities(pi.platform_additions);
     const displays: DisplayInfo[] = pi.displays.map((d, index) => ({
       index,
       x: d.x,
@@ -479,6 +481,8 @@ export class Session {
       platform: pi.platform,
       version: pi.version,
       current: pi.current_display,
+      terminalSupported: pi.features?.terminal ?? false,
+      viewCameraSupported: advanced.viewCamera,
     });
   }
 

@@ -31,6 +31,7 @@ import { AudioPipeline } from '../media/audio';
 import { VideoPipeline, mseH264Available, probeSupportedDecoding, type EncodedCase } from '../media/video';
 import { ForwardingVideoPipeline } from '../media/mse-video';
 import { cursorToDataUrl, decodeClipboardText, initZstd, zstdDecode } from '../input/clipboard-cursor';
+import { decodeTerminalOutput } from './terminal-output';
 
 // Decoded audio is outside the frozen SessionEvent union: the main thread
 // feeds it to an AudioWorklet ring buffer and ignores unknown `t` otherwise.
@@ -392,9 +393,9 @@ export class WorkerHost {
             this.kickVideo();
           }
           if (ev.t === 'terminalData') {
-            let data = ev.data;
+            let data: Uint8Array;
             try {
-              if (ev.compressed) data = zstdDecode(data);
+              data = decodeTerminalOutput(ev.data, ev.compressed, zstdDecode);
             } catch (error) {
               this.deps.post({
                 t: 'terminalError',

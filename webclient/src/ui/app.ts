@@ -155,6 +155,8 @@ export class RdApp {
   private sessionHashHex: string | undefined; // h1 of the live session — lets the file panel log in silently
   /** Peer-advertised permissions for THIS session; absent means granted. */
   private permissions: Record<string, boolean> = {};
+  private terminalSupported = false;
+  private cameraSupported = false;
 
   private filePanel: FilePanel | undefined;
   private terminalPanel: TerminalPanel | undefined;
@@ -370,6 +372,7 @@ export class RdApp {
     this.el.btnViewOnly.addEventListener('click', () => this.toggleViewOnly());
     q<HTMLButtonElement>(t, '#rd-btn-disconnect').addEventListener('click', () => {
       this.setLoggedOutFlag(true); // an explicit logout must not auto-login on reload
+      this.destroyAdvancedPanels();
       this.post({ c: 'disconnect' });
       this.setState('closed');
     });
@@ -618,7 +621,7 @@ export class RdApp {
         workerUrl: this.workerUrl,
         toast: (message) => this.toast(message),
         getConfig: () => {
-          if (!this.cfg || this.state !== 'streaming' || this.permissions.Terminal === false) return null;
+          if (!this.cfg || this.state !== 'streaming' || !this.terminalSupported) return null;
           return buildSessionConfig(this.cfg, this.peerId, '', this.sessionHashHex, 'terminal');
         },
       });
@@ -633,7 +636,7 @@ export class RdApp {
         workerUrl: this.workerUrl,
         toast: (message) => this.toast(message),
         getConfig: () => {
-          if (!this.cfg || this.state !== 'streaming' || this.permissions.Camera === false) return null;
+          if (!this.cfg || this.state !== 'streaming' || !this.cameraSupported) return null;
           return buildSessionConfig(this.cfg, this.peerId, '', this.sessionHashHex, 'viewCamera');
         },
       });
@@ -793,8 +796,8 @@ export class RdApp {
   private openMorePop(anchor: HTMLElement): void {
     this.openPop(anchor, (pop) => {
       const fs = !!document.fullscreenElement;
-      const canTerminal = this.permissions.Terminal !== false;
-      const canCamera = this.permissions.Camera !== false;
+      const canTerminal = this.terminalSupported;
+      const canCamera = this.cameraSupported;
       const tools =
         canTerminal || canCamera
           ? '<div class="rd-pop-sep"></div><div class="rd-pop-title">Tools</div>' +
@@ -1069,6 +1072,8 @@ export class RdApp {
     this.setLatches(false, false);
     this.peerWho = '';
     this.peerPlatform = '';
+    this.terminalSupported = false;
+    this.cameraSupported = false;
     this.sessionHashHex = config.savedHashHex;
     this.stats = undefined;
     this.streamStartMs = 0;
@@ -1182,6 +1187,8 @@ export class RdApp {
         this.current = ev.current;
         this.peerWho = ev.username ? `${ev.username}@${ev.hostname}` : ev.hostname;
         this.peerPlatform = ev.platform || '';
+        this.terminalSupported = ev.terminalSupported;
+        this.cameraSupported = ev.viewCameraSupported;
         this.el.peerLabel.textContent = this.peerWho || this.peerId;
         this.refreshPeerSub();
         this.el.statVersion.textContent = ev.version || '—';
@@ -1301,6 +1308,7 @@ export class RdApp {
         break;
       case 'error':
         this.teardown();
+        this.destroyAdvancedPanels();
         this.filePanel?.destroy();
         this.filePanel = undefined;
         this.closeSide();
@@ -1311,6 +1319,7 @@ export class RdApp {
         break;
       case 'closed':
         this.teardown();
+        this.destroyAdvancedPanels();
         this.filePanel?.destroy();
         this.filePanel = undefined;
         this.closeSide();
@@ -1517,14 +1526,18 @@ export class RdApp {
     this.el.toast.classList.remove('rd-show');
   }
 
-  dispose(): void {
-    this.teardown();
-    this.filePanel?.destroy();
-    this.filePanel = undefined;
+  private destroyAdvancedPanels(): void {
     this.terminalPanel?.destroy();
     this.terminalPanel = undefined;
     this.cameraPanel?.destroy();
     this.cameraPanel = undefined;
+  }
+
+  dispose(): void {
+    this.teardown();
+    this.filePanel?.destroy();
+    this.filePanel = undefined;
+    this.destroyAdvancedPanels();
     this.closePop();
     if (this.ticker) clearInterval(this.ticker);
   }

@@ -1,18 +1,93 @@
 import type { SessionConfig, SessionEvent, UiCommand } from '../core/contracts';
+import { disconnectIndependentWorker } from './advanced-worker-lifecycle';
 
 const MAX_TERMINAL_TEXT = 1_000_000;
 const utf8 = new TextEncoder();
 
+type TerminalParserState = 'text'|'escape'|'csi'|'osc'|'oscEscape'|'controlString'|'controlEscape';
+
+export class TerminalControlStripper {
+  private state: TerminalParserState = 'text';
+
+  reset(): void {
+    this.state = 'text';
+  }
+
+  push(text: string): string {
+    let output = '';
+    for (const char of text) {
+      const code = char.charCodeAt(0);
+      switch (this.state) {
+        case 'text':
+          if (code === 0x1b) this.state = 'escape';
+          else if (code === 0x9b) this.state = 'csi';
+          else if (code === 0x9d) this.state = 'osc';
+          else if (code === 0x90 || code === 0x98 || code === 0x9e || code === 0x9f) this.state = 'controlString';
+          else if (code === 0x0d) output += '\n';
+          else if (code === 0x09 || code === 0x0a || (code >= 0x20 && code !== 0x7f && (code < 0x80 || code > 0x9f))) output += char;
+          break;
+        case 'escape':
+          if (char === '[') this.state = 'csi';
+          else if (char === ']') this.state = 'osc';
+          else if (char === 'P' || char === 'X' || char === '^' || char === '_') this.state = 'controlString';
+          else if (code !== 0x1b) this.state = 'text';
+          break;
+        case 'csi':
+          if (code >= 0x40 && code <= 0x7e) this.state = 'text';
+          else if (code === 0x1b) this.state = 'escape';
+          break;
+        case 'osc':
+          if (code === 0x07 || code === 0x9c) this.state = 'text';
+          else if (code === 0x1b) this.state = 'oscEscape';
+          break;
+        case 'oscEscape':
+          if (char === '\\' || code === 0x07 || code === 0x9c) this.state = 'text';
+          else if (code !== 0x1b) this.state = 'osc';
+          break;
+        case 'controlString':
+          if (code === 0x9c) this.state = 'text';
+          else if (code === 0x1b) this.state = 'controlEscape';
+          break;
+        case 'controlEscape':
+          if (char === '\\' || code === 0x9c) this.state = 'text';
+          else if (code !== 0x1b) this.state = 'controlString';
+          break;
+      }
+    }
+    return output;
+  }
+}
+
+class TerminalC1ByteNormalizer {
+  private utf8ContinuationBytes = 0;
+
+  reset(): void {
+    this.utf8ContinuationBytes = 0;
+  }
+
+  push(data: Uint8Array): Uint8Array {
+    const normalized: number[] = [];
+    for (const byte of data) {
+      if (this.utf8ContinuationBytes > 0) {
+        if (byte >= 0x80 && byte <= 0xbf) {
+          normalized.push(byte);
+          this.utf8ContinuationBytes -= 1;
+          continue;
+        }
+        this.utf8ContinuationBytes = 0;
+      }
+      if (byte >= 0xc2 && byte <= 0xdf) this.utf8ContinuationBytes = 1;
+      else if (byte >= 0xe0 && byte <= 0xef) this.utf8ContinuationBytes = 2;
+      else if (byte >= 0xf0 && byte <= 0xf4) this.utf8ContinuationBytes = 3;
+      if (byte >= 0x80 && byte <= 0x9f) normalized.push(0xc2, byte);
+      else normalized.push(byte);
+    }
+    return Uint8Array.from(normalized);
+  }
+}
+
 export function stripTerminalControl(text: string): string {
-  return text
-    // OSC sequences (window title, hyperlinks, etc.), terminated by BEL or ST.
-    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
-    // CSI and short escape sequences. The compact viewer intentionally renders
-    // text only; remote bytes are never interpreted as DOM/HTML.
-    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
-    .replace(/\u001b[@-_]/g, '')
-    .replace(/\r(?!\n)/g, '\n')
-    .replace(/[\u0000\u0008\u000b\u000c\u000e-\u001a\u001c-\u001f\u007f]/g, '');
+  return new TerminalControlStripper().push(text);
 }
 
 export function appendBoundedTerminalText(current: string, incoming: string, max = MAX_TERMINAL_TEXT): string {
@@ -35,6 +110,8 @@ export class TerminalPanel {
   private status: HTMLElement | undefined;
   private persistent: HTMLInputElement | undefined;
   private decoder = new TextDecoder();
+  private byteNormalizer = new TerminalC1ByteNormalizer();
+  private controlStripper = new TerminalControlStripper();
   private terminalId = 0;
   private opened = false;
   private resizeObserver: ResizeObserver | undefined;
@@ -112,6 +189,9 @@ export class TerminalPanel {
       terminalServiceId: serviceId,
     };
     this.setStatus('Connecting…');
+    this.decoder = new TextDecoder();
+    this.byteNormalizer.reset();
+    this.controlStripper.reset();
     this.worker = new Worker(this.deps.workerUrl, { type: 'module' });
     this.worker.onmessage = (event: MessageEvent<SessionEvent>) => this.onEvent(event.data);
     this.worker.onerror = () => this.fail('Terminal worker failed');
@@ -153,7 +233,9 @@ export class TerminalPanel {
         this.input?.focus();
         break;
       case 'terminalData':
-        this.appendText(stripTerminalControl(this.decoder.decode(event.data, { stream: true })));
+        this.appendText(this.controlStripper.push(
+          this.decoder.decode(this.byteNormalizer.push(event.data), { stream: true }),
+        ));
         break;
       case 'terminalClosed':
         this.opened = false;
@@ -228,20 +310,26 @@ export class TerminalPanel {
     if (send) send.disabled = !enabled;
   }
 
+  private stopWorker(closeTerminal: boolean): void {
+    const worker = this.worker;
+    this.worker = undefined;
+    if (!worker) return;
+    if (closeTerminal && this.opened) {
+      worker.postMessage({ c: 'terminalClose', terminalId: this.terminalId } satisfies UiCommand);
+    }
+    disconnectIndependentWorker(worker);
+  }
+
   private fail(message: string): void {
     this.opened = false;
     this.setInputEnabled(false);
     this.setStatus(message);
     this.appendText(`\n[${message}]\n`);
+    this.stopWorker(false);
   }
 
   destroy(): void {
-    if (this.opened) {
-      this.worker?.postMessage({ c: 'terminalClose', terminalId: this.terminalId } satisfies UiCommand);
-    }
-    this.worker?.postMessage({ c: 'disconnect' } satisfies UiCommand);
-    this.worker?.terminate();
-    this.worker = undefined;
+    this.stopWorker(true);
     this.resizeObserver?.disconnect();
     this.resizeObserver = undefined;
     this.shell?.remove();
@@ -251,5 +339,8 @@ export class TerminalPanel {
     this.status = undefined;
     this.persistent = undefined;
     this.opened = false;
+    this.byteNormalizer.reset();
+    this.controlStripper.reset();
+    this.decoder = new TextDecoder();
   }
 }

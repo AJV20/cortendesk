@@ -12,7 +12,7 @@ vi.mock('./crypto', () => ({
 
 import type { Encryptor, SessionConfig, SessionEvent } from './contracts';
 import { Session, type SessionSinks } from './session';
-import { Message, TerminalResponse } from '../gen/message';
+import { Message, PeerInfo, TerminalResponse } from '../gen/message';
 import { ConnType, RendezvousMessage } from '../gen/rendezvous';
 
 function config(connType: 'terminal' | 'viewCamera'): SessionConfig {
@@ -69,6 +69,49 @@ describe('advanced rendezvous connection types', () => {
     expect(rendezvous.union?.$case).toBe('punch_hole_request');
     if (rendezvous.union?.$case !== 'punch_hole_request') throw new Error('wrong request');
     expect(rendezvous.union.punch_hole_request.conn_type).toBe(expected);
+  });
+});
+
+describe('advanced capability metadata', () => {
+  it('forwards the peer terminal feature instead of inventing a PermissionInfo gate', async () => {
+    const { session, events } = harness();
+    const peerInfo = PeerInfo.fromPartial({
+      hostname: 'peer',
+      platform: 'Windows',
+      features: { terminal: true },
+    });
+
+    await deliver(session, Message.fromPartial({
+      union: {
+        $case: 'login_response',
+        login_response: { union: { $case: 'peer_info', peer_info: peerInfo }, enable_trusted_devices: false },
+      },
+    }));
+
+    expect(events).toContainEqual(expect.objectContaining({
+      t: 'peerInfo',
+      terminalSupported: true,
+    }));
+  });
+  it('forwards platform_additions camera support as an explicit capability', async () => {
+    const { session, events } = harness();
+    const peerInfo = PeerInfo.fromPartial({
+      hostname: 'peer',
+      platform: 'Windows',
+      platform_additions: '{"support_view_camera":true}',
+    });
+
+    await deliver(session, Message.fromPartial({
+      union: {
+        $case: 'login_response',
+        login_response: { union: { $case: 'peer_info', peer_info: peerInfo }, enable_trusted_devices: false },
+      },
+    }));
+
+    expect(events).toContainEqual(expect.objectContaining({
+      t: 'peerInfo',
+      viewCameraSupported: true,
+    }));
   });
 });
 

@@ -15,7 +15,7 @@ export type FtEntry = { kind:FtEntryKind; name:string; size:number; modifiedSec:
 export type FtDirectory = { id:number; path:string; entries:FtEntry[] };
 export type SessionEvent =                       // worker -> main
   | { t:'state'; state:SessionState; detail?:string }
-  | { t:'peerInfo'; displays:DisplayInfo[]; username:string; hostname:string; platform:string; version:string; current:number }
+  | { t:'peerInfo'; displays:DisplayInfo[]; username:string; hostname:string; platform:string; version:string; current:number; terminalSupported:boolean; viewCameraSupported:boolean }
   // The peer's authoritative answer to a display switch. It is the ONLY reply
   // the host sends (server/video_service.rs make_display_changed_msg), and it
   // carries the real geometry of what is now being captured — which is what
