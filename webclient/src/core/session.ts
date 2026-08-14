@@ -29,6 +29,14 @@ import { buildPublicKeyMessage, verifyPeerSignedId, verifyServerRelayPk } from '
 import { buildLoginRequest, computeLoginH1, loginHashFromH1 } from './auth';
 import { buildPunchHoleRequest, parseRendezvous } from './signaling';
 import { buildRequestRelay } from './relay';
+import {
+  buildBlockInputOption,
+  buildDirectElevation,
+  buildLockAfterSessionEndOption,
+  buildPrivacyToggle,
+  buildRestartRemoteDevice,
+  parsePrivacyModeImpls,
+} from './session-controls';
 
 export const CLIENT_VERSION = '1.4.0';
 
@@ -362,6 +370,36 @@ export class Session {
       case 'audio_format':
         this.sinks.onAudioFormat(u.audio_format.sample_rate, u.audio_format.channels);
         return;
+      case 'back_notification': {
+        const n = u.back_notification;
+        if (n.union?.$case === 'privacy_mode_state') {
+          this.sinks.emit({
+            t: 'privacyMode',
+            state: n.union.privacy_mode_state,
+            details: n.details,
+            implKey: n.impl_key,
+          });
+        } else if (n.union?.$case === 'block_input_state') {
+          this.sinks.emit({
+            t: 'blockInput',
+            state: n.union.block_input_state,
+            details: n.details,
+          });
+        }
+        return;
+      }
+      case 'elevation_response':
+        this.sinks.emit({
+          t: 'elevation',
+          state: u.elevation_response ? 'failed' : 'pending',
+          detail: u.elevation_response,
+        });
+        return;
+      case 'portable_service_running':
+        if (u.portable_service_running) {
+          this.sinks.emit({ t: 'elevation', state: 'succeeded', detail: '' });
+        }
+        return;
       case 'close_reason':
         this.setState('closed', u.close_reason);
         this.sinks.closeAll();
@@ -427,6 +465,8 @@ export class Session {
       platform: pi.platform,
       version: pi.version,
       current: pi.current_display,
+      privacyModeSupported: pi.features?.privacy_mode ?? false,
+      privacyModeImpls: parsePrivacyModeImpls(pi.platform_additions),
     });
   }
 
@@ -522,6 +562,26 @@ export class Session {
       $case: 'option',
       option: OptionMessage.fromPartial({ image_quality: imageQuality as ImageQuality }),
     });
+  }
+
+  restartRemoteDevice(): void {
+    this.sendMisc(buildRestartRemoteDevice());
+  }
+
+  requestElevation(): void {
+    this.sendMisc(buildDirectElevation());
+  }
+
+  setPrivacyMode(implKey: string, on: boolean): void {
+    this.sendMisc(buildPrivacyToggle(implKey, on));
+  }
+
+  setBlockInput(on: boolean): void {
+    this.sendMisc({ $case: 'option', option: buildBlockInputOption(on) });
+  }
+
+  setLockAfterSessionEnd(on: boolean): void {
+    this.sendMisc({ $case: 'option', option: buildLockAfterSessionEndOption(on) });
   }
 
   sendClipboardText(text: string): void {

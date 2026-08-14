@@ -15,7 +15,7 @@ export type FtEntry = { kind:FtEntryKind; name:string; size:number; modifiedSec:
 export type FtDirectory = { id:number; path:string; entries:FtEntry[] };
 export type SessionEvent =                       // worker -> main
   | { t:'state'; state:SessionState; detail?:string }
-  | { t:'peerInfo'; displays:DisplayInfo[]; username:string; hostname:string; platform:string; version:string; current:number }
+  | { t:'peerInfo'; displays:DisplayInfo[]; username:string; hostname:string; platform:string; version:string; current:number; privacyModeSupported:boolean; privacyModeImpls:{key:string; label:string}[] }
   // The peer's authoritative answer to a display switch. It is the ONLY reply
   // the host sends (server/video_service.rs make_display_changed_msg), and it
   // carries the real geometry of what is now being captured — which is what
@@ -25,6 +25,9 @@ export type SessionEvent =                       // worker -> main
   | { t:'stats'; stats:SessionStats }
   | { t:'cursor'; pngDataUrl:string; hotx:number; hoty:number } | { t:'cursorPos'; x:number; y:number }
   | { t:'clipboard'; text:string } | { t:'permission'; kind:string; enabled:boolean }
+  | { t:'privacyMode'; state:number; details:string; implKey:string }
+  | { t:'blockInput'; state:number; details:string }
+  | { t:'elevation'; state:'pending'|'succeeded'|'failed'; detail:string }
   | { t:'chat'; text:string }             // inbound message from the remote peer
   // Fallback video: raw H.264 Annex B forwarded for main-thread MSE playback.
   // Only emitted when WebCodecs is unavailable (insecure origin).
@@ -47,6 +50,9 @@ export type UiCommand =                           // main -> worker
   | { c:'key'; down:boolean; press:boolean; keyKind:'chr'|'control'|'unicode'; value:number; modifiers:number[] }
   | { c:'switchDisplay'; index:number } | { c:'ctrlAltDel' } | { c:'refresh' }
   | { c:'quality'; imageQuality:number } | { c:'clipboardText'; text:string } | { c:'disconnect' }
+  | { c:'restartRemoteDevice' } | { c:'requestElevation' }
+  | { c:'privacyMode'; implKey:string; on:boolean }
+  | { c:'blockInput'; on:boolean } | { c:'lockAfterSessionEnd'; on:boolean }
   | { c:'chat'; text:string }             // outbound message to the remote peer
   // file transfer connections only (no canvas; connect with config.connType='fileTransfer'):
   | { c:'connectFile'; config:SessionConfig }
