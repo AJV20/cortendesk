@@ -195,7 +195,8 @@ describe('RdApp security lifecycle', () => {
     app.activePrivacyImplKey = 'privacy_mode_impl_virtual_display';
     app.detach = vi.fn();
     app.teardownMse = vi.fn();
-    app.el = { recordingIndicator: { hidden: false } };
+    app.resetPermissions = vi.fn();
+    app.el = { recordingIndicator: { hidden: false }, root: { querySelector: vi.fn(() => null) } };
 
     app.teardown();
 
@@ -237,7 +238,11 @@ describe('RdApp security lifecycle', () => {
     app.state = 'streaming';
     app.reconnectConfig = config;
     app.sessionHashHex = config.savedHashHex;
-    app.el = { reconnectCancel: { hidden: true }, recordingIndicator: { hidden: false } };
+    app.el = {
+      reconnectCancel: { hidden: true },
+      recordingIndicator: { hidden: false },
+      root: { querySelector: vi.fn(() => null) },
+    };
     app.worker = worker;
     app.post = vi.fn();
     app.toast = vi.fn();
@@ -245,6 +250,7 @@ describe('RdApp security lifecycle', () => {
     app.teardownMse = vi.fn();
     app.detach = vi.fn();
     app.clearSecurityState = vi.fn();
+    app.resetPermissions = vi.fn();
     app.blockInputOn = false;
     app.blockInputPending = false;
     app.privacyModeOn = false;
