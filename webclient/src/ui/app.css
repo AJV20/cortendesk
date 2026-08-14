@@ -765,6 +765,10 @@
   z-index: 40;
   min-width: 210px;
   max-width: min(92vw, 320px);
+  max-height: calc(100vh - 20px);
+  box-sizing: border-box;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 6px;
   background: var(--rd-surface);
   border: 1px solid var(--rd-border);
