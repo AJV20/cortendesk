@@ -88,8 +88,12 @@ describe('restart reconnect policy', () => {
     expect(nextRestartReconnectDelay(3, 20_000)).toBe(8_000);
   });
 
-  it('stops after the schedule or overall timeout', () => {
-    expect(nextRestartReconnectDelay(RESTART_RECONNECT_DELAYS_MS.length, 10_000)).toBeNull();
+  it('keeps retrying at the capped delay until the overall timeout', () => {
+    expect(nextRestartReconnectDelay(RESTART_RECONNECT_DELAYS_MS.length, 42_000)).toBe(15_000);
+    expect(nextRestartReconnectDelay(99, 115_000)).toBe(5_000);
+  });
+
+  it('stops at the overall timeout', () => {
     expect(nextRestartReconnectDelay(0, 120_000)).toBeNull();
   });
 });

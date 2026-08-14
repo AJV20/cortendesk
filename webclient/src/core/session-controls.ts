@@ -33,7 +33,8 @@ export function nextRestartReconnectDelay(
   timeoutMs = RESTART_RECONNECT_TIMEOUT_MS,
 ): number | null {
   if (elapsedMs >= timeoutMs) return null;
-  return RESTART_RECONNECT_DELAYS_MS[attempt] ?? null;
+  const delay = RESTART_RECONNECT_DELAYS_MS[attempt] ?? RESTART_RECONNECT_DELAYS_MS.at(-1)!;
+  return Math.min(delay, timeoutMs - elapsedMs);
 }
 
 export function buildRestartRemoteDevice(): MiscControl {

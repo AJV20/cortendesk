@@ -50,7 +50,7 @@ export function buildSecurityControlMenu(input: SecurityControlMenuInput): Secur
   if (input.permissions.Keyboard !== false) {
     items.push({
       id: 'lockAfterSessionEnd',
-      label: 'Lock after disconnect',
+      label: 'Request lock after disconnect (best effort)',
       checked: input.lockAfterSessionEnd,
     });
   }
