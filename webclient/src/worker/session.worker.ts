@@ -80,6 +80,9 @@ export interface SessionLike {
   setCustomFps(fps: number): boolean;
   setPreferredCodec(prefer: SupportedDecoding_PreferCodec): boolean;
   setDisplayOption(option: 'showRemoteCursor'|'followRemoteCursor'|'followRemoteWindow', enabled: boolean): void;
+  setRemoteAudioEnabled(enabled: boolean): void;
+  setClipboardEnabled(enabled: boolean): void;
+  setClientRecording(recording: boolean): void;
   sendClipboardText(text: string): void;
   sendChat(text: string): void;
   openTerminal(terminalId: number, rows: number, cols: number): void;
@@ -358,6 +361,15 @@ export class WorkerHost {
         return;
       case 'displayOption':
         this.session?.setDisplayOption(cmd.option, cmd.enabled);
+        return;
+      case 'remoteAudio':
+        this.session?.setRemoteAudioEnabled(cmd.enabled);
+        return;
+      case 'clipboardEnabled':
+        this.session?.setClipboardEnabled(cmd.enabled);
+        return;
+      case 'clientRecording':
+        this.session?.setClientRecording(cmd.recording);
         return;
       case 'clipboardText':
         this.session?.sendClipboardText(cmd.text);

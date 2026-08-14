@@ -69,6 +69,9 @@ export type UiCommand =                           // main -> worker
   | { c:'customQuality'; quality:number } | { c:'customFps'; fps:number }
   | { c:'preferredCodec'; prefer:SupportedDecoding_PreferCodec }
   | { c:'displayOption'; option:'showRemoteCursor'|'followRemoteCursor'|'followRemoteWindow'; enabled:boolean }
+  | { c:'remoteAudio'; enabled:boolean }
+  | { c:'clipboardEnabled'; enabled:boolean }
+  | { c:'clientRecording'; recording:boolean }
   | { c:'chat'; text:string }             // outbound message to the remote peer
   // terminal connections only (no canvas):
   | { c:'connectTerminal'; config:SessionConfig }
