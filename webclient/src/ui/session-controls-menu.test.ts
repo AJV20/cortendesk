@@ -17,7 +17,7 @@ describe('security control menu capability gates', () => {
       { id: 'elevation', label: 'Request elevation', checked: false },
       { id: 'privacy:privacy_mode_impl_virtual_display', label: 'Privacy mode — Virtual display', checked: true },
       { id: 'blockInput', label: 'Block remote keyboard and mouse', checked: true },
-      { id: 'lockAfterSessionEnd', label: 'Lock after disconnect', checked: false },
+      { id: 'lockAfterSessionEnd', label: 'Request lock after disconnect (best effort)', checked: false },
     ]);
   });
 

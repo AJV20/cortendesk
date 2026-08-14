@@ -259,11 +259,13 @@ export class Session {
       case 'hash': {
         this.setState('login');
         let passwordHash: Uint8Array;
+        const plaintextPassword = this.config.password;
+        this.config.password = '';
         if (this.config.savedHashHex) {
           // Reuse a remembered h1 (SHA256(pw||salt)) — no plaintext needed.
           passwordHash = await loginHashFromH1(hexToBytes(this.config.savedHashHex), u.hash.challenge);
-        } else if (this.config.password.length > 0) {
-          const h1 = await computeLoginH1(this.config.password, u.hash.salt);
+        } else if (plaintextPassword.length > 0) {
+          const h1 = await computeLoginH1(plaintextPassword, u.hash.salt);
           this.sinks.emit({ t: 'credentials', hashHex: bytesToHex(h1) });
           passwordHash = await loginHashFromH1(h1, u.hash.challenge);
         } else {
@@ -289,8 +291,8 @@ export class Session {
       case 'login_response': {
         const lr = u.login_response.union;
         if (lr?.$case === 'error') {
-          this.sinks.emit({ t: 'loginError', message: lr.error });
           if (isManualAccept(lr.error)) this.setState('needAccept', lr.error);
+          else this.sinks.emit({ t: 'loginError', message: lr.error });
           return;
         }
         if (lr?.$case === 'peer_info') {
@@ -401,7 +403,7 @@ export class Session {
         }
         return;
       case 'close_reason':
-        this.setState('closed', u.close_reason);
+        this.setState('closed', u.close_reason, true);
         this.sinks.closeAll();
         return;
       case 'uac':
@@ -634,9 +636,11 @@ export class Session {
     this.sinks.sendRelay(this.cipher.seal(bytes));
   }
 
-  private setState(state: SessionState, detail?: string): void {
+  private setState(state: SessionState, detail?: string, peerInitiated = false): void {
     this.state = state;
-    this.sinks.emit(detail === undefined ? { t: 'state', state } : { t: 'state', state, detail });
+    const event: SessionEvent = detail === undefined ? { t: 'state', state } : { t: 'state', state, detail };
+    if (peerInitiated && event.t === 'state') event.peerInitiated = true;
+    this.sinks.emit(event);
   }
 
   private fail(detail: string): void {

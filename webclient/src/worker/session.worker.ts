@@ -373,8 +373,10 @@ export class WorkerHost {
         sendSignaling: (b) => this.ws1?.send(b),
         sendRelay: (b) => this.ws2?.send(b),
         emit: (ev) => {
-          // Clear the connect watchdog once we reach a terminal/settled state.
-          if (ev.t === 'state' && (ev.state === 'streaming' || ev.state === 'error' || ev.state === 'closed')) {
+          // Clear the connect watchdog once we reach a settled state or enter
+          // explicit manual-accept waiting; that wait is controlled by the
+          // remote user and must not be cut off by the transport watchdog.
+          if (ev.t === 'state' && (ev.state === 'needAccept' || ev.state === 'streaming' || ev.state === 'error' || ev.state === 'closed')) {
             this.clearConnectTimer();
           }
           // Anything that restarts the host's capture pipeline leaves our
@@ -428,18 +430,22 @@ export class WorkerHost {
 
       // Watchdog: if pairing/handshake/login stalls (busy relay, peer offline,
       // controller already attached), fail with a reason instead of spinning.
-      this.connectTimer = setTimeout(() => {
-        this.connectTimer = null;
-        const st = this.session?.currentState;
-        if (st && st !== 'streaming' && st !== 'error' && st !== 'closed') {
-          this.deps.post({
-            t: 'state',
-            state: 'error',
-            detail: `Timed out while ${CONNECT_STAGE[st] ?? 'connecting'} — the device may be offline or busy. Try again.`,
-          });
-          this.teardown();
-        }
-      }, CONNECT_TIMEOUT_MS);
+      // Session.start() may synchronously enter needAccept, which is an
+      // intentional unbounded wait for the remote user rather than a stall.
+      if (session.currentState !== 'needAccept' && session.currentState !== 'streaming' && session.currentState !== 'error' && session.currentState !== 'closed') {
+        this.connectTimer = setTimeout(() => {
+          this.connectTimer = null;
+          const st = this.session?.currentState;
+          if (st && st !== 'needAccept' && st !== 'streaming' && st !== 'error' && st !== 'closed') {
+            this.deps.post({
+              t: 'state',
+              state: 'error',
+              detail: `Timed out while ${CONNECT_STAGE[st] ?? 'connecting'} — the device may be offline or busy. Try again.`,
+            });
+            this.teardown();
+          }
+        }, CONNECT_TIMEOUT_MS);
+      }
     } catch (e) {
       this.deps.post({ t: 'state', state: 'error', detail: errMsg(e) });
       this.teardown();

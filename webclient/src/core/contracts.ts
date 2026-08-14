@@ -14,7 +14,7 @@ export type FtEntryKind = 'dir'|'file'|'drive'|'dirLink'|'fileLink';
 export type FtEntry = { kind:FtEntryKind; name:string; size:number; modifiedSec:number; isHidden:boolean };
 export type FtDirectory = { id:number; path:string; entries:FtEntry[] };
 export type SessionEvent =                       // worker -> main
-  | { t:'state'; state:SessionState; detail?:string }
+  | { t:'state'; state:SessionState; detail?:string; peerInitiated?:boolean }
   | { t:'peerInfo'; displays:DisplayInfo[]; username:string; hostname:string; platform:string; version:string; current:number; privacyModeSupported:boolean; privacyModeImpls:{key:string; label:string}[] }
   // The peer's authoritative answer to a display switch. It is the ONLY reply
   // the host sends (server/video_service.rs make_display_changed_msg), and it

@@ -36,7 +36,7 @@ const config: SessionConfig = {
   myName: 'Controller',
 };
 
-function harness(): { session: Session; sent: Uint8Array[]; events: SessionEvent[] } {
+function harness(sessionConfig: SessionConfig = config): { session: Session; sent: Uint8Array[]; events: SessionEvent[] } {
   const sent: Uint8Array[] = [];
   const events: SessionEvent[] = [];
   const sinks: SessionSinks = {
@@ -49,7 +49,7 @@ function harness(): { session: Session; sent: Uint8Array[]; events: SessionEvent
     openRelay: () => {},
     closeAll: () => {},
   };
-  const session = new Session(config, sinks);
+  const session = new Session(sessionConfig, sinks);
   const identity: Encryptor = { seal: (bytes) => bytes, open: (bytes) => bytes };
   (session as unknown as { cipher: Encryptor }).cipher = identity;
   return { session, sent, events };
@@ -68,6 +68,36 @@ async function deliverMisc(session: Session, misc: Misc): Promise<void> {
 }
 
 describe('Session security controls', () => {
+  it('clears typed plaintext from retained session config after deriving H1', async () => {
+    const { session } = harness({ ...config, password: 'typed-secret' });
+    const message = Message.fromPartial({
+      union: {
+        $case: 'hash',
+        hash: { salt: 'salt', challenge: 'challenge' },
+      },
+    });
+
+    await session.onRelayBytes(Message.encode(message).finish());
+
+    expect((session as unknown as { config: SessionConfig }).config.password).toBe('');
+  });
+
+  it('emits manual acceptance without a terminal login error', async () => {
+    const { session, events } = harness();
+    const detail = 'Please wait for the remote user to accept';
+    const message = Message.fromPartial({
+      union: {
+        $case: 'login_response',
+        login_response: { union: { $case: 'error', error: detail }, enable_trusted_devices: false },
+      },
+    });
+
+    await session.onRelayBytes(Message.encode(message).finish());
+
+    expect(events).toContainEqual({ t: 'state', state: 'needAccept', detail });
+    expect(events.some((event) => event.t === 'loginError')).toBe(false);
+  });
+
   it('sends restart, direct elevation, privacy, block-input, and lock controls', () => {
     const { session, sent } = harness();
 
@@ -96,6 +126,21 @@ describe('Session security controls', () => {
     expect(lastMisc(sent).union).toMatchObject({
       $case: 'option',
       option: { lock_after_session_end: OptionMessage_BoolOption.No },
+    });
+  });
+
+  it('marks a peer close reason as an explicit peer-initiated disconnect', async () => {
+    const { session, events } = harness();
+
+    await deliverMisc(session, Misc.fromPartial({
+      union: { $case: 'close_reason', close_reason: 'remote user closed the session' },
+    }));
+
+    expect(events).toContainEqual({
+      t: 'state',
+      state: 'closed',
+      detail: 'remote user closed the session',
+      peerInitiated: true,
     });
   });
 

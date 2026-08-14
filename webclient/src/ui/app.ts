@@ -35,7 +35,7 @@ import {
   BackNotification_PrivacyModeState,
   ControlKey,
 } from '../gen/message';
-import { nextRestartReconnectDelay } from '../core/session-controls';
+import { RESTART_RECONNECT_TIMEOUT_MS, nextRestartReconnectDelay } from '../core/session-controls';
 import { buildSecurityControlMenu } from './session-controls-menu';
 import {
   overlayVersion,
@@ -83,6 +83,8 @@ type RestartFlow = {
   config: SessionConfig;
   timer?: ReturnType<typeof setTimeout>;
   stableTimer?: ReturnType<typeof setTimeout>;
+  deadlineTimer?: ReturnType<typeof setTimeout>;
+  reconnecting: boolean;
 };
 
 type Els = {
@@ -256,7 +258,10 @@ export class RdApp {
         start && this.state === 'streaming' ? formatDuration(Date.now() - start) : '—';
     }, 1000);
 
-    window.addEventListener('beforeunload', () => this.post({ c: 'disconnect' }));
+    window.addEventListener('beforeunload', () => {
+      this.releaseRemoteSecurityState();
+      this.post({ c: 'disconnect' });
+    });
   }
 
   // --- DOM scaffolding -------------------------------------------------------
@@ -392,10 +397,7 @@ export class RdApp {
     q<HTMLButtonElement>(t, '#rd-btn-disconnect').addEventListener('click', () => {
       this.setLoggedOutFlag(true); // an explicit logout must not auto-login on reload
       this.clearRestartFlow();
-      if (this.blockInputOn) this.post({ c: 'blockInput', on: false });
-      if (this.privacyModeOn && this.activePrivacyImplKey) {
-        this.post({ c: 'privacyMode', implKey: this.activePrivacyImplKey, on: false });
-      }
+      this.releaseRemoteSecurityState();
       this.post({ c: 'disconnect' });
       this.setState('closed');
     });
@@ -873,7 +875,11 @@ export class RdApp {
     if (id === 'lockAfterSessionEnd') {
       this.lockAfterSessionEnd = !this.lockAfterSessionEnd;
       this.post({ c: 'lockAfterSessionEnd', on: this.lockAfterSessionEnd });
-      this.toast(this.lockAfterSessionEnd ? 'Remote device will lock when this session ends' : 'Lock after disconnect disabled');
+      this.toast(
+        this.lockAfterSessionEnd
+          ? 'Lock-after-disconnect request sent (best effort; the remote device does not acknowledge this setting)'
+          : 'Lock-after-disconnect disable request sent (best effort; the remote device does not acknowledge this setting)',
+      );
       this.closePop();
     }
   }
@@ -1058,6 +1064,12 @@ export class RdApp {
       + 'support for H.264. Chrome or Edge is required for the remote screen.';
   }
 
+  private consumePasswordInput(): string {
+    const password = this.el.passwordInput.value;
+    this.el.passwordInput.value = '';
+    return password;
+  }
+
   private onConnectClick(): void {
     if (this.worker && this.state !== 'error' && this.state !== 'closed') return;
     const peerId = normalizePeerId(this.el.peerIdInput.value || this.fixedPeerId);
@@ -1078,7 +1090,7 @@ export class RdApp {
     this.setOverlayError(null);
     this.setLoggedOutFlag(false); // connecting again clears the logout marker
 
-    const typed = this.el.passwordInput.value;
+    const typed = this.consumePasswordInput();
     const saved = loadSavedHash(peerId);
     // If the user left the field blank and we have a stored hash, reuse it.
     // If the "save" box is off, forget any stored credential for this device.
@@ -1109,9 +1121,11 @@ export class RdApp {
       savedHashHex: this.sessionHashHex ?? this.reconnectConfig.savedHashHex,
     };
     this.clearRestartFlow();
-    this.restartFlow = { startedAt: Date.now(), attempt: 0, config };
     this.el.reconnectCancel.hidden = false;
     this.post({ c: 'restartRemoteDevice' });
+    const flow: RestartFlow = { startedAt: Date.now(), attempt: 0, config, reconnecting: false };
+    flow.deadlineTimer = setTimeout(() => this.expireRestartFlow(flow), RESTART_RECONNECT_TIMEOUT_MS);
+    this.restartFlow = flow;
     this.toast('Restart command sent — waiting for the remote device', true);
   }
 
@@ -1145,6 +1159,11 @@ export class RdApp {
     flow.timer = setTimeout(() => {
       if (this.restartFlow !== flow) return;
       flow.timer = undefined;
+      if (Date.now() - flow.startedAt >= RESTART_RECONNECT_TIMEOUT_MS) {
+        this.expireRestartFlow(flow);
+        return;
+      }
+      flow.reconnecting = true;
       this.startSession({ ...flow.config, password: '' });
     }, delay);
   }
@@ -1157,10 +1176,27 @@ export class RdApp {
     this.toast('Automatic reconnect cancelled');
   }
 
+  private expireRestartFlow(flow: RestartFlow): void {
+    if (this.restartFlow !== flow) return;
+    const sessionStillStreaming = this.state === 'streaming';
+    const reconnecting = flow.reconnecting;
+    this.clearRestartFlow();
+    if (reconnecting) {
+      this.teardown(true);
+      this.clearSecurityState();
+      this.setState('error', 'The remote device did not return within 120 seconds after the restart request');
+    } else if (sessionStillStreaming) {
+      this.toast('No remote restart was detected within 120 seconds');
+    } else {
+      this.setState('error', 'The remote device did not return within 120 seconds after the restart request');
+    }
+  }
+
   private clearRestartFlow(): void {
     if (this.restartFlow) {
       clearTimeout(this.restartFlow.timer);
       clearTimeout(this.restartFlow.stableTimer);
+      clearTimeout(this.restartFlow.deadlineTimer);
     }
     this.restartFlow = undefined;
     if (this.el?.reconnectCancel) this.el.reconnectCancel.hidden = true;
@@ -1220,13 +1256,19 @@ export class RdApp {
     return this.canvas;
   }
 
-  private teardown(): void {
+  private teardown(immediateWorkerTermination = false): void {
+    this.releaseRemoteSecurityState();
     this.detach?.();
     this.detach = undefined;
     this.teardownMse();
     const w = this.worker;
     this.worker = undefined;
-    if (w) setTimeout(() => w.terminate(), 250); // let a pending 'disconnect' flush first
+    if (w) {
+      w.onmessage = null;
+      w.onerror = null;
+      if (immediateWorkerTermination) w.terminate();
+      else setTimeout(() => w.terminate(), 250); // let a pending 'disconnect' flush first
+    }
   }
 
   /**
@@ -1292,7 +1334,10 @@ export class RdApp {
   private onEvent(ev: SessionEvent): void {
     switch (ev.t) {
       case 'state':
-        if (this.restartFlow && (ev.state === 'error' || ev.state === 'closed')) {
+        if (this.restartFlow && ev.peerInitiated) {
+          this.clearRestartFlow();
+          this.setState(ev.state, ev.detail);
+        } else if (this.restartFlow && (ev.state === 'error' || ev.state === 'closed')) {
           this.scheduleRestartReconnect(ev.detail);
         } else {
           this.setState(ev.state, ev.detail);
@@ -1439,11 +1484,11 @@ export class RdApp {
           const flow = this.restartFlow;
           this.el.reconnectCancel.hidden = true;
           clearTimeout(flow.stableTimer);
-          this.toast('Remote device reconnected — confirming the restart is stable', true);
+          this.toast('Connection restored — checking stability after the restart request', true);
           flow.stableTimer = setTimeout(() => {
             if (this.restartFlow !== flow || this.state !== 'streaming') return;
             this.clearRestartFlow();
-            this.toast('Remote device restarted and reconnected');
+            this.toast('Connection restored after the restart request');
           }, 15_000);
         }
         break;
@@ -1552,6 +1597,19 @@ export class RdApp {
     else this.hideToast();
   }
 
+  private releaseRemoteSecurityState(): void {
+    // A disconnect can race the peer's acknowledgement of an enable request.
+    // Compensate for both confirmed and pending intrusive state before closing.
+    if (this.blockInputOn || this.blockInputPending) this.post({ c: 'blockInput', on: false });
+    if ((this.privacyModeOn || this.privacyModePending) && this.activePrivacyImplKey) {
+      this.post({ c: 'privacyMode', implKey: this.activePrivacyImplKey, on: false });
+    }
+    this.blockInputOn = false;
+    this.blockInputPending = false;
+    this.privacyModeOn = false;
+    this.privacyModePending = false;
+  }
+
   private clearSecurityState(): void {
     this.privacyModeSupported = false;
     this.privacyModeImpls = [];
@@ -1593,6 +1651,12 @@ export class RdApp {
    */
   private applyPermission(kind: string, enabled: boolean): void {
     this.permissions[kind] = enabled;
+    if (kind === 'Restart' && !enabled && this.restartFlow) {
+      const sessionStillStreaming = this.state === 'streaming';
+      this.clearRestartFlow();
+      if (sessionStillStreaming) this.toast('Restart permission was denied by the peer');
+      else this.setState('error', 'Automatic reconnect stopped because restart permission was denied');
+    }
 
     const target = PERMISSION_CONTROLS[kind];
     if (!target) {
