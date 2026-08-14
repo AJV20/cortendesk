@@ -157,6 +157,34 @@ export function displayToRect(d: DisplayInfo): DisplayRect {
   return { x: d.x, y: d.y, width: d.width, height: d.height };
 }
 
+export function placePopover(
+  anchor: { left: number; top: number; bottom: number; width: number },
+  popover: { width: number; height: number },
+  viewport: { width: number; height: number },
+  preferAbove = false,
+): { left: number; top: number; maxHeight: number } {
+  const margin = 8;
+  const gap = 10;
+  const belowTop = anchor.bottom + gap;
+  const aboveBottom = anchor.top - gap;
+  const belowSpace = Math.max(0, viewport.height - margin - belowTop);
+  const aboveSpace = Math.max(0, aboveBottom - margin);
+  const preferredSpace = preferAbove ? aboveSpace : belowSpace;
+  const alternateSpace = preferAbove ? belowSpace : aboveSpace;
+  const openAbove = popover.height > preferredSpace && alternateSpace > preferredSpace
+    ? !preferAbove
+    : preferAbove;
+  const maxHeight = Math.max(0, Math.floor(openAbove ? aboveSpace : belowSpace));
+  const visibleHeight = Math.min(Math.max(0, popover.height), maxHeight);
+  const rawTop = openAbove ? aboveBottom - visibleHeight : belowTop;
+  const maxTop = Math.max(margin, viewport.height - margin - visibleHeight);
+  const top = Math.max(margin, Math.min(rawTop, maxTop));
+  const centeredLeft = anchor.left + anchor.width / 2 - popover.width / 2;
+  const maxLeft = Math.max(margin, viewport.width - popover.width - margin);
+  const left = Math.max(margin, Math.min(centeredLeft, maxLeft));
+  return { left: Math.round(left), top: Math.round(top), maxHeight };
+}
+
 /**
  * Is diagnostic logging on?
  *

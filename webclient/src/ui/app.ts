@@ -57,6 +57,7 @@ import {
   loggedOutFromSearch,
   normalizePeerId,
   peerIdFromSearch,
+  placePopover,
   resolveWorkerUrl,
   saveSavedHash,
   type IconName,
@@ -816,11 +817,15 @@ export class RdApp {
     this.el.root.appendChild(pop);
     const a = anchor.getBoundingClientRect();
     const r = pop.getBoundingClientRect();
-    let left = a.left + a.width / 2 - r.width / 2;
-    left = Math.max(8, Math.min(left, window.innerWidth - r.width - 8));
-    const top = up ? a.top - r.height - 10 : a.bottom + 10;
-    pop.style.left = `${Math.round(left)}px`;
-    pop.style.top = `${Math.round(Math.max(8, top))}px`;
+    const placement = placePopover(
+      a,
+      { width: r.width, height: Math.max(r.height, pop.scrollHeight) },
+      { width: window.innerWidth, height: window.innerHeight },
+      up,
+    );
+    pop.style.left = `${placement.left}px`;
+    pop.style.top = `${placement.top}px`;
+    pop.style.maxHeight = `${placement.maxHeight}px`;
     this.pop = pop;
     this.popAnchor = anchor;
 
