@@ -30,7 +30,13 @@ import type {
 } from '../core/contracts';
 import { attachInput, type DisplayRect } from '../input/mouse-keyboard';
 import { readLocalClipboardText } from '../input/clipboard-cursor';
-import { ControlKey } from '../gen/message';
+import {
+  BackNotification_BlockInputState,
+  BackNotification_PrivacyModeState,
+  ControlKey,
+} from '../gen/message';
+import { nextRestartReconnectDelay } from '../core/session-controls';
+import { buildSecurityControlMenu } from './session-controls-menu';
 import {
   overlayVersion,
   QUALITY,
@@ -71,6 +77,14 @@ type FitMode = 'fit' | 'actual';
 
 type ChatEntry = { who: 'me' | 'peer'; text: string; at: number };
 
+type RestartFlow = {
+  startedAt: number;
+  attempt: number;
+  config: SessionConfig;
+  timer?: ReturnType<typeof setTimeout>;
+  stableTimer?: ReturnType<typeof setTimeout>;
+};
+
 type Els = {
   root: HTMLElement;
   toolbar: HTMLElement;
@@ -107,6 +121,7 @@ type Els = {
   overlayStatus: HTMLElement;
   overlayStatusText: HTMLElement;
   overlayError: HTMLElement;
+  reconnectCancel: HTMLButtonElement;
 };
 
 function q<T extends Element>(scope: ParentNode, sel: string): T {
@@ -153,6 +168,16 @@ export class RdApp {
   private sessionHashHex: string | undefined; // h1 of the live session — lets the file panel log in silently
   /** Peer-advertised permissions for THIS session; absent means granted. */
   private permissions: Record<string, boolean> = {};
+  private privacyModeSupported = false;
+  private privacyModeImpls: { key: string; label: string }[] = [];
+  private privacyModeOn = false;
+  private privacyModePending = false;
+  private activePrivacyImplKey = '';
+  private blockInputOn = false;
+  private blockInputPending = false;
+  private lockAfterSessionEnd = false;
+  private reconnectConfig: SessionConfig | undefined;
+  private restartFlow: RestartFlow | undefined;
 
   private filePanel: FilePanel | undefined;
   private videoEl!: HTMLVideoElement;
@@ -366,6 +391,11 @@ export class RdApp {
     this.el.btnViewOnly.addEventListener('click', () => this.toggleViewOnly());
     q<HTMLButtonElement>(t, '#rd-btn-disconnect').addEventListener('click', () => {
       this.setLoggedOutFlag(true); // an explicit logout must not auto-login on reload
+      this.clearRestartFlow();
+      if (this.blockInputOn) this.post({ c: 'blockInput', on: false });
+      if (this.privacyModeOn && this.activePrivacyImplKey) {
+        this.post({ c: 'privacyMode', implKey: this.activePrivacyImplKey, on: false });
+      }
       this.post({ c: 'disconnect' });
       this.setState('closed');
     });
@@ -713,9 +743,10 @@ export class RdApp {
     };
   }
 
-  private menuItem(icon: IconName | null, label: string, checked = false): string {
+  private menuItem(icon: IconName | null, label: string, checked = false, securityId?: string): string {
+    const data = securityId ? ` data-security="${escapeHtml(securityId)}"` : '';
     return (
-      `<button type="button" class="rd-mi${checked ? ' rd-checked' : ''}" role="menuitem">` +
+      `<button type="button" class="rd-mi${checked ? ' rd-checked' : ''}" role="menuitem"${data}>` +
       `${icon ? iconHtml(icon) : '<span class="rd-mi-pad"></span>'}` +
       `<span class="rd-mi-label">${escapeHtml(label)}</span>` +
       `${checked ? iconHtml('check') : ''}</button>`
@@ -759,13 +790,28 @@ export class RdApp {
   private openMorePop(anchor: HTMLElement): void {
     this.openPop(anchor, (pop) => {
       const fs = !!document.fullscreenElement;
+      const security = buildSecurityControlMenu({
+        platform: this.peerPlatform,
+        permissions: this.permissions,
+        privacyModeSupported: this.privacyModeSupported,
+        privacyModeImpls: this.privacyModeImpls,
+        privacyModeOn: this.privacyModeOn,
+        activePrivacyImplKey: this.activePrivacyImplKey,
+        blockInputOn: this.blockInputOn,
+        lockAfterSessionEnd: this.lockAfterSessionEnd,
+      });
+      const securityHtml = security.length
+        ? '<div class="rd-pop-sep"></div><div class="rd-pop-title">Remote controls</div>'
+          + security.map((item) => this.menuItem(null, item.label, item.checked, item.id)).join('')
+        : '';
       pop.innerHTML =
         this.menuItem('refresh', 'Refresh video') +
         this.menuItem(fs ? 'fullscreenExit' : 'fullscreen', fs ? 'Exit fullscreen' : 'Fullscreen') +
         '<div class="rd-pop-sep"></div><div class="rd-pop-title">Image quality</div>' +
         this.menuItem(null, 'Best', this.quality === QUALITY.best) +
         this.menuItem(null, 'Balanced', this.quality === QUALITY.balanced) +
-        this.menuItem(null, 'Speed', this.quality === QUALITY.speed);
+        this.menuItem(null, 'Speed', this.quality === QUALITY.speed) +
+        securityHtml;
       const items = pop.querySelectorAll<HTMLButtonElement>('.rd-mi');
       items[0]?.addEventListener('click', () => {
         this.post({ c: 'refresh' });
@@ -783,7 +829,53 @@ export class RdApp {
           this.closePop();
         });
       });
+      for (const button of pop.querySelectorAll<HTMLButtonElement>('[data-security]')) {
+        button.addEventListener('click', () => this.activateSecurityControl(button.dataset.security!));
+      }
     });
+  }
+
+  private activateSecurityControl(id: string): void {
+    if (id === 'restart') {
+      this.closePop();
+      this.beginRemoteRestart();
+      return;
+    }
+    if (id === 'elevation') {
+      if (!window.confirm('Ask the remote Windows user to approve elevation?')) return;
+      this.post({ c: 'requestElevation' });
+      this.toast('Elevation requested — waiting for approval on the remote device', true);
+      this.closePop();
+      return;
+    }
+    if (id.startsWith('privacy:')) {
+      if (this.privacyModePending) return;
+      const implKey = id.slice('privacy:'.length);
+      const on = !(this.privacyModeOn && this.activePrivacyImplKey === implKey);
+      if (on && !window.confirm('Enable privacy mode and hide the remote screen from the local user?')) return;
+      this.privacyModePending = true;
+      this.activePrivacyImplKey = implKey;
+      this.post({ c: 'privacyMode', implKey, on });
+      this.toast(`${on ? 'Enabling' : 'Disabling'} privacy mode…`, true);
+      this.closePop();
+      return;
+    }
+    if (id === 'blockInput') {
+      if (this.blockInputPending) return;
+      const on = !this.blockInputOn;
+      if (on && !window.confirm('Block the remote computer’s local keyboard and mouse?')) return;
+      this.blockInputPending = true;
+      this.post({ c: 'blockInput', on });
+      this.toast(`${on ? 'Blocking' : 'Restoring'} remote keyboard and mouse…`, true);
+      this.closePop();
+      return;
+    }
+    if (id === 'lockAfterSessionEnd') {
+      this.lockAfterSessionEnd = !this.lockAfterSessionEnd;
+      this.post({ c: 'lockAfterSessionEnd', on: this.lockAfterSessionEnd });
+      this.toast(this.lockAfterSessionEnd ? 'Remote device will lock when this session ends' : 'Lock after disconnect disabled');
+      this.closePop();
+    }
   }
 
   private openFitPop(): void {
@@ -904,6 +996,7 @@ export class RdApp {
           </div>
           <div class="rd-overlay-error" id="rd-overlay-error" role="alert" hidden></div>
         </div>
+        <button type="button" class="rd-chip" id="rd-restart-cancel" hidden>Cancel reconnect</button>
       </div>`;
     const o = this.el.overlay;
     this.el.overlayPeer = q(o, '#rd-overlay-peer');
@@ -916,8 +1009,10 @@ export class RdApp {
     this.el.overlayStatus = q(o, '#rd-overlay-status');
     this.el.overlayStatusText = q(o, '#rd-overlay-status-text');
     this.el.overlayError = q(o, '#rd-overlay-error');
+    this.el.reconnectCancel = q(o, '#rd-restart-cancel');
 
     this.el.connectBtn.addEventListener('click', () => this.onConnectClick());
+    this.el.reconnectCancel.addEventListener('click', () => this.cancelRestartReconnect());
     const enter = (e: KeyboardEvent): void => {
       if (e.key === 'Enter') this.onConnectClick();
     };
@@ -1001,8 +1096,81 @@ export class RdApp {
     this.startSession(config);
   }
 
+  private beginRemoteRestart(): void {
+    if (this.state !== 'streaming' || !this.reconnectConfig) {
+      this.toast('Restart is unavailable until the session is connected');
+      return;
+    }
+    if (!window.confirm('Restart the remote device and reconnect automatically?')) return;
+
+    const config: SessionConfig = {
+      ...this.reconnectConfig,
+      password: '',
+      savedHashHex: this.sessionHashHex ?? this.reconnectConfig.savedHashHex,
+    };
+    this.clearRestartFlow();
+    this.restartFlow = { startedAt: Date.now(), attempt: 0, config };
+    this.el.reconnectCancel.hidden = false;
+    this.post({ c: 'restartRemoteDevice' });
+    this.toast('Restart command sent — waiting for the remote device', true);
+  }
+
+  private scheduleRestartReconnect(detail?: string): void {
+    const flow = this.restartFlow;
+    if (!flow || flow.timer) return;
+    clearTimeout(flow.stableTimer);
+    flow.stableTimer = undefined;
+    this.teardown();
+    this.clearSecurityState();
+    this.filePanel?.destroy();
+    this.filePanel = undefined;
+    this.closeSide();
+    this.closePop();
+
+    const elapsed = Date.now() - flow.startedAt;
+    const delay = nextRestartReconnectDelay(flow.attempt, elapsed);
+    if (delay === null) {
+      this.clearRestartFlow();
+      this.setState('error', `The remote device did not return after restarting${detail ? ` — ${detail}` : ''}`);
+      return;
+    }
+
+    flow.attempt += 1;
+    this.state = 'connecting';
+    this.el.root.dataset.state = 'connecting';
+    this.showOverlay();
+    this.setOverlayBusy(true);
+    this.el.reconnectCancel.hidden = false;
+    this.setOverlayStatusText(`Waiting for restarted device — retry ${flow.attempt} in ${Math.ceil(delay / 1000)}s`);
+    flow.timer = setTimeout(() => {
+      if (this.restartFlow !== flow) return;
+      flow.timer = undefined;
+      this.startSession({ ...flow.config, password: '' });
+    }, delay);
+  }
+
+  private cancelRestartReconnect(): void {
+    const wasWaiting = this.state !== 'streaming';
+    if (!this.restartFlow) return;
+    this.clearRestartFlow();
+    if (wasWaiting) this.setState('closed');
+    this.toast('Automatic reconnect cancelled');
+  }
+
+  private clearRestartFlow(): void {
+    if (this.restartFlow) {
+      clearTimeout(this.restartFlow.timer);
+      clearTimeout(this.restartFlow.stableTimer);
+    }
+    this.restartFlow = undefined;
+    if (this.el?.reconnectCancel) this.el.reconnectCancel.hidden = true;
+  }
+
   private startSession(config: SessionConfig): void {
     this.teardown();
+    // Retain only the challenge-independent password hash for reconnects. The
+    // typed plaintext is transferred to the worker and never kept in UI state.
+    this.reconnectConfig = { ...config, password: '' };
     // A fresh connection may be a different peer/credential — retire the panel
     // and everything else that belonged to the previous session.
     this.filePanel?.destroy();
@@ -1016,6 +1184,7 @@ export class RdApp {
     this.el.btnViewOnly.classList.remove('rd-on');
     this.el.btnViewOnly.setAttribute('aria-pressed', 'false');
     this.setLatches(false, false);
+    this.clearSecurityState();
     this.peerWho = '';
     this.peerPlatform = '';
     this.sessionHashHex = config.savedHashHex;
@@ -1123,7 +1292,11 @@ export class RdApp {
   private onEvent(ev: SessionEvent): void {
     switch (ev.t) {
       case 'state':
-        this.setState(ev.state, ev.detail);
+        if (this.restartFlow && (ev.state === 'error' || ev.state === 'closed')) {
+          this.scheduleRestartReconnect(ev.detail);
+        } else {
+          this.setState(ev.state, ev.detail);
+        }
         break;
       case 'peerInfo': {
         this.dbg('peerInfo', { current: ev.current, displays: ev.displays });
@@ -1131,6 +1304,8 @@ export class RdApp {
         this.current = ev.current;
         this.peerWho = ev.username ? `${ev.username}@${ev.hostname}` : ev.hostname;
         this.peerPlatform = ev.platform || '';
+        this.privacyModeSupported = ev.privacyModeSupported;
+        this.privacyModeImpls = ev.privacyModeImpls;
         this.el.peerLabel.textContent = this.peerWho || this.peerId;
         this.refreshPeerSub();
         this.el.statVersion.textContent = ev.version || '—';
@@ -1179,9 +1354,21 @@ export class RdApp {
       case 'permission':
         this.applyPermission(ev.kind, ev.enabled);
         break;
+      case 'privacyMode':
+        this.applyPrivacyModeState(ev.state, ev.details, ev.implKey);
+        break;
+      case 'blockInput':
+        this.applyBlockInputState(ev.state, ev.details);
+        break;
+      case 'elevation':
+        if (ev.state === 'succeeded') this.toast('Elevation approved');
+        else if (ev.state === 'failed') this.toast(`Elevation failed${ev.detail ? `: ${ev.detail}` : ''}`);
+        else this.toast('Elevation approved — waiting for the elevated service', true);
+        break;
       case 'credentials':
         this.pendingHashHex = ev.hashHex; // persisted only once the session streams
         this.sessionHashHex = ev.hashHex; // in-memory: reused by the file panel
+        if (this.reconnectConfig) this.reconnectConfig.savedHashHex = ev.hashHex;
         break;
       case 'uac':
         if (ev.on) {
@@ -1200,6 +1387,7 @@ export class RdApp {
         break;
       }
       case 'loginError':
+        this.clearRestartFlow();
         this.teardown();
         if (this.connectedWithSavedHash) {
           // The stored credential no longer works (password changed) — drop it.
@@ -1247,9 +1435,21 @@ export class RdApp {
         this.persistCredentialIfWanted();
         this.hideOverlay();
         this.canvas.focus();
+        if (this.restartFlow) {
+          const flow = this.restartFlow;
+          this.el.reconnectCancel.hidden = true;
+          clearTimeout(flow.stableTimer);
+          this.toast('Remote device reconnected — confirming the restart is stable', true);
+          flow.stableTimer = setTimeout(() => {
+            if (this.restartFlow !== flow || this.state !== 'streaming') return;
+            this.clearRestartFlow();
+            this.toast('Remote device restarted and reconnected');
+          }, 15_000);
+        }
         break;
       case 'error':
         this.teardown();
+        this.clearSecurityState();
         this.filePanel?.destroy();
         this.filePanel = undefined;
         this.closeSide();
@@ -1260,6 +1460,7 @@ export class RdApp {
         break;
       case 'closed':
         this.teardown();
+        this.clearSecurityState();
         this.filePanel?.destroy();
         this.filePanel = undefined;
         this.closeSide();
@@ -1282,6 +1483,85 @@ export class RdApp {
     this.el.statFps.textContent = String(Math.round(s.fps));
     this.el.statBitrate.textContent = formatMbps(s.mbps);
     this.el.statDropped.textContent = String(s.framesDropped);
+  }
+
+  private applyPrivacyModeState(state: number, details: string, implKey: string): void {
+    this.privacyModePending = false;
+    let failed = false;
+    switch (state) {
+      case BackNotification_PrivacyModeState.PrvOnByOther:
+      case BackNotification_PrivacyModeState.PrvOnSucceeded:
+        this.privacyModeOn = true;
+        this.activePrivacyImplKey = implKey || this.activePrivacyImplKey;
+        break;
+      case BackNotification_PrivacyModeState.PrvOffSucceeded:
+      case BackNotification_PrivacyModeState.PrvOffByPeer:
+        this.privacyModeOn = false;
+        this.activePrivacyImplKey = '';
+        break;
+      case BackNotification_PrivacyModeState.PrvNotSupported:
+        this.privacyModeOn = false;
+        this.privacyModeSupported = false;
+        failed = true;
+        break;
+      case BackNotification_PrivacyModeState.PrvOnFailedDenied:
+      case BackNotification_PrivacyModeState.PrvOnFailedPlugin:
+      case BackNotification_PrivacyModeState.PrvOnFailed:
+        this.privacyModeOn = false;
+        failed = true;
+        break;
+      case BackNotification_PrivacyModeState.PrvOffFailed:
+        this.privacyModeOn = true;
+        failed = true;
+        break;
+      default:
+        failed = true;
+    }
+    if (failed) this.toast(`Privacy mode failed${details ? `: ${details}` : ''}`);
+    else this.refreshSecurityToast();
+  }
+
+  private applyBlockInputState(state: number, details: string): void {
+    this.blockInputPending = false;
+    let failed = false;
+    switch (state) {
+      case BackNotification_BlockInputState.BlkOnSucceeded:
+        this.blockInputOn = true;
+        break;
+      case BackNotification_BlockInputState.BlkOffSucceeded:
+        this.blockInputOn = false;
+        break;
+      case BackNotification_BlockInputState.BlkOnFailed:
+        this.blockInputOn = false;
+        failed = true;
+        break;
+      case BackNotification_BlockInputState.BlkOffFailed:
+        this.blockInputOn = true;
+        failed = true;
+        break;
+      default:
+        failed = true;
+    }
+    if (failed) this.toast(`Remote input control failed${details ? `: ${details}` : ''}`);
+    else this.refreshSecurityToast();
+  }
+
+  private refreshSecurityToast(): void {
+    if (this.blockInputOn) this.toast('Remote keyboard and mouse are blocked', true);
+    else if (this.privacyModeOn) this.toast('Privacy mode is active', true);
+    else this.hideToast();
+  }
+
+  private clearSecurityState(): void {
+    this.privacyModeSupported = false;
+    this.privacyModeImpls = [];
+    this.privacyModeOn = false;
+    this.privacyModePending = false;
+    this.activePrivacyImplKey = '';
+    this.blockInputOn = false;
+    this.blockInputPending = false;
+    this.lockAfterSessionEnd = false;
+    this.hideToast();
   }
 
   // --- permissions / misc ------------------------------------------------------
@@ -1467,6 +1747,7 @@ export class RdApp {
   }
 
   dispose(): void {
+    this.clearRestartFlow();
     this.teardown();
     this.filePanel?.destroy();
     this.filePanel = undefined;

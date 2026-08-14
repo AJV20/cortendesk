@@ -57,6 +57,11 @@ export interface SessionLike {
   ctrlAltDel(): void;
   refresh(): void;
   setQuality(imageQuality: number): void;
+  restartRemoteDevice(): void;
+  requestElevation(): void;
+  setPrivacyMode(implKey: string, on: boolean): void;
+  setBlockInput(on: boolean): void;
+  setLockAfterSessionEnd(on: boolean): void;
   sendClipboardText(text: string): void;
   sendChat(text: string): void;
   sendFileAction(union: NonNullable<FileAction['union']>): void;
@@ -285,6 +290,21 @@ export class WorkerHost {
         return;
       case 'quality':
         this.session?.setQuality(cmd.imageQuality);
+        return;
+      case 'restartRemoteDevice':
+        this.session?.restartRemoteDevice();
+        return;
+      case 'requestElevation':
+        this.session?.requestElevation();
+        return;
+      case 'privacyMode':
+        this.session?.setPrivacyMode(cmd.implKey, cmd.on);
+        return;
+      case 'blockInput':
+        this.session?.setBlockInput(cmd.on);
+        return;
+      case 'lockAfterSessionEnd':
+        this.session?.setLockAfterSessionEnd(cmd.on);
         return;
       case 'clipboardText':
         this.session?.sendClipboardText(cmd.text);
