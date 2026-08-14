@@ -47,6 +47,9 @@ export type UiCommand =                           // main -> worker
   | { c:'key'; down:boolean; press:boolean; keyKind:'chr'|'control'|'unicode'; value:number; modifiers:number[] }
   | { c:'switchDisplay'; index:number } | { c:'ctrlAltDel' } | { c:'refresh' }
   | { c:'quality'; imageQuality:number } | { c:'clipboardText'; text:string } | { c:'disconnect' }
+  | { c:'remoteAudio'; enabled:boolean }
+  | { c:'clipboardEnabled'; enabled:boolean }
+  | { c:'clientRecording'; recording:boolean }
   | { c:'chat'; text:string }             // outbound message to the remote peer
   // file transfer connections only (no canvas; connect with config.connType='fileTransfer'):
   | { c:'connectFile'; config:SessionConfig }

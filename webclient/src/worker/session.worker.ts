@@ -57,6 +57,9 @@ export interface SessionLike {
   ctrlAltDel(): void;
   refresh(): void;
   setQuality(imageQuality: number): void;
+  setRemoteAudioEnabled(enabled: boolean): void;
+  setClipboardEnabled(enabled: boolean): void;
+  setClientRecording(recording: boolean): void;
   sendClipboardText(text: string): void;
   sendChat(text: string): void;
   sendFileAction(union: NonNullable<FileAction['union']>): void;
@@ -285,6 +288,15 @@ export class WorkerHost {
         return;
       case 'quality':
         this.session?.setQuality(cmd.imageQuality);
+        return;
+      case 'remoteAudio':
+        this.session?.setRemoteAudioEnabled(cmd.enabled);
+        return;
+      case 'clipboardEnabled':
+        this.session?.setClipboardEnabled(cmd.enabled);
+        return;
+      case 'clientRecording':
+        this.session?.setClientRecording(cmd.recording);
         return;
       case 'clipboardText':
         this.session?.sendClipboardText(cmd.text);

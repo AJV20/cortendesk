@@ -15,6 +15,7 @@ import {
   Misc,
   MouseEvent,
   OptionMessage,
+  OptionMessage_BoolOption,
   PeerInfo,
   PermissionInfo_Permission,
   SupportedDecoding,
@@ -522,6 +523,28 @@ export class Session {
       $case: 'option',
       option: OptionMessage.fromPartial({ image_quality: imageQuality as ImageQuality }),
     });
+  }
+
+  setRemoteAudioEnabled(enabled: boolean): void {
+    this.sendMisc({
+      $case: 'option',
+      option: OptionMessage.fromPartial({
+        disable_audio: enabled ? OptionMessage_BoolOption.No : OptionMessage_BoolOption.Yes,
+      }),
+    });
+  }
+
+  setClipboardEnabled(enabled: boolean): void {
+    this.sendMisc({
+      $case: 'option',
+      option: OptionMessage.fromPartial({
+        disable_clipboard: enabled ? OptionMessage_BoolOption.No : OptionMessage_BoolOption.Yes,
+      }),
+    });
+  }
+
+  setClientRecording(recording: boolean): void {
+    this.sendMisc({ $case: 'client_record_status', client_record_status: recording });
   }
 
   sendClipboardText(text: string): void {

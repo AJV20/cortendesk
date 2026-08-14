@@ -58,6 +58,8 @@ import {
 import { FilePanel } from './file-panel';
 import { MseVideoPlayer } from '../media/mse-video';
 import { mseH264Available } from '../media/video';
+import { RemoteAudioPlayback, type RemoteAudioContext } from '../media/remote-audio';
+import { LocalSessionRecorder, type RecordingSurface } from '../media/session-recorder';
 
 // Back-compat: everything that used to live here is re-exported for tests and
 // external importers.
@@ -70,6 +72,7 @@ type InputMode = 'pointer' | 'touch';
 type FitMode = 'fit' | 'actual';
 
 type ChatEntry = { who: 'me' | 'peer'; text: string; at: number };
+type UiWorkerEvent = SessionEvent | { t: 'audioPcm'; pcm: Float32Array; sampleRate: number; channels: number };
 
 type Els = {
   root: HTMLElement;
@@ -82,6 +85,7 @@ type Els = {
   toast: HTMLElement;
   peerLabel: HTMLElement;
   peerSub: HTMLElement;
+  recordingIndicator: HTMLElement;
   btnMonitors: HTMLButtonElement;
   btnFit: HTMLButtonElement;
   btnViewOnly: HTMLButtonElement;
@@ -155,6 +159,16 @@ export class RdApp {
   private permissions: Record<string, boolean> = {};
 
   private filePanel: FilePanel | undefined;
+  private audioPlayback: RemoteAudioPlayback | undefined;
+  private recorder: LocalSessionRecorder | undefined;
+  private remoteAudioEnabled = true;
+  private audioStarted = false;
+  private audioMuted = false;
+  private audioVolume = 1;
+  private clipboardEnabled = true;
+  private clipboardSyncPrompt: HTMLElement | undefined;
+  private recording = false;
+  private recordingStartedMs = 0;
   private videoEl!: HTMLVideoElement;
   /** Set only on insecure origins, where WebCodecs is unavailable. */
   private msePlayer: MseVideoPlayer | undefined;
@@ -229,6 +243,10 @@ export class RdApp {
       const start = this.stats?.startedAtMs || this.streamStartMs;
       this.el.statDuration.textContent =
         start && this.state === 'streaming' ? formatDuration(Date.now() - start) : '—';
+      if (this.recording && this.recordingStartedMs) {
+        const time = this.el.recordingIndicator.querySelector('span');
+        if (time) time.textContent = formatDuration(Date.now() - this.recordingStartedMs);
+      }
     }, 1000);
 
     window.addEventListener('beforeunload', () => this.post({ c: 'disconnect' }));
@@ -337,6 +355,7 @@ export class RdApp {
           </span>
         </span>
         <span class="rd-island-sep rd-stream-only" aria-hidden="true"></span>
+        <span class="rd-recording-indicator rd-stream-only" id="rd-recording-indicator" hidden aria-live="polite">REC <span>00:00</span></span>
         <button type="button" class="rd-ib rd-stream-only" id="rd-btn-monitors" title="Select monitor" aria-label="Select monitor" aria-haspopup="true" hidden>${iconHtml('monitor')}</button>
         <button type="button" class="rd-ib rd-stream-only" id="rd-btn-more" title="More options" aria-label="More options" aria-haspopup="true">${iconHtml('more')}</button>
         <span class="rd-island-sep rd-stream-only" aria-hidden="true"></span>
@@ -354,6 +373,7 @@ export class RdApp {
     const t = this.el.toolbar;
     this.el.peerLabel = q(t, '#rd-peer-label');
     this.el.peerSub = q(t, '#rd-peer-sub');
+    this.el.recordingIndicator = q(t, '#rd-recording-indicator');
     this.el.btnMonitors = q(t, '#rd-btn-monitors');
     this.el.btnFit = q(t, '#rd-btn-fit');
     this.el.btnViewOnly = q(t, '#rd-btn-viewonly');
@@ -713,9 +733,9 @@ export class RdApp {
     };
   }
 
-  private menuItem(icon: IconName | null, label: string, checked = false): string {
+  private menuItem(icon: IconName | null, label: string, checked = false, action?: string): string {
     return (
-      `<button type="button" class="rd-mi${checked ? ' rd-checked' : ''}" role="menuitem">` +
+      `<button type="button" class="rd-mi${checked ? ' rd-checked' : ''}" role="menuitem"${action ? ` data-action="${escapeHtml(action)}"` : ''}>` +
       `${icon ? iconHtml(icon) : '<span class="rd-mi-pad"></span>'}` +
       `<span class="rd-mi-label">${escapeHtml(label)}</span>` +
       `${checked ? iconHtml('check') : ''}</button>`
@@ -759,13 +779,35 @@ export class RdApp {
   private openMorePop(anchor: HTMLElement): void {
     this.openPop(anchor, (pop) => {
       const fs = !!document.fullscreenElement;
+      const canAudio = !!this.audioPlayback && this.permissions.Audio !== false;
+      const canClipboard = this.permissions.Clipboard !== false;
+      const canRecord = this.permissions.Recording !== false && typeof MediaRecorder !== 'undefined';
+      const volumePercent = Math.round(this.audioVolume * 100);
+      const mediaHtml =
+        canAudio || canClipboard || canRecord
+          ? '<div class="rd-pop-sep"></div><div class="rd-pop-title">Session media</div>' +
+            (canAudio
+              ? this.menuItem(null, this.audioStarted ? 'Remote audio ready' : 'Start remote audio', this.audioStarted, 'audioResume') +
+                this.menuItem(null, 'Receive remote audio', this.remoteAudioEnabled, 'audioToggle') +
+                this.menuItem(null, 'Mute playback', this.audioMuted, 'audioMute') +
+                `<label class="rd-media-volume"><span>Volume</span><input data-action="audioVolume" type="range" min="0" max="100" value="${volumePercent}"><output>${volumePercent}%</output></label>`
+              : '') +
+            (canClipboard
+              ? this.menuItem(null, 'Text clipboard', this.clipboardEnabled, 'clipboardToggle') +
+                this.menuItem(null, 'Sync local clipboard now', false, 'clipboardSync')
+              : '') +
+            (canRecord
+              ? this.menuItem(null, this.recording ? 'Stop local recording' : 'Start local recording', this.recording, 'recording')
+              : '')
+          : '';
       pop.innerHTML =
         this.menuItem('refresh', 'Refresh video') +
         this.menuItem(fs ? 'fullscreenExit' : 'fullscreen', fs ? 'Exit fullscreen' : 'Fullscreen') +
         '<div class="rd-pop-sep"></div><div class="rd-pop-title">Image quality</div>' +
         this.menuItem(null, 'Best', this.quality === QUALITY.best) +
         this.menuItem(null, 'Balanced', this.quality === QUALITY.balanced) +
-        this.menuItem(null, 'Speed', this.quality === QUALITY.speed);
+        this.menuItem(null, 'Speed', this.quality === QUALITY.speed) +
+        mediaHtml;
       const items = pop.querySelectorAll<HTMLButtonElement>('.rd-mi');
       items[0]?.addEventListener('click', () => {
         this.post({ c: 'refresh' });
@@ -776,12 +818,53 @@ export class RdApp {
         this.closePop();
       });
       const qv = [QUALITY.best, QUALITY.balanced, QUALITY.speed];
-      [items[2], items[3], items[4]].forEach((b, i) => {
-        b?.addEventListener('click', () => {
-          this.quality = qv[i]!;
+      [items[2], items[3], items[4]].forEach((button, index) => {
+        button?.addEventListener('click', () => {
+          this.quality = qv[index]!;
           this.post({ c: 'quality', imageQuality: this.quality });
           this.closePop();
         });
+      });
+      pop.querySelector<HTMLButtonElement>('[data-action="audioResume"]')?.addEventListener('click', () => {
+        void this.resumeAudioFromUserGesture();
+        this.closePop();
+      });
+      pop.querySelector<HTMLButtonElement>('[data-action="audioToggle"]')?.addEventListener('click', () => {
+        this.remoteAudioEnabled = !this.remoteAudioEnabled;
+        this.post({ c: 'remoteAudio', enabled: this.remoteAudioEnabled });
+        if (this.remoteAudioEnabled) void this.resumeAudioFromUserGesture();
+        else this.audioPlayback?.reset();
+        this.toast(this.remoteAudioEnabled ? 'Remote audio enabled' : 'Remote audio disabled');
+        this.closePop();
+      });
+      pop.querySelector<HTMLButtonElement>('[data-action="audioMute"]')?.addEventListener('click', () => {
+        this.audioMuted = !this.audioMuted;
+        this.audioPlayback?.setMuted(this.audioMuted);
+        this.toast(this.audioMuted ? 'Remote audio muted' : 'Remote audio unmuted');
+        this.closePop();
+      });
+      const volume = pop.querySelector<HTMLInputElement>('[data-action="audioVolume"]');
+      volume?.addEventListener('input', () => {
+        this.audioVolume = Number(volume.value) / 100;
+        this.audioPlayback?.setVolume(this.audioVolume);
+        const output = volume.parentElement?.querySelector('output');
+        if (output) output.textContent = `${volume.value}%`;
+      });
+      pop.querySelector<HTMLButtonElement>('[data-action="clipboardToggle"]')?.addEventListener('click', () => {
+        this.clipboardEnabled = !this.clipboardEnabled;
+        this.post({ c: 'clipboardEnabled', enabled: this.clipboardEnabled });
+        if (!this.clipboardEnabled) this.removeClipboardSyncOffer();
+        this.toast(this.clipboardEnabled ? 'Text clipboard enabled' : 'Text clipboard disabled');
+        this.closePop();
+      });
+      pop.querySelector<HTMLButtonElement>('[data-action="clipboardSync"]')?.addEventListener('click', () => {
+        this.removeClipboardSyncOffer();
+        void this.sendClipboard();
+        this.closePop();
+      });
+      pop.querySelector<HTMLButtonElement>('[data-action="recording"]')?.addEventListener('click', () => {
+        void this.toggleRecording();
+        this.closePop();
       });
     });
   }
@@ -1023,11 +1106,18 @@ export class RdApp {
     this.streamStartMs = 0;
     this.displays = [];
     this.current = 0;
+    this.remoteAudioEnabled = true;
+    this.audioStarted = false;
+    this.audioMuted = false;
+    this.audioVolume = 1;
+    this.clipboardEnabled = true;
+    this.removeClipboardSyncOffer();
+    this.createAudioPlayback();
     const canvas = this.freshCanvas();
     const offscreen = canvas.transferControlToOffscreen();
     const worker = new Worker(this.workerUrl, { type: 'module' });
     this.worker = worker;
-    worker.onmessage = (e: MessageEvent) => this.onEvent(e.data as SessionEvent);
+    worker.onmessage = (e: MessageEvent<UiWorkerEvent>) => this.onEvent(e.data);
     worker.onerror = (e: ErrorEvent) => this.setState('error', e.message || 'session worker failed');
     const cmd: UiCommand = { c: 'connect', config, canvas: offscreen };
     worker.postMessage(cmd, [offscreen]);
@@ -1052,6 +1142,17 @@ export class RdApp {
   }
 
   private teardown(): void {
+    if (this.recording && this.permissions.Recording !== false) {
+      this.post({ c: 'clientRecording', recording: false });
+    }
+    this.recording = false;
+    this.recordingStartedMs = 0;
+    this.el.recordingIndicator.hidden = true;
+    this.recorder?.close();
+    this.recorder = undefined;
+    this.audioPlayback?.close();
+    this.audioPlayback = undefined;
+    this.removeClipboardSyncOffer();
     this.detach?.();
     this.detach = undefined;
     this.teardownMse();
@@ -1120,7 +1221,7 @@ export class RdApp {
 
   // --- worker events ---------------------------------------------------------
 
-  private onEvent(ev: SessionEvent): void {
+  private onEvent(ev: UiWorkerEvent): void {
     switch (ev.t) {
       case 'state':
         this.setState(ev.state, ev.detail);
@@ -1159,12 +1260,18 @@ export class RdApp {
       case 'stats':
         this.onStats(ev.stats);
         break;
+      case 'audioPcm':
+        if (this.remoteAudioEnabled && this.permissions.Audio !== false) {
+          this.audioPlayback?.enqueue(ev.pcm, ev.sampleRate, ev.channels);
+        }
+        break;
       case 'cursor':
         this.canvas.style.cursor = cursorCss(ev.pngDataUrl, ev.hotx, ev.hoty);
         break;
       case 'cursorPos':
         break; // remote pointer position; local pointer is authoritative here
       case 'clipboard':
+        if (!this.clipboardEnabled || this.permissions.Clipboard === false) break;
         void navigator.clipboard
           ?.writeText(ev.text)
           .then(() => this.toast('Remote clipboard received'))
@@ -1247,6 +1354,7 @@ export class RdApp {
         this.persistCredentialIfWanted();
         this.hideOverlay();
         this.canvas.focus();
+        this.showClipboardSyncOffer();
         break;
       case 'error':
         this.teardown();
@@ -1314,8 +1422,15 @@ export class RdApp {
   private applyPermission(kind: string, enabled: boolean): void {
     this.permissions[kind] = enabled;
 
+    if (kind === 'Audio' && !enabled) this.audioPlayback?.reset();
+    if (kind === 'Clipboard' && !enabled) this.removeClipboardSyncOffer();
+    if (kind === 'Recording' && !enabled && this.recording) this.recorder?.stop();
+
     const target = PERMISSION_CONTROLS[kind];
     if (!target) {
+      if (kind === 'Audio' || kind === 'Recording') {
+        this.toast(`Peer ${enabled ? 'enabled' : 'disabled'} ${kind.toLowerCase()}`);
+      }
       return; // nothing in the chrome maps to it
     }
 
@@ -1403,7 +1518,113 @@ export class RdApp {
     delete this.el.viewport.dataset.mse;
   }
 
+  private createAudioPlayback(): void {
+    const AudioContextCtor = (window as unknown as {
+      AudioContext?: new () => AudioContext;
+      webkitAudioContext?: new () => AudioContext;
+    }).AudioContext ?? (window as unknown as { webkitAudioContext?: new () => AudioContext }).webkitAudioContext;
+    if (!AudioContextCtor) return;
+    try {
+      const context = new AudioContextCtor();
+      this.audioPlayback = new RemoteAudioPlayback(context as unknown as RemoteAudioContext);
+      this.audioPlayback.setVolume(this.audioVolume);
+      this.audioPlayback.setMuted(this.audioMuted);
+    } catch {
+      this.audioPlayback = undefined;
+    }
+  }
+
+  private async resumeAudioFromUserGesture(): Promise<void> {
+    if (!this.audioPlayback || this.permissions.Audio === false) {
+      this.toast('Remote audio is unavailable');
+      return;
+    }
+    const resumed = await this.audioPlayback.resumeFromUserGesture();
+    this.audioStarted = resumed;
+    this.toast(resumed ? 'Remote audio ready' : 'Browser blocked remote audio playback');
+  }
+
+  private showClipboardSyncOffer(): void {
+    this.removeClipboardSyncOffer();
+    if (!this.clipboardEnabled || this.permissions.Clipboard === false || this.state !== 'streaming') return;
+    const prompt = document.createElement('div');
+    prompt.className = 'rd-clipboard-sync-offer';
+    const text = document.createElement('span');
+    text.textContent = 'Sync your current clipboard to the remote device?';
+    const sync = document.createElement('button');
+    sync.type = 'button';
+    sync.textContent = 'Sync now';
+    const dismiss = document.createElement('button');
+    dismiss.type = 'button';
+    dismiss.textContent = 'Not now';
+    dismiss.className = 'rd-quiet';
+    sync.addEventListener('click', () => {
+      this.removeClipboardSyncOffer();
+      void this.sendClipboard();
+    });
+    dismiss.addEventListener('click', () => this.removeClipboardSyncOffer());
+    prompt.append(text, sync, dismiss);
+    this.el.viewport.appendChild(prompt);
+    this.clipboardSyncPrompt = prompt;
+  }
+
+  private removeClipboardSyncOffer(): void {
+    this.clipboardSyncPrompt?.remove();
+    this.clipboardSyncPrompt = undefined;
+  }
+
+  private async toggleRecording(): Promise<void> {
+    if (this.recording) {
+      this.recorder?.stop();
+      return;
+    }
+    if (this.state !== 'streaming' || this.permissions.Recording === false) {
+      this.toast('Session recording is not permitted by this device');
+      return;
+    }
+    if (this.remoteAudioEnabled && this.permissions.Audio !== false && this.audioPlayback) {
+      const resumed = await this.audioPlayback.resumeFromUserGesture();
+      this.audioStarted = resumed;
+    }
+    const surface = (!this.videoEl.hidden ? this.videoEl : this.canvas) as unknown as RecordingSurface;
+    const recorder = new LocalSessionRecorder(
+      surface,
+      () => this.audioPlayback?.createRecordingTap() ?? null,
+      (active, startedAtMs) => this.onRecordingState(active, startedAtMs),
+    );
+    const result = recorder.start();
+    if (!result.ok) {
+      recorder.close();
+      this.toast(result.reason);
+      return;
+    }
+    this.recorder = recorder;
+  }
+
+  private onRecordingState(active: boolean, startedAtMs?: number): void {
+    const changed = this.recording !== active;
+    const wasRecording = this.recording;
+    this.recording = active;
+    this.recordingStartedMs = active ? (startedAtMs ?? Date.now()) : 0;
+    this.el.recordingIndicator.hidden = !active;
+    const time = this.el.recordingIndicator.querySelector('span');
+    if (time) time.textContent = '00:00';
+    if (changed && this.permissions.Recording !== false) {
+      this.post({ c: 'clientRecording', recording: active });
+    }
+    if (!active) {
+      this.recorder = undefined;
+      if (wasRecording) this.toast('Recording saved locally');
+    } else {
+      this.toast('Recording locally — nothing is uploaded', true);
+    }
+  }
+
   private async sendClipboard(): Promise<void> {
+    if (!this.clipboardEnabled || this.permissions.Clipboard === false) {
+      this.toast('Text clipboard is disabled for this session');
+      return;
+    }
     const text = await readLocalClipboardText();
     if (text === null) {
       this.toast('Clipboard unavailable (permission denied?)');
