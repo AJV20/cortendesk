@@ -145,6 +145,7 @@ export class RdApp {
   private fixedPeerId = '';
   private peerId = '';
   private state: SessionState = 'closed';
+  private sessionEpoch = 0;
   private canvasTransferred = false;
   private displays: DisplayInfo[] = [];
   private current = 0;
@@ -1142,6 +1143,7 @@ export class RdApp {
   }
 
   private teardown(): void {
+    this.sessionEpoch += 1;
     if (this.recording && this.permissions.Recording !== false) {
       this.post({ c: 'clientRecording', recording: false });
     }
@@ -1159,6 +1161,7 @@ export class RdApp {
     const w = this.worker;
     this.worker = undefined;
     if (w) setTimeout(() => w.terminate(), 250); // let a pending 'disconnect' flush first
+    this.resetPermissions();
   }
 
   /**
@@ -1270,13 +1273,21 @@ export class RdApp {
         break;
       case 'cursorPos':
         break; // remote pointer position; local pointer is authoritative here
-      case 'clipboard':
+      case 'clipboard': {
         if (!this.clipboardEnabled || this.permissions.Clipboard === false) break;
+        const sessionEpoch = this.sessionEpoch;
         void navigator.clipboard
           ?.writeText(ev.text)
-          .then(() => this.toast('Remote clipboard received'))
-          .catch(() => this.toast('Remote clipboard received (press Ctrl+V on this page to sync)'));
+          .then(() => {
+            if (sessionEpoch === this.sessionEpoch) this.toast('Remote clipboard received');
+          })
+          .catch(() => {
+            if (sessionEpoch === this.sessionEpoch) {
+              this.toast('Remote clipboard received (press Ctrl+V on this page to sync)');
+            }
+          });
         break;
+      }
       case 'chat':
         this.onChat(ev.text);
         break;
@@ -1535,11 +1546,14 @@ export class RdApp {
   }
 
   private async resumeAudioFromUserGesture(): Promise<void> {
+    const sessionEpoch = this.sessionEpoch;
     if (!this.audioPlayback || this.permissions.Audio === false) {
       this.toast('Remote audio is unavailable');
       return;
     }
     const resumed = await this.audioPlayback.resumeFromUserGesture();
+    const currentPermissions = this.permissions as Record<string, boolean | undefined>;
+    if (sessionEpoch !== this.sessionEpoch || currentPermissions.Audio === false) return;
     this.audioStarted = resumed;
     this.toast(resumed ? 'Remote audio ready' : 'Browser blocked remote audio playback');
   }
@@ -1573,24 +1587,45 @@ export class RdApp {
     this.clipboardSyncPrompt = undefined;
   }
 
+  private canRecordSession(): boolean {
+    return this.state === 'streaming' && this.permissions.Recording !== false;
+  }
+
+  private canSendClipboard(): boolean {
+    return this.clipboardEnabled && this.permissions.Clipboard !== false;
+  }
+
   private async toggleRecording(): Promise<void> {
     if (this.recording) {
       this.recorder?.stop();
       return;
     }
-    if (this.state !== 'streaming' || this.permissions.Recording === false) {
+    if (!this.canRecordSession()) {
       this.toast('Session recording is not permitted by this device');
       return;
     }
+    const sessionEpoch = this.sessionEpoch;
     if (this.remoteAudioEnabled && this.permissions.Audio !== false && this.audioPlayback) {
       const resumed = await this.audioPlayback.resumeFromUserGesture();
+      if (sessionEpoch !== this.sessionEpoch) return;
+      if (!this.canRecordSession()) {
+        this.toast('Session recording is not permitted by this device');
+        return;
+      }
       this.audioStarted = resumed;
+    }
+    if (sessionEpoch !== this.sessionEpoch) return;
+    if (!this.canRecordSession()) {
+      this.toast('Session recording is not permitted by this device');
+      return;
     }
     const surface = (!this.videoEl.hidden ? this.videoEl : this.canvas) as unknown as RecordingSurface;
     const recorder = new LocalSessionRecorder(
       surface,
       () => this.audioPlayback?.createRecordingTap() ?? null,
-      (active, startedAtMs) => this.onRecordingState(active, startedAtMs),
+      (active, startedAtMs) => {
+        if (sessionEpoch === this.sessionEpoch) this.onRecordingState(active, startedAtMs);
+      },
     );
     const result = recorder.start();
     if (!result.ok) {
@@ -1621,11 +1656,17 @@ export class RdApp {
   }
 
   private async sendClipboard(): Promise<void> {
-    if (!this.clipboardEnabled || this.permissions.Clipboard === false) {
+    if (!this.canSendClipboard()) {
       this.toast('Text clipboard is disabled for this session');
       return;
     }
+    const sessionEpoch = this.sessionEpoch;
     const text = await readLocalClipboardText();
+    if (sessionEpoch !== this.sessionEpoch) return;
+    if (!this.canSendClipboard()) {
+      this.toast('Text clipboard is disabled for this session');
+      return;
+    }
     if (text === null) {
       this.toast('Clipboard unavailable (permission denied?)');
       return;
