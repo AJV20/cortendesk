@@ -4,7 +4,7 @@
 // The shapes below are the frozen boundary between the UI (main thread) and the
 // session worker, and between the sans-IO protocol core and its callers.
 
-export type SessionConfig = { peerId:string; serverKeyB64:string; wsIdUrl:string; wsRelayUrl:string; password:string; myId:string; myName:string; savedHashHex?:string; connType?:'default'|'fileTransfer' };
+export type SessionConfig = { peerId:string; serverKeyB64:string; wsIdUrl:string; wsRelayUrl:string; password:string; myId:string; myName:string; savedHashHex?:string; connType?:'default'|'fileTransfer'|'viewCamera'|'terminal'; terminalServiceId?:string; terminalPersistent?:boolean };
 export type DisplayInfo = { index:number; x:number; y:number; width:number; height:number; name:string; scale:number };
 export type SessionStats = { codec:string; width:number; height:number; fps:number; mbps:number; framesDropped:number; startedAtMs:number };
 export type SessionState = 'connecting'|'rendezvous'|'relay'|'handshake'|'login'|'streaming'|'error'|'closed'|'needAccept';
@@ -33,6 +33,12 @@ export type SessionEvent =                       // worker -> main
   | { t:'loginError'; message:string }
   | { t:'uac'; on:boolean }               // remote UAC prompt opened/closed (capture restarts around it)
   | { t:'msgbox'; msgtype:string; title:string; text:string; link:string }
+  // terminal connections only. Data stays bytes; the UI must append text nodes,
+  // never interpret remote terminal output as markup.
+  | { t:'terminalOpened'; terminalId:number; success:boolean; message:string; pid:number; serviceId:string; persistentSessions:number[]; replayTerminalOutput:boolean }
+  | { t:'terminalData'; terminalId:number; data:Uint8Array; compressed:boolean }
+  | { t:'terminalClosed'; terminalId:number; exitCode:number }
+  | { t:'terminalError'; terminalId:number; message:string }
   // file transfer connections only (block data arrives already zstd-decompressed):
   | { t:'ftDir'; dir:FtDirectory }
   | { t:'ftBlock'; id:number; fileNum:number; data:Uint8Array; blkId:number }
@@ -48,6 +54,12 @@ export type UiCommand =                           // main -> worker
   | { c:'switchDisplay'; index:number } | { c:'ctrlAltDel' } | { c:'refresh' }
   | { c:'quality'; imageQuality:number } | { c:'clipboardText'; text:string } | { c:'disconnect' }
   | { c:'chat'; text:string }             // outbound message to the remote peer
+  // terminal connections only (no canvas):
+  | { c:'connectTerminal'; config:SessionConfig }
+  | { c:'terminalOpen'; terminalId:number; rows:number; cols:number }
+  | { c:'terminalData'; terminalId:number; data:Uint8Array }
+  | { c:'terminalResize'; terminalId:number; rows:number; cols:number }
+  | { c:'terminalClose'; terminalId:number }
   // file transfer connections only (no canvas; connect with config.connType='fileTransfer'):
   | { c:'connectFile'; config:SessionConfig }
   | { c:'ftReadDir'; path:string; includeHidden:boolean }

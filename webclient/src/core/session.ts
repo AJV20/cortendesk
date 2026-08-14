@@ -118,7 +118,12 @@ export class Session {
   }
 
   private get connType(): ConnType {
-    return this.config.connType === 'fileTransfer' ? ConnType.FILE_TRANSFER : ConnType.DEFAULT_CONN;
+    switch (this.config.connType) {
+      case 'fileTransfer': return ConnType.FILE_TRANSFER;
+      case 'viewCamera': return ConnType.VIEW_CAMERA;
+      case 'terminal': return ConnType.TERMINAL;
+      default: return ConnType.DEFAULT_CONN;
+    }
   }
 
   start(): void {
@@ -274,6 +279,13 @@ export class Session {
             videoAckRequired: VIDEO_ACK_REQUIRED,
             fileTransfer:
               this.config.connType === 'fileTransfer' ? { dir: '', showHidden: false } : undefined,
+            viewCamera: this.config.connType === 'viewCamera',
+            terminal: this.config.connType === 'terminal'
+              ? {
+                  serviceId: this.config.terminalServiceId ?? '',
+                  persistent: this.config.terminalPersistent ?? false,
+                }
+              : undefined,
           }),
         );
         return;
@@ -328,6 +340,46 @@ export class Session {
           this.sinks.onFileSendConfirm?.(u.file_action.union.send_confirm);
         }
         return;
+      case 'terminal_response': {
+        const response = u.terminal_response.union;
+        switch (response?.$case) {
+          case 'opened':
+            this.sinks.emit({
+              t: 'terminalOpened',
+              terminalId: response.opened.terminal_id,
+              success: response.opened.success,
+              message: response.opened.message,
+              pid: response.opened.pid,
+              serviceId: response.opened.service_id,
+              persistentSessions: response.opened.persistent_sessions,
+              replayTerminalOutput: response.opened.replay_terminal_output,
+            });
+            break;
+          case 'data':
+            this.sinks.emit({
+              t: 'terminalData',
+              terminalId: response.data.terminal_id,
+              data: response.data.data,
+              compressed: response.data.compressed,
+            });
+            break;
+          case 'closed':
+            this.sinks.emit({
+              t: 'terminalClosed',
+              terminalId: response.closed.terminal_id,
+              exitCode: response.closed.exit_code,
+            });
+            break;
+          case 'error':
+            this.sinks.emit({
+              t: 'terminalError',
+              terminalId: response.error.terminal_id,
+              message: response.error.message,
+            });
+            break;
+        }
+        return;
+      }
       case 'misc':
         this.dispatchMisc(u.misc.union);
         return;
@@ -540,6 +592,36 @@ export class Session {
     // no per-message id or ack in the protocol, so the UI echoes what it sent
     // rather than waiting for confirmation.
     this.sendMisc({ $case: 'chat_message', chat_message: ChatMessage.fromPartial({ text }) });
+  }
+
+  openTerminal(terminalId: number, rows: number, cols: number): void {
+    this.sendMessage({
+      $case: 'terminal_action',
+      terminal_action: { union: { $case: 'open', open: { terminal_id: terminalId, rows, cols } } },
+    });
+  }
+
+  sendTerminalData(terminalId: number, data: Uint8Array): void {
+    this.sendMessage({
+      $case: 'terminal_action',
+      terminal_action: {
+        union: { $case: 'data', data: { terminal_id: terminalId, data, compressed: false } },
+      },
+    });
+  }
+
+  resizeTerminal(terminalId: number, rows: number, cols: number): void {
+    this.sendMessage({
+      $case: 'terminal_action',
+      terminal_action: { union: { $case: 'resize', resize: { terminal_id: terminalId, rows, cols } } },
+    });
+  }
+
+  closeTerminal(terminalId: number): void {
+    this.sendMessage({
+      $case: 'terminal_action',
+      terminal_action: { union: { $case: 'close', close: { terminal_id: terminalId } } },
+    });
   }
 
   // File-transfer connections: outbound FileAction (requests and upload control),
