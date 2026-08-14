@@ -24,6 +24,7 @@ export class CameraPanel {
   private selector: HTMLElement | undefined;
   private mse: MseVideoPlayer | undefined;
   private connected = false;
+  private currentSource = 0;
 
   constructor(private readonly deps: CameraPanelDeps) {}
 
@@ -84,9 +85,11 @@ export class CameraPanel {
         this.fail(event.message);
         break;
       case 'peerInfo':
-        this.renderSources(event.displays, event.current);
+        if (event.current !== undefined) this.currentSource = event.current;
+        this.renderSources(event.displays, this.currentSource);
         break;
       case 'switchDisplay':
+        this.currentSource = event.index;
         this.markSource(event.index);
         break;
       case 'h264':

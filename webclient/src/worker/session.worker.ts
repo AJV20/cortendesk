@@ -17,6 +17,7 @@ import {
   FileTransferDone,
   FileTransferError,
   SupportedDecoding,
+  SupportedDecoding_PreferCodec,
   type Clipboard,
   type CursorData,
   type FileAction,
@@ -38,6 +39,16 @@ import { decodeTerminalOutput } from './terminal-output';
 export type WorkerOutMessage =
   | SessionEvent
   | { t: 'audioPcm'; pcm: Float32Array; sampleRate: number; channels: number };
+
+export function codecNames(sd: SupportedDecoding): Array<'auto'|'vp9'|'h264'|'h265'|'vp8'|'av1'> {
+  const codecs: Array<'auto'|'vp9'|'h264'|'h265'|'vp8'|'av1'> = ['auto'];
+  if (sd.ability_vp9 > 0) codecs.push('vp9');
+  if (sd.ability_h264 > 0) codecs.push('h264');
+  if (sd.ability_h265 > 0) codecs.push('h265');
+  if (sd.ability_vp8 > 0) codecs.push('vp8');
+  if (sd.ability_av1 > 0) codecs.push('av1');
+  return codecs;
+}
 
 export interface SessionLike {
   readonly currentState: SessionState;
@@ -63,6 +74,12 @@ export interface SessionLike {
   setPrivacyMode(implKey: string, on: boolean): void;
   setBlockInput(on: boolean): void;
   setLockAfterSessionEnd(on: boolean): void;
+  changeDisplayResolution(display: number, width: number, height: number): boolean;
+  toggleVirtualDisplay(display: number, on: boolean): boolean;
+  setCustomQuality(quality: number): boolean;
+  setCustomFps(fps: number): boolean;
+  setPreferredCodec(prefer: SupportedDecoding_PreferCodec): boolean;
+  setDisplayOption(option: 'showRemoteCursor'|'followRemoteCursor'|'followRemoteWindow', enabled: boolean): void;
   sendClipboardText(text: string): void;
   sendChat(text: string): void;
   openTerminal(terminalId: number, rows: number, cols: number): void;
@@ -324,6 +341,24 @@ export class WorkerHost {
       case 'lockAfterSessionEnd':
         this.session?.setLockAfterSessionEnd(cmd.on);
         return;
+      case 'displayResolution':
+        this.session?.changeDisplayResolution(cmd.display, cmd.width, cmd.height);
+        return;
+      case 'virtualDisplay':
+        this.session?.toggleVirtualDisplay(cmd.display, cmd.on);
+        return;
+      case 'customQuality':
+        this.session?.setCustomQuality(cmd.quality);
+        return;
+      case 'customFps':
+        this.session?.setCustomFps(cmd.fps);
+        return;
+      case 'preferredCodec':
+        this.session?.setPreferredCodec(cmd.prefer);
+        return;
+      case 'displayOption':
+        this.session?.setDisplayOption(cmd.option, cmd.enabled);
+        return;
       case 'clipboardText':
         this.session?.sendClipboardText(cmd.text);
         return;
@@ -353,6 +388,7 @@ export class WorkerHost {
 
       if (canvas) {
         this.probe = await this.deps.probeDecoding();
+        this.deps.post({ t: 'codecSupport', codecs: codecNames(this.probe) });
 
         // No WebCodecs (insecure origin) but MSE can play H.264: forward the
         // bitstream to the main thread instead of decoding here. The canvas is
@@ -544,6 +580,7 @@ export class WorkerHost {
       }
     }
     this.session.setSupportedDecoding(sd);
+    this.deps.post({ t: 'codecSupport', codecs: codecNames(sd) });
   }
 
   private postStats(p: Partial<SessionStats>): void {

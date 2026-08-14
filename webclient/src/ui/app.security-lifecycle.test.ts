@@ -97,6 +97,8 @@ describe('RdApp security lifecycle', () => {
     app.latchAlt = false;
     app.lastDbgMouseMs = 0;
     app.worker = { postMessage: vi.fn() };
+    app.current = 0;
+    app.displays = [{ online: true }];
 
     app.post({ c: 'mouse', mask: 0, x: 1, y: 2, modifiers: [] });
     app.post({ c: 'key', down: true, chr: 'a', modifiers: [] });

@@ -25,6 +25,7 @@ describe('advanced-mode capability and lifecycle gates', () => {
     app.el = {
       root: { dataset: {} },
       peerSub: { textContent: '' },
+      toast: { classList: { remove: vi.fn() } },
     };
     app.refreshPeerSub = vi.fn();
     app.teardown = vi.fn();
@@ -44,6 +45,7 @@ describe('advanced-mode capability and lifecycle gates', () => {
     vi.stubGlobal('document', { title: '' });
     const app = Object.create(RdApp.prototype) as any;
     app.peerId = '123';
+    app.platformAdditions = '';
     app.dbg = vi.fn();
     app.refreshPeerSub = vi.fn();
     app.el = {
@@ -52,6 +54,7 @@ describe('advanced-mode capability and lifecycle gates', () => {
       statUser: { textContent: '' },
       statPlatform: { textContent: '' },
       btnMonitors: { hidden: false },
+      remoteCursor: { hidden: false },
     };
 
     app.onEvent({
@@ -60,8 +63,11 @@ describe('advanced-mode capability and lifecycle gates', () => {
       username: '',
       hostname: 'peer',
       platform: 'unknown',
+      platformAdditions: '',
       version: '1.4.1',
       current: 0,
+      privacyModeSupported: false,
+      privacyModeImpls: [],
       terminalSupported: true,
       viewCameraSupported: true,
     });
