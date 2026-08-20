@@ -78,6 +78,9 @@
     <!-- App js -->
     <script src="{{ \App\Support\Asset::url('assets/js/app.min.js') }}"></script>
 
+    <!-- CortenDesk helpers (ours, not the theme's) -->
+    <script src="{{ \App\Support\Asset::url('assets/js/cortendesk.js') }}"></script>
+
     @stack('scripts')
 </body>
 </html>

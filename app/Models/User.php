@@ -16,7 +16,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
-#[Fillable(['username', 'name', 'email', 'password', 'avatar', 'is_admin', 'role_id', 'is_active', 'note', 'devices_columns', 'devices_sort', 'devices_sort_direction'])]
+#[Fillable(['username', 'name', 'email', 'password', 'avatar', 'is_admin', 'role_id', 'is_active', 'note', 'devices_columns', 'devices_sort', 'devices_sort_direction', 'setup_wizard_dismissed_at', 'setup_wizard_completed_at'])]
 #[Hidden(['password', 'remember_token', 'totp_secret'])]
 class User extends Authenticatable
 {
@@ -46,6 +46,9 @@ class User extends Authenticatable
             'totp_confirmed_at' => 'datetime',
             // Devices-screen column selection (issue #16); null = defaults.
             'devices_columns' => 'array',
+            // First-run guide: either stamp means stop offering it.
+            'setup_wizard_dismissed_at' => 'datetime',
+            'setup_wizard_completed_at' => 'datetime',
         ];
     }
 

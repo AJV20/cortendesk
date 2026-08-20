@@ -24,6 +24,7 @@ class PruneLogs extends Command
         'login_logs',
         'alarm_logs',
         'console_audits',
+        'notification_deliveries',
     ];
 
     private const CHUNK = 10_000;

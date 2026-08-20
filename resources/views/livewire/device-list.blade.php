@@ -310,6 +310,9 @@
                                 </p>
                                 @unless ($trashed)
                                     <button type="button" class="btn btn-sm btn-outline-light" wire:click="resetFilters">Clear filters</button>
+                                    @if (auth()->user()?->consoleAllows('setting', 'r'))
+                                        <a href="{{ route('setup') }}" class="btn btn-sm btn-primary">Set up a client</a>
+                                    @endif
                                 @endunless
                             </div>
                         </td>
@@ -389,6 +392,9 @@
                     </p>
                     @unless ($trashed)
                         <button type="button" class="btn btn-sm btn-outline-light" wire:click="resetFilters">Clear filters</button>
+                        @if (auth()->user()?->consoleAllows('setting', 'r'))
+                            <a href="{{ route('setup') }}" class="btn btn-sm btn-primary">Set up a client</a>
+                        @endif
                     @endunless
                 </div>
             @endforelse

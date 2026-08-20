@@ -48,6 +48,7 @@
             'security'    => ['ri-shield-keyhole-line', 'Security'],
             'sso'         => ['ri-shield-user-line', 'SSO'],
             'email'       => ['ri-mail-send-line', 'Email'],
+            'notifications' => ['ri-notification-3-line', 'Notifications'],
             'maintenance' => ['ri-database-2-line', 'Maintenance'],
         ];
     @endphp
@@ -187,25 +188,25 @@
                             <label class="form-label fs-13 text-muted mb-0">ID Server</label>
                             <div class="input-group input-group-sm mb-2">
                                 <input type="text" class="form-control rd-mono" readonly value="{{ $idServer }}">
-                                <button class="btn btn-light" type="button" onclick="navigator.clipboard.writeText(this.previousElementSibling.value)"><i class="ri-file-copy-line"></i></button>
+                                <button class="btn btn-light" type="button" onclick="rdCopyPrevious(this)"><i class="ri-file-copy-line"></i></button>
                             </div>
 
                             <label class="form-label fs-13 text-muted mb-0">Relay Server</label>
                             <div class="input-group input-group-sm mb-2">
                                 <input type="text" class="form-control rd-mono" readonly value="{{ $relayServer }}">
-                                <button class="btn btn-light" type="button" onclick="navigator.clipboard.writeText(this.previousElementSibling.value)"><i class="ri-file-copy-line"></i></button>
+                                <button class="btn btn-light" type="button" onclick="rdCopyPrevious(this)"><i class="ri-file-copy-line"></i></button>
                             </div>
 
                             <label class="form-label fs-13 text-muted mb-0">API Server</label>
                             <div class="input-group input-group-sm mb-2">
                                 <input type="text" class="form-control rd-mono" readonly value="{{ $apiUrl }}">
-                                <button class="btn btn-light" type="button" onclick="navigator.clipboard.writeText(this.previousElementSibling.value)"><i class="ri-file-copy-line"></i></button>
+                                <button class="btn btn-light" type="button" onclick="rdCopyPrevious(this)"><i class="ri-file-copy-line"></i></button>
                             </div>
 
                             <label class="form-label fs-13 text-muted mb-0">Key</label>
                             <div class="input-group input-group-sm">
                                 <input type="text" class="form-control rd-mono" readonly value="{{ $publicKey }}">
-                                <button class="btn btn-light" type="button" onclick="navigator.clipboard.writeText(this.previousElementSibling.value)"><i class="ri-file-copy-line"></i></button>
+                                <button class="btn btn-light" type="button" onclick="rdCopyPrevious(this)"><i class="ri-file-copy-line"></i></button>
                             </div>
                         </div>
                     </div>
@@ -589,6 +590,92 @@
                                     {{ $smtpTestMessage }}
                                 </div>
                             @endif
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {{-- ======================== NOTIFICATIONS ======================== --}}
+        <div class="tab-pane {{ $tab === 'notifications' ? 'show active' : '' }}">
+            <div class="row">
+                <div class="col-lg-8">
+                    <div class="card">
+                        <div class="card-header"><h5 class="card-title mb-0">Apprise notifications</h5></div>
+                        <div class="card-body">
+                            <p class="text-muted fs-13">Send fleet and security events through a self-hosted Apprise API. Destination credentials are encrypted and never shown again.</p>
+                            <form wire:submit="save">
+                                <div class="form-check form-switch mb-3">
+                                    <input class="form-check-input" type="checkbox" id="appriseEnabled" wire:model="appriseEnabled">
+                                    <label class="form-check-label" for="appriseEnabled">Enable notifications</label>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Apprise API endpoint</label>
+                                    <input type="url" class="form-control @error('appriseEndpoint') is-invalid @enderror" wire:model="appriseEndpoint"
+                                           autocomplete="off" data-1p-ignore data-lpignore="true"
+                                           placeholder="{{ $appriseEndpointSet ? 'Stored — leave blank to keep' : 'https://apprise.example.com' }}">
+                                    @error('appriseEndpoint')<div class="invalid-feedback">{{ $message }}</div>@enderror
+                                    <div class="form-text">Base URL only. CortenDesk appends <code>/notify</code>.</div>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Delivery mode</label>
+                                    <select class="form-select" wire:model.live="appriseMode">
+                                        <option value="config">Saved Apprise configuration key</option>
+                                        <option value="urls">Stateless Apprise URLs</option>
+                                    </select>
+                                </div>
+                                @if ($appriseMode === 'config')
+                                    <div class="mb-3"><label class="form-label">Configuration key</label><input type="password" class="form-control" wire:model="appriseConfigKey"
+                                               autocomplete="new-password" data-1p-ignore data-lpignore="true"
+                                               placeholder="{{ $appriseConfigKeySet ? 'Stored — leave blank to keep' : 'office-alerts' }}"></div>
+                                @else
+                                    <div class="mb-3"><label class="form-label">Apprise URLs</label><textarea class="form-control rd-mono" rows="4" wire:model="appriseUrls"
+                                                       autocomplete="off" data-1p-ignore data-lpignore="true"
+                                                       placeholder="{{ $appriseUrlsSet ? 'Stored — leave blank to keep' : 'One Apprise URL per line' }}"></textarea><div class="form-text">Write-only and encrypted at rest.</div></div>
+                                @endif
+                                <div class="mb-3"><label class="form-label">Cooldown (minutes)</label><input type="number" class="form-control" style="max-width: 140px" min="0" max="1440" wire:model="appriseCooldownMinutes"></div>
+                                <div class="row">
+                                    @foreach ($appriseEventLabels as $event => $label)
+                                        @php $eventKey = str_replace('.', '_', $event); @endphp
+                                        <div class="col-md-6 mb-3">
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input" type="checkbox" id="event-{{ str_replace('.', '-', $event) }}" wire:model="appriseEvents.{{ $eventKey }}">
+                                                <label class="form-check-label" for="event-{{ str_replace('.', '-', $event) }}">{{ $label }}</label>
+                                            </div>
+                                            @if (str_starts_with($event, 'device.'))
+                                                <select class="form-select form-select-sm mt-2" wire:model.live="appriseScopes.{{ $eventKey }}">
+                                                    <option value="all">All approved devices</option>
+                                                    <option value="selected">Selected groups or devices</option>
+                                                </select>
+                                                @if (($appriseScopes[$eventKey] ?? 'all') === 'selected')
+                                                    <select class="form-select form-select-sm mt-2" multiple wire:model="appriseScopeGroups.{{ $eventKey }}" aria-label="Groups for {{ $label }}">
+                                                        @foreach ($appriseDeviceGroups as $group)<option value="{{ $group->id }}">Group: {{ $group->name }}</option>@endforeach
+                                                    </select>
+                                                    <select class="form-select form-select-sm mt-2" multiple wire:model="appriseScopeDevices.{{ $eventKey }}" aria-label="Devices for {{ $label }}">
+                                                        @foreach ($appriseDevices as $device)<option value="{{ $device->id }}">{{ $device->alias ?: ($device->hostname ?: $device->rustdesk_id) }}</option>@endforeach
+                                                    </select>
+                                                @endif
+                                            @endif
+                                        </div>
+                                    @endforeach
+                                </div>
+                                <button class="btn btn-primary mt-2" type="submit" @disabled(! $canManageSettings)><i class="ri-save-line me-1"></i>Save settings</button>
+                                <button class="btn btn-outline-secondary mt-2" type="button" wire:click="sendTestNotification" @disabled(! $canManageSettings)>Send test</button>
+                                @if ($appriseTestMessage)<div class="alert {{ $appriseTestOk ? 'alert-success' : 'alert-danger' }} py-2 mt-3 mb-0">{{ $appriseTestMessage }}</div>@endif
+                            </form>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header"><h5 class="card-title mb-0">Recent deliveries</h5></div>
+                        <div class="card-body">
+                            @forelse ($notificationDeliveries as $delivery)
+                                <div class="d-flex justify-content-between gap-3 border-bottom py-2">
+                                    <div><strong>{{ $delivery->title }}</strong><div class="text-muted fs-13">{{ $delivery->event }} · {{ $delivery->created_at?->diffForHumans() }}</div>@if($delivery->error)<div class="text-danger fs-13 text-break">{{ $delivery->error }}</div>@endif</div>
+                                    <span class="badge {{ $delivery->status === 'sent' ? 'bg-success-subtle text-success' : 'bg-danger-subtle text-danger' }}">{{ $delivery->status }}</span>
+                                </div>
+                            @empty
+                                <p class="text-muted mb-0">No delivery attempts yet.</p>
+                            @endforelse
                         </div>
                     </div>
                 </div>

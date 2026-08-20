@@ -7,6 +7,7 @@ use App\Models\AlarmLog;
 use App\Models\LoginLog;
 use App\Models\TrustedDevice;
 use App\Models\User;
+use App\Services\AppriseNotifications;
 use App\Services\MailSettings;
 use App\Services\OidcService;
 use App\Support\LoginEmailVerification;
@@ -113,6 +114,18 @@ class AuthController extends Controller
         if (! $ok || ! $user) {
             RateLimiter::hit($accountKey, self::DECAY);
             RateLimiter::hit($addressKey, self::DECAY);
+
+            // Rate limiter first, then notify after the response: this path is
+            // unauthenticated and repeatable, and delivery is a synchronous
+            // HTTP call. The cooldown keys on the address alone — keyed on the
+            // username too, spraying names would mint a fresh key, and every
+            // attempt would pay for its own delivery.
+            app(AppriseNotifications::class)->sendAfterResponse(
+                'console.login_failed',
+                'Failed console login',
+                'A web-console sign-in attempt failed.',
+                'web-login:'.sha1($ip),
+            );
 
             return back()
                 ->withInput($request->only('username'))

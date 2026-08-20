@@ -164,6 +164,13 @@
                     </a>
                 </li>
 
+                <li class="side-nav-item {{ request()->routeIs('diagnostics*') ? 'menuitem-active' : '' }}">
+                    <a href="{{ route('diagnostics') }}" class="side-nav-link {{ request()->routeIs('diagnostics*') ? 'active' : '' }}">
+                        <i class="ri-pulse-line"></i>
+                        <span> Diagnostics </span>
+                    </a>
+                </li>
+
                 @php
                     $rdgenUrl = \App\Models\Setting::get('rdgen_url', config('cortendesk.rdgen_url'));
                 @endphp

@@ -28,7 +28,7 @@
                          whichever line it lands. --}}
                     <div class="d-flex flex-wrap gap-2">
                         <button type="button" class="btn btn-sm btn-light"
-                                onclick="navigator.clipboard.writeText(Array.from(document.querySelectorAll('#recovery-codes span')).map(e=>e.textContent.trim()).join('\n'))">
+                                onclick="rdCopy(Array.from(document.querySelectorAll('#recovery-codes span')).map(e=>e.textContent.trim()).join('\n'), this)">
                             <i class="ri-file-copy-line me-1"></i>Copy
                         </button>
                         <button type="button" class="btn btn-sm btn-light"
@@ -91,7 +91,7 @@
                         <label class="form-label fs-13 text-muted mb-1">Can't scan? Enter this key manually:</label>
                         <div class="input-group input-group-sm mb-3">
                             <input type="text" class="form-control rd-mono" readonly value="{{ $secret }}">
-                            <button class="btn btn-light" type="button" onclick="navigator.clipboard.writeText(this.previousElementSibling.value)"><i class="ri-file-copy-line"></i></button>
+                            <button class="btn btn-light" type="button" onclick="rdCopyPrevious(this)"><i class="ri-file-copy-line"></i></button>
                         </div>
 
                         <form wire:submit="confirmSetup">

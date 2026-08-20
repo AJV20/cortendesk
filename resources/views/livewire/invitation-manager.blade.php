@@ -36,7 +36,7 @@
                     <div class="input-group input-group-sm mt-2">
                         <input type="text" class="form-control font-monospace" readonly value="{{ $inviteUrl }}">
                         <button class="btn btn-light" type="button"
-                                onclick="navigator.clipboard.writeText(this.previousElementSibling.value)">
+                                onclick="rdCopyPrevious(this)">
                             <i class="ri-file-copy-line"></i>
                         </button>
                     </div>

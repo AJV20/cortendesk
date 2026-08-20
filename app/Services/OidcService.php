@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Setting;
 use Firebase\JWT\JWK;
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
@@ -254,12 +255,30 @@ class OidcService
         $header = $this->decodeSegment($idToken, 0);
         $alg = (string) ($header['alg'] ?? '');
 
+        // The header is attacker-controlled — it is the unverified half of the
+        // token — so it decides nothing on its own. The provider publishes what
+        // it signs with, and anything else is refused before we touch a key.
+        $accepted = $this->acceptedSigningAlgorithms($discovery);
+
+        if (! in_array($alg, $accepted, true)) {
+            throw new OidcException(
+                'The ID token was signed with an algorithm this provider does not advertise'
+                .($alg === '' ? '.' : ' ('.$alg.').')
+            );
+        }
+
         try {
             if (str_starts_with($alg, 'HS')) {
                 // Symmetric signing: the shared client secret is the key.
                 $claims = JWT::decode($idToken, new Key($this->clientSecret(), $alg));
             } else {
-                $claims = JWT::decode($idToken, JWK::parseKeySet($this->jwks()));
+                // The second argument is the algorithm to assume for keys that
+                // do not name one. "alg" is optional in a JWK (RFC 7517 §4.4)
+                // and Microsoft Entra omits it on every key, which without this
+                // fails as 'JWK must contain an "alg" parameter' (#36). It is
+                // safe to pass the header value here only because $accepted has
+                // already constrained it to something the provider advertises.
+                $claims = JWT::decode($idToken, JWK::parseKeySet($this->jwks(), $alg));
             }
         } catch (\Throwable $e) {
             throw new OidcException('The ID token failed verification: '.$e->getMessage());
@@ -440,6 +459,37 @@ class OidcService
     }
 
     /**
+     * Algorithms this provider is allowed to have signed the ID token with.
+     *
+     * OpenID Connect requires providers to publish
+     * id_token_signing_alg_values_supported, and RS256 is the algorithm every
+     * provider must implement — so that is the fallback when a discovery
+     * document leaves it out.
+     *
+     * Pinning to this list is what keeps the token header from choosing its own
+     * verification: without it, a token claiming HS256 would be checked against
+     * the client secret even on a provider that only ever signs with RS256.
+     *
+     * @param  array<string, mixed>  $discovery
+     * @return list<string>
+     */
+    private function acceptedSigningAlgorithms(array $discovery): array
+    {
+        $advertised = $discovery['id_token_signing_alg_values_supported'] ?? null;
+
+        if (! is_array($advertised) || $advertised === []) {
+            return ['RS256'];
+        }
+
+        $algorithms = array_values(array_filter(
+            array_map('strval', $advertised),
+            fn (string $alg) => $alg !== '' && $alg !== 'none',
+        ));
+
+        return $algorithms === [] ? ['RS256'] : $algorithms;
+    }
+
+    /**
      * The provider's signing keys.
      *
      * @return array<string, mixed>
@@ -594,6 +644,6 @@ class OidcService
 
     private function setting(string $key): string
     {
-        return trim((string) (\App\Models\Setting::get($key, '') ?? ''));
+        return trim((string) (Setting::get($key, '') ?? ''));
     }
 }

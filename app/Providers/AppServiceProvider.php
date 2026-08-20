@@ -2,8 +2,10 @@
 
 namespace App\Providers;
 
+use App\Contracts\TcpProbe;
 use App\Models\ApiToken;
 use App\Models\ClientToken;
+use App\Services\SocketTcpProbe;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\ServiceProvider;
@@ -15,7 +17,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->bind(TcpProbe::class, SocketTcpProbe::class);
     }
 
     /**
