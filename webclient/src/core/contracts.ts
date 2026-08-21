@@ -1,11 +1,14 @@
+import type { SupportedDecoding_PreferCodec } from '../gen/message';
+
 // CortenDesk web client — CROSS-MODULE CONTRACT.
 //
 // SCAFFOLD-OWNED. Every module imports from this file; NO ONE else edits it.
 // The shapes below are the frozen boundary between the UI (main thread) and the
 // session worker, and between the sans-IO protocol core and its callers.
 
-export type SessionConfig = { peerId:string; serverKeyB64:string; wsIdUrl:string; wsRelayUrl:string; password:string; myId:string; myName:string; savedHashHex?:string; connType?:'default'|'fileTransfer' };
-export type DisplayInfo = { index:number; x:number; y:number; width:number; height:number; name:string; scale:number };
+export type SessionConfig = { peerId:string; serverKeyB64:string; wsIdUrl:string; wsRelayUrl:string; password:string; myId:string; myName:string; savedHashHex?:string; connType?:'default'|'fileTransfer'|'viewCamera'|'terminal'; terminalServiceId?:string; terminalPersistent?:boolean };
+export type ResolutionInfo = { width:number; height:number };
+export type DisplayInfo = { index:number; x:number; y:number; width:number; height:number; name:string; scale:number; online:boolean; cursorEmbedded:boolean; originalResolution?:ResolutionInfo; resolutions:ResolutionInfo[] };
 export type SessionStats = { codec:string; width:number; height:number; fps:number; mbps:number; framesDropped:number; startedAtMs:number };
 export type SessionState = 'connecting'|'rendezvous'|'relay'|'handshake'|'login'|'streaming'|'error'|'closed'|'needAccept';
 // File transfer: plain-object mirrors of the protobuf FileEntry/FileDirectory
@@ -14,17 +17,22 @@ export type FtEntryKind = 'dir'|'file'|'drive'|'dirLink'|'fileLink';
 export type FtEntry = { kind:FtEntryKind; name:string; size:number; modifiedSec:number; isHidden:boolean };
 export type FtDirectory = { id:number; path:string; entries:FtEntry[] };
 export type SessionEvent =                       // worker -> main
-  | { t:'state'; state:SessionState; detail?:string }
-  | { t:'peerInfo'; displays:DisplayInfo[]; username:string; hostname:string; platform:string; version:string; current:number }
+  | { t:'state'; state:SessionState; detail?:string; peerInitiated?:boolean }
+  | { t:'peerInfo'; displays:DisplayInfo[]; username:string; hostname:string; platform:string; platformAdditions:string; version:string; current?:number; privacyModeSupported:boolean; privacyModeImpls:{key:string; label:string}[]; terminalSupported:boolean; viewCameraSupported:boolean }
   // The peer's authoritative answer to a display switch. It is the ONLY reply
   // the host sends (server/video_service.rs make_display_changed_msg), and it
   // carries the real geometry of what is now being captured — which is what
   // input coordinates must be mapped against. A locally-assumed index is not
   // enough: the host can refuse the switch, or report different geometry.
-  | { t:'switchDisplay'; index:number; x:number; y:number; width:number; height:number; cursorEmbedded:boolean }
+  | { t:'switchDisplay'; index:number; x:number; y:number; width:number; height:number; cursorEmbedded:boolean; originalResolution?:ResolutionInfo; resolutions:ResolutionInfo[] }
+  | { t:'followDisplay'; index:number }
+  | { t:'codecSupport'; codecs:Array<'auto'|'vp9'|'h264'|'h265'|'vp8'|'av1'> }
   | { t:'stats'; stats:SessionStats }
   | { t:'cursor'; pngDataUrl:string; hotx:number; hoty:number } | { t:'cursorPos'; x:number; y:number }
   | { t:'clipboard'; text:string } | { t:'permission'; kind:string; enabled:boolean }
+  | { t:'privacyMode'; state:number; details:string; implKey:string }
+  | { t:'blockInput'; state:number; details:string }
+  | { t:'elevation'; state:'pending'|'succeeded'|'failed'; detail:string }
   | { t:'chat'; text:string }             // inbound message from the remote peer
   // Fallback video: raw H.264 Annex B forwarded for main-thread MSE playback.
   // Only emitted when WebCodecs is unavailable (insecure origin).
@@ -33,6 +41,12 @@ export type SessionEvent =                       // worker -> main
   | { t:'loginError'; message:string }
   | { t:'uac'; on:boolean }               // remote UAC prompt opened/closed (capture restarts around it)
   | { t:'msgbox'; msgtype:string; title:string; text:string; link:string }
+  // terminal connections only. Data stays bytes; the UI must append text nodes,
+  // never interpret remote terminal output as markup.
+  | { t:'terminalOpened'; terminalId:number; success:boolean; message:string; pid:number; serviceId:string; persistentSessions:number[]; replayTerminalOutput:boolean }
+  | { t:'terminalData'; terminalId:number; data:Uint8Array; compressed:boolean }
+  | { t:'terminalClosed'; terminalId:number; exitCode:number }
+  | { t:'terminalError'; terminalId:number; message:string }
   // file transfer connections only (block data arrives already zstd-decompressed):
   | { t:'ftDir'; dir:FtDirectory }
   | { t:'ftBlock'; id:number; fileNum:number; data:Uint8Array; blkId:number }
@@ -47,7 +61,24 @@ export type UiCommand =                           // main -> worker
   | { c:'key'; down:boolean; press:boolean; keyKind:'chr'|'control'|'unicode'; value:number; modifiers:number[] }
   | { c:'switchDisplay'; index:number } | { c:'ctrlAltDel' } | { c:'refresh' }
   | { c:'quality'; imageQuality:number } | { c:'clipboardText'; text:string } | { c:'disconnect' }
+  | { c:'restartRemoteDevice' } | { c:'requestElevation' }
+  | { c:'privacyMode'; implKey:string; on:boolean }
+  | { c:'blockInput'; on:boolean } | { c:'lockAfterSessionEnd'; on:boolean }
+  | { c:'displayResolution'; display:number; width:number; height:number }
+  | { c:'virtualDisplay'; display:number; on:boolean }
+  | { c:'customQuality'; quality:number } | { c:'customFps'; fps:number }
+  | { c:'preferredCodec'; prefer:SupportedDecoding_PreferCodec }
+  | { c:'displayOption'; option:'showRemoteCursor'|'followRemoteCursor'|'followRemoteWindow'; enabled:boolean }
+  | { c:'remoteAudio'; enabled:boolean }
+  | { c:'clipboardEnabled'; enabled:boolean }
+  | { c:'clientRecording'; recording:boolean }
   | { c:'chat'; text:string }             // outbound message to the remote peer
+  // terminal connections only (no canvas):
+  | { c:'connectTerminal'; config:SessionConfig }
+  | { c:'terminalOpen'; terminalId:number; rows:number; cols:number }
+  | { c:'terminalData'; terminalId:number; data:Uint8Array }
+  | { c:'terminalResize'; terminalId:number; rows:number; cols:number }
+  | { c:'terminalClose'; terminalId:number }
   // file transfer connections only (no canvas; connect with config.connType='fileTransfer'):
   | { c:'connectFile'; config:SessionConfig }
   | { c:'ftReadDir'; path:string; includeHidden:boolean }

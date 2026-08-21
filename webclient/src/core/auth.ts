@@ -1,4 +1,10 @@
-import { LoginRequest, Message, OptionMessage, SupportedDecoding } from '../gen/message';
+import {
+  LoginRequest,
+  Message,
+  OptionMessage,
+  OptionMessage_BoolOption,
+  SupportedDecoding,
+} from '../gen/message';
 import { sha256 as sha256sync } from './sha256';
 
 const utf8 = new TextEncoder();
@@ -50,6 +56,8 @@ export function buildLoginRequest(opts: {
   // File-transfer connection: LoginRequest carries the file_transfer union and
   // no video options (there is no video stream on this connection type).
   fileTransfer?: { dir: string; showHidden: boolean };
+  viewCamera?: boolean;
+  terminal?: { serviceId: string; persistent: boolean };
 }): Uint8Array {
   const base = {
     username: opts.peerId,
@@ -71,11 +79,25 @@ export function buildLoginRequest(opts: {
                 file_transfer: { dir: opts.fileTransfer.dir, show_hidden: opts.fileTransfer.showHidden },
               },
             }
-          : {
-              ...base,
-              video_ack_required: opts.videoAckRequired ?? true,
-              option: OptionMessage.fromPartial({ supported_decoding: opts.supportedDecoding }),
-            },
+          : opts.terminal
+            ? {
+                ...base,
+                union: {
+                  $case: 'terminal',
+                  terminal: { service_id: opts.terminal.serviceId },
+                },
+                option: OptionMessage.fromPartial({
+                  terminal_persistent: opts.terminal.persistent
+                    ? OptionMessage_BoolOption.Yes
+                    : OptionMessage_BoolOption.No,
+                }),
+              }
+            : {
+                ...base,
+                video_ack_required: opts.videoAckRequired ?? true,
+                option: OptionMessage.fromPartial({ supported_decoding: opts.supportedDecoding }),
+                union: opts.viewCamera ? { $case: 'view_camera', view_camera: {} } : undefined,
+              },
       ),
     },
   }).finish();

@@ -15,12 +15,16 @@ import {
   Misc,
   MouseEvent,
   OptionMessage,
+  OptionMessage_BoolOption,
   PeerInfo,
   PermissionInfo_Permission,
   SupportedDecoding,
   SupportedDecoding_PreferCodec,
   CaptureDisplays,
+  DisplayResolution,
+  Resolution,
   SwitchDisplay,
+  ToggleVirtualDisplay,
   VideoFrame,
 } from '../gen/message';
 import { ConnType } from '../gen/rendezvous';
@@ -29,6 +33,15 @@ import { buildPublicKeyMessage, verifyPeerSignedId, verifyServerRelayPk } from '
 import { buildLoginRequest, computeLoginH1, loginHashFromH1 } from './auth';
 import { buildPunchHoleRequest, parseRendezvous } from './signaling';
 import { buildRequestRelay } from './relay';
+import {
+  buildBlockInputOption,
+  buildDirectElevation,
+  buildLockAfterSessionEndOption,
+  buildPrivacyToggle,
+  buildRestartRemoteDevice,
+  parsePrivacyModeImpls,
+} from './session-controls';
+import { parseAdvancedPeerCapabilities } from './advanced-capabilities';
 
 export const CLIENT_VERSION = '1.4.0';
 
@@ -118,7 +131,12 @@ export class Session {
   }
 
   private get connType(): ConnType {
-    return this.config.connType === 'fileTransfer' ? ConnType.FILE_TRANSFER : ConnType.DEFAULT_CONN;
+    switch (this.config.connType) {
+      case 'fileTransfer': return ConnType.FILE_TRANSFER;
+      case 'viewCamera': return ConnType.VIEW_CAMERA;
+      case 'terminal': return ConnType.TERMINAL;
+      default: return ConnType.DEFAULT_CONN;
+    }
   }
 
   start(): void {
@@ -251,11 +269,13 @@ export class Session {
       case 'hash': {
         this.setState('login');
         let passwordHash: Uint8Array;
+        const plaintextPassword = this.config.password;
+        this.config.password = '';
         if (this.config.savedHashHex) {
           // Reuse a remembered h1 (SHA256(pw||salt)) — no plaintext needed.
           passwordHash = await loginHashFromH1(hexToBytes(this.config.savedHashHex), u.hash.challenge);
-        } else if (this.config.password.length > 0) {
-          const h1 = await computeLoginH1(this.config.password, u.hash.salt);
+        } else if (plaintextPassword.length > 0) {
+          const h1 = await computeLoginH1(plaintextPassword, u.hash.salt);
           this.sinks.emit({ t: 'credentials', hashHex: bytesToHex(h1) });
           passwordHash = await loginHashFromH1(h1, u.hash.challenge);
         } else {
@@ -274,6 +294,13 @@ export class Session {
             videoAckRequired: VIDEO_ACK_REQUIRED,
             fileTransfer:
               this.config.connType === 'fileTransfer' ? { dir: '', showHidden: false } : undefined,
+            viewCamera: this.config.connType === 'viewCamera',
+            terminal: this.config.connType === 'terminal'
+              ? {
+                  serviceId: this.config.terminalServiceId ?? '',
+                  persistent: this.config.terminalPersistent ?? false,
+                }
+              : undefined,
           }),
         );
         return;
@@ -281,8 +308,8 @@ export class Session {
       case 'login_response': {
         const lr = u.login_response.union;
         if (lr?.$case === 'error') {
-          this.sinks.emit({ t: 'loginError', message: lr.error });
           if (isManualAccept(lr.error)) this.setState('needAccept', lr.error);
+          else this.sinks.emit({ t: 'loginError', message: lr.error });
           return;
         }
         if (lr?.$case === 'peer_info') {
@@ -328,6 +355,46 @@ export class Session {
           this.sinks.onFileSendConfirm?.(u.file_action.union.send_confirm);
         }
         return;
+      case 'terminal_response': {
+        const response = u.terminal_response.union;
+        switch (response?.$case) {
+          case 'opened':
+            this.sinks.emit({
+              t: 'terminalOpened',
+              terminalId: response.opened.terminal_id,
+              success: response.opened.success,
+              message: response.opened.message,
+              pid: response.opened.pid,
+              serviceId: response.opened.service_id,
+              persistentSessions: response.opened.persistent_sessions,
+              replayTerminalOutput: response.opened.replay_terminal_output,
+            });
+            break;
+          case 'data':
+            this.sinks.emit({
+              t: 'terminalData',
+              terminalId: response.data.terminal_id,
+              data: response.data.data,
+              compressed: response.data.compressed,
+            });
+            break;
+          case 'closed':
+            this.sinks.emit({
+              t: 'terminalClosed',
+              terminalId: response.closed.terminal_id,
+              exitCode: response.closed.exit_code,
+            });
+            break;
+          case 'error':
+            this.sinks.emit({
+              t: 'terminalError',
+              terminalId: response.error.terminal_id,
+              message: response.error.message,
+            });
+            break;
+        }
+        return;
+      }
       case 'misc':
         this.dispatchMisc(u.misc.union);
         return;
@@ -362,8 +429,38 @@ export class Session {
       case 'audio_format':
         this.sinks.onAudioFormat(u.audio_format.sample_rate, u.audio_format.channels);
         return;
+      case 'back_notification': {
+        const n = u.back_notification;
+        if (n.union?.$case === 'privacy_mode_state') {
+          this.sinks.emit({
+            t: 'privacyMode',
+            state: n.union.privacy_mode_state,
+            details: n.details,
+            implKey: n.impl_key,
+          });
+        } else if (n.union?.$case === 'block_input_state') {
+          this.sinks.emit({
+            t: 'blockInput',
+            state: n.union.block_input_state,
+            details: n.details,
+          });
+        }
+        return;
+      }
+      case 'elevation_response':
+        this.sinks.emit({
+          t: 'elevation',
+          state: u.elevation_response ? 'failed' : 'pending',
+          detail: u.elevation_response,
+        });
+        return;
+      case 'portable_service_running':
+        if (u.portable_service_running) {
+          this.sinks.emit({ t: 'elevation', state: 'succeeded', detail: '' });
+        }
+        return;
       case 'close_reason':
-        this.setState('closed', u.close_reason);
+        this.setState('closed', u.close_reason, true);
         this.sinks.closeAll();
         return;
       case 'uac':
@@ -393,9 +490,18 @@ export class Session {
           width: s.width,
           height: s.height,
           cursorEmbedded: s.cursor_embedded,
+          originalResolution: s.original_resolution
+            ? { width: s.original_resolution.width, height: s.original_resolution.height }
+            : undefined,
+          resolutions: (s.resolutions?.resolutions ?? []).map((r) => ({ width: r.width, height: r.height })),
         });
         return;
       }
+      case 'follow_current_display':
+        if (Number.isSafeInteger(u.follow_current_display) && u.follow_current_display >= 0) {
+          this.sinks.emit({ t: 'followDisplay', index: u.follow_current_display });
+        }
+        return;
       default:
         return; // TODO: back_notification, supported_encoding, ...
     }
@@ -410,6 +516,8 @@ export class Session {
   }
 
   private emitPeerInfo(pi: PeerInfo): void {
+    const advanced = parseAdvancedPeerCapabilities(pi.platform_additions);
+    const resolutions = (pi.resolutions?.resolutions ?? []).map((r) => ({ width: r.width, height: r.height }));
     const displays: DisplayInfo[] = pi.displays.map((d, index) => ({
       index,
       x: d.x,
@@ -418,6 +526,12 @@ export class Session {
       height: d.height,
       name: d.name,
       scale: d.scale || 1,
+      online: d.online,
+      cursorEmbedded: d.cursor_embedded,
+      originalResolution: d.original_resolution
+        ? { width: d.original_resolution.width, height: d.original_resolution.height }
+        : undefined,
+      resolutions: index === pi.current_display ? resolutions : [],
     }));
     this.sinks.emit({
       t: 'peerInfo',
@@ -425,8 +539,13 @@ export class Session {
       username: pi.username,
       hostname: pi.hostname,
       platform: pi.platform,
+      platformAdditions: pi.platform_additions,
       version: pi.version,
-      current: pi.current_display,
+      ...(this.state === 'streaming' ? {} : { current: pi.current_display }),
+      privacyModeSupported: pi.features?.privacy_mode ?? false,
+      privacyModeImpls: parsePrivacyModeImpls(pi.platform_additions),
+      terminalSupported: pi.features?.terminal ?? false,
+      viewCameraSupported: advanced.viewCamera,
     });
   }
 
@@ -501,6 +620,33 @@ export class Session {
     });
   }
 
+  changeDisplayResolution(display: number, width: number, height: number): boolean {
+    if (
+      !Number.isSafeInteger(display) || display < 0 ||
+      !Number.isSafeInteger(width) || !Number.isSafeInteger(height) ||
+      width < 1 || height < 1 || width > 16384 || height > 16384
+    ) {
+      return false;
+    }
+    this.sendMisc({
+      $case: 'change_display_resolution',
+      change_display_resolution: DisplayResolution.fromPartial({
+        display,
+        resolution: Resolution.fromPartial({ width, height }),
+      }),
+    });
+    return true;
+  }
+
+  toggleVirtualDisplay(display: number, on: boolean): boolean {
+    if (!Number.isSafeInteger(display) || display < -1) return false;
+    this.sendMisc({
+      $case: 'toggle_virtual_display',
+      toggle_virtual_display: ToggleVirtualDisplay.fromPartial({ display, on }),
+    });
+    return true;
+  }
+
   ctrlAltDel(): void {
     this.sendMessage({
       $case: 'key_event',
@@ -524,6 +670,91 @@ export class Session {
     });
   }
 
+  restartRemoteDevice(): void {
+    this.sendMisc(buildRestartRemoteDevice());
+  }
+
+  requestElevation(): void {
+    this.sendMisc(buildDirectElevation());
+  }
+
+  setPrivacyMode(implKey: string, on: boolean): void {
+    this.sendMisc(buildPrivacyToggle(implKey, on));
+  }
+
+  setBlockInput(on: boolean): void {
+    this.sendMisc({ $case: 'option', option: buildBlockInputOption(on) });
+  }
+
+  setLockAfterSessionEnd(on: boolean): void {
+    this.sendMisc({ $case: 'option', option: buildLockAfterSessionEndOption(on) });
+  }
+
+  setCustomQuality(quality: number): boolean {
+    if (!Number.isSafeInteger(quality) || quality < 10 || quality > 100) return false;
+    this.sendMisc({
+      $case: 'option',
+      option: OptionMessage.fromPartial({ custom_image_quality: quality << 8 }),
+    });
+    return true;
+  }
+
+  setCustomFps(fps: number): boolean {
+    if (!Number.isSafeInteger(fps) || fps < 5 || fps > 120) return false;
+    this.sendMisc({
+      $case: 'option',
+      option: OptionMessage.fromPartial({ custom_fps: fps }),
+    });
+    return true;
+  }
+
+  setDisplayOption(
+    option: 'showRemoteCursor' | 'followRemoteCursor' | 'followRemoteWindow',
+    enabled: boolean,
+  ): void {
+    const value = enabled ? OptionMessage_BoolOption.Yes : OptionMessage_BoolOption.No;
+    const partial = option === 'showRemoteCursor'
+      ? { show_remote_cursor: value }
+      : option === 'followRemoteCursor'
+        ? { follow_remote_cursor: value }
+        : { follow_remote_window: value };
+    this.sendMisc({ $case: 'option', option: OptionMessage.fromPartial(partial) });
+  }
+
+  setPreferredCodec(prefer: SupportedDecoding_PreferCodec): boolean {
+    const supported = prefer === SupportedDecoding_PreferCodec.Auto ||
+      (prefer === SupportedDecoding_PreferCodec.VP9 && this.decoding.ability_vp9 > 0) ||
+      (prefer === SupportedDecoding_PreferCodec.H264 && this.decoding.ability_h264 > 0) ||
+      (prefer === SupportedDecoding_PreferCodec.H265 && this.decoding.ability_h265 > 0) ||
+      (prefer === SupportedDecoding_PreferCodec.VP8 && this.decoding.ability_vp8 > 0) ||
+      (prefer === SupportedDecoding_PreferCodec.AV1 && this.decoding.ability_av1 > 0);
+    if (!supported) return false;
+    this.setSupportedDecoding(SupportedDecoding.fromPartial({ ...this.decoding, prefer }));
+    return true;
+  }
+
+  setRemoteAudioEnabled(enabled: boolean): void {
+    this.sendMisc({
+      $case: 'option',
+      option: OptionMessage.fromPartial({
+        disable_audio: enabled ? OptionMessage_BoolOption.No : OptionMessage_BoolOption.Yes,
+      }),
+    });
+  }
+
+  setClipboardEnabled(enabled: boolean): void {
+    this.sendMisc({
+      $case: 'option',
+      option: OptionMessage.fromPartial({
+        disable_clipboard: enabled ? OptionMessage_BoolOption.No : OptionMessage_BoolOption.Yes,
+      }),
+    });
+  }
+
+  setClientRecording(recording: boolean): void {
+    this.sendMisc({ $case: 'client_record_status', client_record_status: recording });
+  }
+
   sendClipboardText(text: string): void {
     this.sendMessage({
       $case: 'clipboard',
@@ -540,6 +771,36 @@ export class Session {
     // no per-message id or ack in the protocol, so the UI echoes what it sent
     // rather than waiting for confirmation.
     this.sendMisc({ $case: 'chat_message', chat_message: ChatMessage.fromPartial({ text }) });
+  }
+
+  openTerminal(terminalId: number, rows: number, cols: number): void {
+    this.sendMessage({
+      $case: 'terminal_action',
+      terminal_action: { union: { $case: 'open', open: { terminal_id: terminalId, rows, cols } } },
+    });
+  }
+
+  sendTerminalData(terminalId: number, data: Uint8Array): void {
+    this.sendMessage({
+      $case: 'terminal_action',
+      terminal_action: {
+        union: { $case: 'data', data: { terminal_id: terminalId, data, compressed: false } },
+      },
+    });
+  }
+
+  resizeTerminal(terminalId: number, rows: number, cols: number): void {
+    this.sendMessage({
+      $case: 'terminal_action',
+      terminal_action: { union: { $case: 'resize', resize: { terminal_id: terminalId, rows, cols } } },
+    });
+  }
+
+  closeTerminal(terminalId: number): void {
+    this.sendMessage({
+      $case: 'terminal_action',
+      terminal_action: { union: { $case: 'close', close: { terminal_id: terminalId } } },
+    });
   }
 
   // File-transfer connections: outbound FileAction (requests and upload control),
@@ -574,9 +835,11 @@ export class Session {
     this.sinks.sendRelay(this.cipher.seal(bytes));
   }
 
-  private setState(state: SessionState, detail?: string): void {
+  private setState(state: SessionState, detail?: string, peerInitiated = false): void {
     this.state = state;
-    this.sinks.emit(detail === undefined ? { t: 'state', state } : { t: 'state', state, detail });
+    const event: SessionEvent = detail === undefined ? { t: 'state', state } : { t: 'state', state, detail };
+    if (peerInitiated && event.t === 'state') event.peerInitiated = true;
+    this.sinks.emit(event);
   }
 
   private fail(detail: string): void {

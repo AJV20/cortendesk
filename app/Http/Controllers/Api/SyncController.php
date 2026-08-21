@@ -152,6 +152,10 @@ class SyncController extends Controller
                 ? Device::STATUS_PENDING
                 : Device::STATUS_ACTIVE;
 
+            // Where the device FIRST appeared from — set here and never on
+            // update, so later heartbeats cannot rewrite history (issue #46).
+            $attributes['registered_ip'] = $request->ip();
+
             $device = Device::create(['rustdesk_id' => $id] + $attributes);
 
             if ($device->isPending()) {

@@ -32,6 +32,7 @@ class DeviceList extends Component
         'group' => 'Group',
         'owner' => 'Owner',
         'version' => 'Version',
+        'os' => 'OS',
         'username' => 'User',
         'ip' => 'IP',
         'cpu' => 'CPU',
@@ -58,6 +59,7 @@ class DeviceList extends Component
         'group' => '__group__',
         'owner' => '__owner__',
         'version' => 'devices.version',
+        'os' => 'devices.os',
         'first_seen' => 'devices.created_at',
         'last_seen' => 'devices.last_online_at',
         'status' => '__presence__',
@@ -216,6 +218,30 @@ class DeviceList extends Component
     {
         $this->columns = self::DEFAULT_COLUMNS;
         auth()->user()->forceFill(['devices_columns' => null])->save();
+    }
+
+    /**
+     * The summary chips double as filters (issue #26): Online and Offline set
+     * the status the toolbar select already drives, Devices clears it, and the
+     * Pending chip opens the approval tab. Clicking a chip always returns to
+     * the live list first — a filter chosen while looking at the recycle bin
+     * or the pending tab means "show me those devices", not "stay here".
+     */
+    public function filterByChip(string $status): void
+    {
+        $this->trashed = false;
+        $this->pendingTab = false;
+        $this->status = in_array($status, ['online', 'offline'], true) ? $status : 'all';
+        $this->resetPage();
+        $this->clearSelection();
+    }
+
+    public function openPending(): void
+    {
+        $this->trashed = false;
+        $this->pendingTab = true;
+        $this->resetPage();
+        $this->clearSelection();
     }
 
     public function updatedSearch(): void
@@ -682,7 +708,7 @@ class DeviceList extends Component
 
             // Empty strings sort with the blanks, not between them: a device
             // that reported an empty hostname is missing one, not named "".
-            if (in_array($field, ['device', 'alias', 'version'], true)) {
+            if (in_array($field, ['device', 'alias', 'version', 'os'], true)) {
                 $query->orderByRaw("case when {$column} is null or {$column} = '' then 1 else 0 end");
             } elseif ($field === 'last_seen') {
                 $query->orderByRaw("{$column} is null");
@@ -715,7 +741,7 @@ class DeviceList extends Component
                 'row_id', 'id', 'cpu', 'hostname', 'memory', 'os', 'username', 'uuid',
                 'version', 'last_online_time', 'last_online_ip', 'group_id', 'alias',
                 'created_at', 'updated_at',
-                'group_name', 'owner', 'status', 'note',
+                'group_name', 'owner', 'status', 'note', 'registered_ip',
             ]);
             foreach ($rows as $d) {
                 fputcsv($out, [
@@ -738,6 +764,7 @@ class DeviceList extends Component
                     $d->user?->username,
                     $d->trashed() ? 'disabled' : ($d->isPending() ? 'pending' : 'active'),
                     $d->note,
+                    $d->registered_ip,
                 ]);
             }
             fclose($out);

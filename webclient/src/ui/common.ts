@@ -157,6 +157,34 @@ export function displayToRect(d: DisplayInfo): DisplayRect {
   return { x: d.x, y: d.y, width: d.width, height: d.height };
 }
 
+export function placePopover(
+  anchor: { left: number; top: number; bottom: number; width: number },
+  popover: { width: number; height: number },
+  viewport: { width: number; height: number },
+  preferAbove = false,
+): { left: number; top: number; maxHeight: number } {
+  const margin = 8;
+  const gap = 10;
+  const belowTop = anchor.bottom + gap;
+  const aboveBottom = anchor.top - gap;
+  const belowSpace = Math.max(0, viewport.height - margin - belowTop);
+  const aboveSpace = Math.max(0, aboveBottom - margin);
+  const preferredSpace = preferAbove ? aboveSpace : belowSpace;
+  const alternateSpace = preferAbove ? belowSpace : aboveSpace;
+  const openAbove = popover.height > preferredSpace && alternateSpace > preferredSpace
+    ? !preferAbove
+    : preferAbove;
+  const maxHeight = Math.max(0, Math.floor(openAbove ? aboveSpace : belowSpace));
+  const visibleHeight = Math.min(Math.max(0, popover.height), maxHeight);
+  const rawTop = openAbove ? aboveBottom - visibleHeight : belowTop;
+  const maxTop = Math.max(margin, viewport.height - margin - visibleHeight);
+  const top = Math.max(margin, Math.min(rawTop, maxTop));
+  const centeredLeft = anchor.left + anchor.width / 2 - popover.width / 2;
+  const maxLeft = Math.max(margin, viewport.width - popover.width - margin);
+  const left = Math.max(margin, Math.min(centeredLeft, maxLeft));
+  return { left: Math.round(left), top: Math.round(top), maxHeight };
+}
+
 /**
  * Is diagnostic logging on?
  *
@@ -188,7 +216,12 @@ export function debugEnabled(search: string, win: unknown): boolean {
  */
 export function applySwitchDisplay(
   displays: DisplayInfo[],
-  ev: { index: number; x: number; y: number; width: number; height: number },
+  ev: {
+    index: number; x: number; y: number; width: number; height: number;
+    cursorEmbedded?: boolean;
+    originalResolution?: { width: number; height: number };
+    resolutions?: Array<{ width: number; height: number }>;
+  },
 ): void {
   const d = displays[ev.index];
   if (!d) return;
@@ -196,6 +229,9 @@ export function applySwitchDisplay(
   d.y = ev.y;
   if (ev.width > 0) d.width = ev.width;
   if (ev.height > 0) d.height = ev.height;
+  if (ev.cursorEmbedded !== undefined) d.cursorEmbedded = ev.cursorEmbedded;
+  if (ev.originalResolution) d.originalResolution = ev.originalResolution;
+  if (ev.resolutions) d.resolutions = ev.resolutions;
 }
 
 export type IconName =

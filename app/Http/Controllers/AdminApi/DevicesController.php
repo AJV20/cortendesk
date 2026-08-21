@@ -163,6 +163,7 @@ class DevicesController extends AdminApiController
             'online' => $device->isOnline(),
             'last_online_at' => $device->last_online_at?->toIso8601String(),
             'last_online_ip' => $device->last_online_ip,
+            'registered_ip' => $device->registered_ip,
             'created_at' => $device->created_at?->toIso8601String(),
             'updated_at' => $device->updated_at?->toIso8601String(),
             'user' => $device->user ? ['id' => $device->user->id, 'username' => $device->user->username] : null,

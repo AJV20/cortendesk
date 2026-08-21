@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\ClientOidcController;
 use App\Http\Controllers\Api\WebClientController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\ClientDownloadController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\DiagnosticsController;
 use App\Http\Controllers\InvitationController;
@@ -65,6 +66,17 @@ Route::get('/login/oidc/client-callback',
     [ClientOidcController::class, 'browserCallback'])
     ->name('login.oidc.client-callback');
 
+// Custom client installers. Outside both guest and auth groups on purpose: the
+// page is meant to be linked to somebody who has no console account, and a
+// technician at a fresh machine may already be signed in on their own laptop —
+// neither case should be redirected. Only published rows are visible, the
+// controller streams the bytes as an attachment, and the throttle bounds a
+// scraper (the files are the expensive part, not the page).
+Route::middleware('throttle:60,1')->group(function () {
+    Route::get('/downloads', [ClientDownloadController::class, 'index'])->name('downloads.index');
+    Route::get('/downloads/{download}', [ClientDownloadController::class, 'show'])->name('downloads.show');
+});
+
 Route::middleware('auth')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
 
@@ -104,7 +116,19 @@ Route::middleware('auth')->group(function () {
         ->middleware('console-can:strategy,r');
     Route::view('/users', 'users.index')->name('users')
         ->middleware('console-can:user,r');
+    // One device in full (issue #35). The id is scoped through visibleTo in
+    // the component, so a guessed id outside the user's fleet is a 404.
+    Route::get('/devices/{device}', fn (int $device) => view('devices.show', ['device' => $device]))
+        ->whereNumber('device')->name('devices.show')
+        ->middleware('console-can:device,r');
+
     Route::view('/settings', 'settings.index')->name('settings')
+        ->middleware('console-can:setting,r');
+
+    // Uploading the installers the public /downloads page hands out. Gated by
+    // the `setting` area rather than an area of its own — see the
+    // ClientDownloadManager docblock for why.
+    Route::view('/client-downloads', 'client-downloads.index')->name('client-downloads')
         ->middleware('console-can:setting,r');
     Route::view('/setup', 'setup.index')->name('setup')
         ->middleware('console-can:setting,r');

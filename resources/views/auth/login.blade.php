@@ -97,6 +97,25 @@
                 </div>
             </form>
             @endunless
+
+            {{-- A quiet link to the published client installers. Just a link,
+                 not tiles: the sign-in card stays a sign-in card, and the
+                 /downloads page is the place that lists builds. Hidden when
+                 nothing is published or the operator turns it off. --}}
+            @php
+                $showDownloads = \App\Models\Setting::get(
+                    'downloads_on_login',
+                    config('cortendesk.downloads_on_login') ? '1' : '0'
+                ) === '1' && \App\Models\ClientDownload::published()->exists();
+            @endphp
+
+            @if ($showDownloads)
+                <div class="text-center mt-4">
+                    <a href="{{ route('downloads.index') }}" class="rd-auth-quiet">
+                        <i class="ri-download-2-line me-1"></i>Download the client
+                    </a>
+                </div>
+            @endif
         </div>
     </div>
 @endsection

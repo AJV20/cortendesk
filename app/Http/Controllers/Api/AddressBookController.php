@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\AddressBook;
 use App\Models\AddressBookEntry;
 use App\Models\AddressBookRule;
+use App\Models\Device;
 use App\Models\Tag;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
@@ -108,9 +109,20 @@ class AddressBookController extends Controller
             return response()->json(['error' => 'Peer already exists']);
         }
 
+        // The client's group tab has no alias to send (its PeerPayload never
+        // carries one), so an add from the client always arrives blank even
+        // when the console has a name for the device. Fill it from the fleet —
+        // but only when blank, so a name typed in the client wins, and only
+        // from devices this user may see (issue #28).
+        $alias = (string) $request->input('alias', '');
+        if ($alias === '') {
+            $alias = (string) (Device::visibleTo($request->user())
+                ->where('rustdesk_id', $id)->value('alias') ?? '');
+        }
+
         $book->entries()->create([
             'rustdesk_id' => $id,
-            'alias' => (string) $request->input('alias', ''),
+            'alias' => $alias,
             'username' => (string) $request->input('username', ''),
             'hostname' => (string) $request->input('hostname', ''),
             'platform' => (string) $request->input('platform', ''),

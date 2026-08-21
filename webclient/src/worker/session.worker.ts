@@ -17,6 +17,7 @@ import {
   FileTransferDone,
   FileTransferError,
   SupportedDecoding,
+  SupportedDecoding_PreferCodec,
   type Clipboard,
   type CursorData,
   type FileAction,
@@ -31,12 +32,23 @@ import { AudioPipeline } from '../media/audio';
 import { VideoPipeline, mseH264Available, probeSupportedDecoding, type EncodedCase } from '../media/video';
 import { ForwardingVideoPipeline } from '../media/mse-video';
 import { cursorToDataUrl, decodeClipboardText, initZstd, zstdDecode } from '../input/clipboard-cursor';
+import { decodeTerminalOutput } from './terminal-output';
 
 // Decoded audio is outside the frozen SessionEvent union: the main thread
 // feeds it to an AudioWorklet ring buffer and ignores unknown `t` otherwise.
 export type WorkerOutMessage =
   | SessionEvent
   | { t: 'audioPcm'; pcm: Float32Array; sampleRate: number; channels: number };
+
+export function codecNames(sd: SupportedDecoding): Array<'auto'|'vp9'|'h264'|'h265'|'vp8'|'av1'> {
+  const codecs: Array<'auto'|'vp9'|'h264'|'h265'|'vp8'|'av1'> = ['auto'];
+  if (sd.ability_vp9 > 0) codecs.push('vp9');
+  if (sd.ability_h264 > 0) codecs.push('h264');
+  if (sd.ability_h265 > 0) codecs.push('h265');
+  if (sd.ability_vp8 > 0) codecs.push('vp8');
+  if (sd.ability_av1 > 0) codecs.push('av1');
+  return codecs;
+}
 
 export interface SessionLike {
   readonly currentState: SessionState;
@@ -57,8 +69,26 @@ export interface SessionLike {
   ctrlAltDel(): void;
   refresh(): void;
   setQuality(imageQuality: number): void;
+  restartRemoteDevice(): void;
+  requestElevation(): void;
+  setPrivacyMode(implKey: string, on: boolean): void;
+  setBlockInput(on: boolean): void;
+  setLockAfterSessionEnd(on: boolean): void;
+  changeDisplayResolution(display: number, width: number, height: number): boolean;
+  toggleVirtualDisplay(display: number, on: boolean): boolean;
+  setCustomQuality(quality: number): boolean;
+  setCustomFps(fps: number): boolean;
+  setPreferredCodec(prefer: SupportedDecoding_PreferCodec): boolean;
+  setDisplayOption(option: 'showRemoteCursor'|'followRemoteCursor'|'followRemoteWindow', enabled: boolean): void;
+  setRemoteAudioEnabled(enabled: boolean): void;
+  setClipboardEnabled(enabled: boolean): void;
+  setClientRecording(recording: boolean): void;
   sendClipboardText(text: string): void;
   sendChat(text: string): void;
+  openTerminal(terminalId: number, rows: number, cols: number): void;
+  sendTerminalData(terminalId: number, data: Uint8Array): void;
+  resizeTerminal(terminalId: number, rows: number, cols: number): void;
+  closeTerminal(terminalId: number): void;
   sendFileAction(union: NonNullable<FileAction['union']>): void;
   sendFileResponse(union: NonNullable<FileResponse['union']>): void;
   disconnect(): void;
@@ -157,7 +187,20 @@ export class WorkerHost {
         void this.connect(cmd.config, cmd.canvas);
         return;
       case 'connectFile':
+      case 'connectTerminal':
         void this.connect(cmd.config, undefined);
+        return;
+      case 'terminalOpen':
+        this.session?.openTerminal(cmd.terminalId, cmd.rows, cmd.cols);
+        return;
+      case 'terminalData':
+        this.session?.sendTerminalData(cmd.terminalId, cmd.data);
+        return;
+      case 'terminalResize':
+        this.session?.resizeTerminal(cmd.terminalId, cmd.rows, cmd.cols);
+        return;
+      case 'terminalClose':
+        this.session?.closeTerminal(cmd.terminalId);
         return;
       case 'ftReadDir':
         this.session?.sendFileAction({
@@ -286,6 +329,48 @@ export class WorkerHost {
       case 'quality':
         this.session?.setQuality(cmd.imageQuality);
         return;
+      case 'restartRemoteDevice':
+        this.session?.restartRemoteDevice();
+        return;
+      case 'requestElevation':
+        this.session?.requestElevation();
+        return;
+      case 'privacyMode':
+        this.session?.setPrivacyMode(cmd.implKey, cmd.on);
+        return;
+      case 'blockInput':
+        this.session?.setBlockInput(cmd.on);
+        return;
+      case 'lockAfterSessionEnd':
+        this.session?.setLockAfterSessionEnd(cmd.on);
+        return;
+      case 'displayResolution':
+        this.session?.changeDisplayResolution(cmd.display, cmd.width, cmd.height);
+        return;
+      case 'virtualDisplay':
+        this.session?.toggleVirtualDisplay(cmd.display, cmd.on);
+        return;
+      case 'customQuality':
+        this.session?.setCustomQuality(cmd.quality);
+        return;
+      case 'customFps':
+        this.session?.setCustomFps(cmd.fps);
+        return;
+      case 'preferredCodec':
+        this.session?.setPreferredCodec(cmd.prefer);
+        return;
+      case 'displayOption':
+        this.session?.setDisplayOption(cmd.option, cmd.enabled);
+        return;
+      case 'remoteAudio':
+        this.session?.setRemoteAudioEnabled(cmd.enabled);
+        return;
+      case 'clipboardEnabled':
+        this.session?.setClipboardEnabled(cmd.enabled);
+        return;
+      case 'clientRecording':
+        this.session?.setClientRecording(cmd.recording);
+        return;
       case 'clipboardText':
         this.session?.sendClipboardText(cmd.text);
         return;
@@ -301,8 +386,8 @@ export class WorkerHost {
     }
   }
 
-  // canvas === undefined -> file-transfer connection: no video/audio pipelines,
-  // no codec probe; the message layer is FileAction/FileResponse instead.
+  // canvas === undefined -> non-video connection (file transfer or terminal):
+  // no video/audio pipelines and no codec probe.
   private async connect(config: SessionConfig, canvas: OffscreenCanvas | undefined): Promise<void> {
     if (this.connectStarted) {
       this.deps.post({ t: 'state', state: 'error', detail: 'worker already connected' });
@@ -315,6 +400,7 @@ export class WorkerHost {
 
       if (canvas) {
         this.probe = await this.deps.probeDecoding();
+        this.deps.post({ t: 'codecSupport', codecs: codecNames(this.probe) });
 
         // No WebCodecs (insecure origin) but MSE can play H.264: forward the
         // bitstream to the main thread instead of decoding here. The canvas is
@@ -353,8 +439,10 @@ export class WorkerHost {
         sendSignaling: (b) => this.ws1?.send(b),
         sendRelay: (b) => this.ws2?.send(b),
         emit: (ev) => {
-          // Clear the connect watchdog once we reach a terminal/settled state.
-          if (ev.t === 'state' && (ev.state === 'streaming' || ev.state === 'error' || ev.state === 'closed')) {
+          // Clear the connect watchdog once we reach a settled state or enter
+          // explicit manual-accept waiting; that wait is controlled by the
+          // remote user and must not be cut off by the transport watchdog.
+          if (ev.t === 'state' && (ev.state === 'needAccept' || ev.state === 'streaming' || ev.state === 'error' || ev.state === 'closed')) {
             this.clearConnectTimer();
           }
           // Anything that restarts the host's capture pipeline leaves our
@@ -373,6 +461,24 @@ export class WorkerHost {
             (ev.t === 'msgbox' && /uac/i.test(ev.msgtype))
           ) {
             this.kickVideo();
+          }
+          if (ev.t === 'terminalData') {
+            let data: Uint8Array;
+            try {
+              data = decodeTerminalOutput(ev.data, ev.compressed, zstdDecode);
+            } catch (error) {
+              this.deps.post({
+                t: 'terminalError',
+                terminalId: ev.terminalId,
+                message: `Could not decompress terminal output: ${errMsg(error)}`,
+              });
+              return;
+            }
+            this.deps.post(
+              { ...ev, data, compressed: false },
+              [data.buffer as ArrayBuffer],
+            );
+            return;
           }
           this.deps.post(ev);
         },
@@ -408,18 +514,22 @@ export class WorkerHost {
 
       // Watchdog: if pairing/handshake/login stalls (busy relay, peer offline,
       // controller already attached), fail with a reason instead of spinning.
-      this.connectTimer = setTimeout(() => {
-        this.connectTimer = null;
-        const st = this.session?.currentState;
-        if (st && st !== 'streaming' && st !== 'error' && st !== 'closed') {
-          this.deps.post({
-            t: 'state',
-            state: 'error',
-            detail: `Timed out while ${CONNECT_STAGE[st] ?? 'connecting'} — the device may be offline or busy. Try again.`,
-          });
-          this.teardown();
-        }
-      }, CONNECT_TIMEOUT_MS);
+      // Session.start() may synchronously enter needAccept, which is an
+      // intentional unbounded wait for the remote user rather than a stall.
+      if (session.currentState !== 'needAccept' && session.currentState !== 'streaming' && session.currentState !== 'error' && session.currentState !== 'closed') {
+        this.connectTimer = setTimeout(() => {
+          this.connectTimer = null;
+          const st = this.session?.currentState;
+          if (st && st !== 'needAccept' && st !== 'streaming' && st !== 'error' && st !== 'closed') {
+            this.deps.post({
+              t: 'state',
+              state: 'error',
+              detail: `Timed out while ${CONNECT_STAGE[st] ?? 'connecting'} — the device may be offline or busy. Try again.`,
+            });
+            this.teardown();
+          }
+        }, CONNECT_TIMEOUT_MS);
+      }
     } catch (e) {
       this.deps.post({ t: 'state', state: 'error', detail: errMsg(e) });
       this.teardown();
@@ -482,6 +592,7 @@ export class WorkerHost {
       }
     }
     this.session.setSupportedDecoding(sd);
+    this.deps.post({ t: 'codecSupport', codecs: codecNames(sd) });
   }
 
   private postStats(p: Partial<SessionStats>): void {

@@ -1,22 +1,35 @@
 <div wire:poll.15s>
 
-    {{-- Summary chips --}}
+    {{-- Summary chips. Buttons, not badges (issue #26): each one filters the
+         list underneath, and the active one is marked. Pending only appears
+         when something is actually waiting. --}}
     <div class="rd-chiprow">
-        <span class="rd-chip rd-tone-blue">
+        <button type="button" class="rd-chip rd-chip-btn rd-tone-blue @if(! $trashed && ! $pendingTab && $status === 'all') rd-chip-active @endif"
+                wire:click="filterByChip('all')" title="Show every device">
             <i class="ri-computer-line rd-chip-icon"></i>
             <span class="rd-chip-value">{{ $totalCount }}</span>
             <span class="rd-chip-label">Devices</span>
-        </span>
-        <span class="rd-chip rd-tone-green">
+        </button>
+        <button type="button" class="rd-chip rd-chip-btn rd-tone-green @if(! $trashed && ! $pendingTab && $status === 'online') rd-chip-active @endif"
+                wire:click="filterByChip('online')" title="Only devices online now">
             <span class="rd-chip-dot"></span>
             <span class="rd-chip-value">{{ $onlineCount }}</span>
             <span class="rd-chip-label">Online</span>
-        </span>
-        <span class="rd-chip rd-tone-muted">
+        </button>
+        <button type="button" class="rd-chip rd-chip-btn rd-tone-muted @if(! $trashed && ! $pendingTab && $status === 'offline') rd-chip-active @endif"
+                wire:click="filterByChip('offline')" title="Only devices currently offline">
             <span class="rd-chip-dot"></span>
             <span class="rd-chip-value">{{ $totalCount - $onlineCount }}</span>
             <span class="rd-chip-label">Offline</span>
-        </span>
+        </button>
+        @if ($pendingCount > 0)
+            <button type="button" class="rd-chip rd-chip-btn rd-tone-amber @if($pendingTab) rd-chip-active @endif"
+                    wire:click="openPending" title="Devices waiting for approval">
+                <i class="ri-time-line rd-chip-icon"></i>
+                <span class="rd-chip-value">{{ $pendingCount }}</span>
+                <span class="rd-chip-label">Pending</span>
+            </button>
+        @endif
     </div>
 
     <div class="card">
@@ -183,6 +196,7 @@
                             <x-sortable-th :field="$key" :sort="$sortField" :dir="$sortDirection">{{ $label }}</x-sortable-th>
                         @endif
                     @endforeach
+                    @if ($cols['os'])<x-sortable-th field="os" :sort="$sortField" :dir="$sortDirection">OS</x-sortable-th>@endif
                     @if ($cols['username'])<th>User</th>@endif
                     @if ($cols['ip'])<th>IP</th>@endif
                     @if ($cols['cpu'])<th>CPU</th>@endif
@@ -217,10 +231,22 @@
                         </td>
                         @if ($cols['device'])
                             <td>
-                                <span class="rd-cell-title">{{ $device->hostname ?: '—' }}</span>
-                                <span class="rd-cell-sub">
-                                    {{ $device->os ? \Illuminate\Support\Str::limit($device->os, 28) : 'unknown OS' }}@if ($device->username) · {{ $device->username }}@endif
-                                </span>
+                                @if ($trashed)
+                                    <span class="rd-cell-title">{{ $device->hostname ?: '—' }}</span>
+                                @else
+                                    <a href="{{ route('devices.show', $device->id) }}" class="rd-cell-title rd-cell-link">{{ $device->hostname ?: '—' }}</a>
+                                @endif
+                                {{-- The subtitle only carries what has no column of its own on
+                                     screen; enable OS or User and it leaves here (issue #33). --}}
+                                @php
+                                    $subParts = array_filter([
+                                        $cols['os'] ? null : ($device->os ? \Illuminate\Support\Str::limit($device->osDescription(), 28) : null),
+                                        $cols['username'] ? null : ($device->username ?: null),
+                                    ]);
+                                @endphp
+                                @if ($subParts !== [])
+                                    <span class="rd-cell-sub">{{ implode(' · ', $subParts) }}</span>
+                                @endif
                             </td>
                         @endif
                         @if ($cols['alias'])<td>{{ $device->alias ?: '—' }}</td>@endif
@@ -237,6 +263,7 @@
                         @if ($cols['version'])
                             <td><span class="badge bg-secondary-subtle text-secondary">{{ $device->version ?: '?' }}</span></td>
                         @endif
+                        @if ($cols['os'])<td class="rd-nowrap" title="{{ $device->os }}">{{ $device->os ? \Illuminate\Support\Str::limit($device->osDescription(), 34) : '—' }}</td>@endif
                         @if ($cols['username'])<td>{{ $device->username ?: '—' }}</td>@endif
                         @if ($cols['ip'])<td class="rd-mono fs-13">{{ $device->last_online_ip ?: '—' }}</td>@endif
                         @if ($cols['cpu'])
@@ -289,6 +316,7 @@
                                        title="Connect in the browser">Web Client</a>
                                 @endif
                                 @if (auth()->user()?->consoleAllows('device', 'rw'))
+                                    <a href="{{ route('devices.show', $device->id) }}" class="rd-act me-2" title="View details"><i class="ri-eye-line"></i></a>
                                     <a href="javascript:void(0);" class="rd-act me-2" wire:click="edit({{ $device->id }})">Edit</a>
                                     <a href="javascript:void(0);" class="text-danger"
                                        wire:click="deleteDevice({{ $device->id }})"
@@ -372,6 +400,7 @@
                                        title="Connect in the browser"><i class="ri-global-line"></i></a>
                                 @endif
                                 @if (auth()->user()?->consoleAllows('device', 'rw'))
+                                    <a href="{{ route('devices.show', $device->id) }}" class="rd-iconbtn" title="View details"><i class="ri-eye-line"></i></a>
                                     <a href="javascript:void(0);" class="rd-iconbtn" title="Edit" wire:click="edit({{ $device->id }})"><i class="ri-pencil-line"></i></a>
                                     <a href="javascript:void(0);" class="rd-iconbtn text-danger" title="Delete"
                                        wire:click="deleteDevice({{ $device->id }})"

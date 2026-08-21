@@ -765,6 +765,10 @@
   z-index: 40;
   min-width: 210px;
   max-width: min(92vw, 320px);
+  max-height: calc(100vh - 20px);
+  box-sizing: border-box;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 6px;
   background: var(--rd-surface);
   border: 1px solid var(--rd-border);
@@ -1204,22 +1208,71 @@
 }
 
 
-/* --- fullscreen: top bar becomes an auto-hiding overlay ---------------------- */
+/* --- fullscreen: bars slide away; 60px edge arrows bring them back (PR #45) -- */
 
-#rd-root:fullscreen #rd-toolbar {
-  position: absolute;
+.rd-arrow-btn {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--rd-surface);
+  color: var(--rd-muted);
+  border: 1px solid var(--rd-border);
+  width: 60px;
+  height: 24px;
+  cursor: pointer;
+  z-index: 36;
+  font-size: 11px;
+  display: none; /* windowed mode: the bars are ordinary layout, no arrows */
+  align-items: center;
+  justify-content: center;
+  opacity: 0.30;
+  transition: top 0.25s ease-in-out, bottom 0.25s ease-in-out, transform 0.25s ease-in-out, opacity 0.2s ease-in-out;
+}
+
+.rd-arrow-btn:hover {
+  opacity: 1;
+}
+
+#rd-dock-arrow {
+  bottom: 0;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+}
+
+#rd-toolbar-arrow {
+  top: 0;
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+}
+
+/* Dimmed until hovered in fullscreen; the inline opacity is set from app.ts. */
+#rd-edge {
+  transition: opacity 0.2s ease-in-out;
+}
+
+.rd-fullscreen-active #rd-dock {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  transform: translateY(100%);
+  transition: transform 0.25s ease-in-out;
+  z-index: 35;
+}
+
+.rd-fullscreen-active #rd-toolbar {
+  position: fixed;
   top: 0;
   left: 0;
   right: 0;
-  z-index: 30;
-  background: rgba(13, 17, 24, 0.92);
-  border-bottom-color: rgba(255, 255, 255, 0.08);
-  opacity: 0;
-  transition: opacity 0.2s ease;
-}
-#rd-root:fullscreen #rd-toolbar:hover,
-#rd-root:fullscreen #rd-toolbar:focus-within {
+  transform: translateY(-100%);
+  transition: transform 0.25s ease-in-out;
+  z-index: 35;
   opacity: 1;
+}
+
+.rd-fullscreen-active .rd-arrow-btn {
+  display: flex;
 }
 
 /* --- small screens ------------------------------------------------------------ */
@@ -1329,4 +1382,230 @@
 .rd-pane *::-webkit-scrollbar-track,
 .rd-pane *::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+/* Remote terminal: an independent RustDesk terminal connection. */
+.rd-terminal-modal {
+  position: absolute;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(4, 7, 12, 0.72);
+  backdrop-filter: blur(5px);
+}
+.rd-terminal-card {
+  width: min(920px, 96vw);
+  height: min(680px, 88vh);
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  border: 1px solid var(--rd-border);
+  border-radius: 16px;
+  overflow: hidden;
+  background: #0b0f14;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+}
+.rd-terminal-head,
+.rd-terminal-consent,
+.rd-terminal-input-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--rd-border);
+  background: var(--rd-surface);
+}
+.rd-terminal-head { justify-content: space-between; }
+.rd-terminal-head strong { display: block; color: var(--rd-fg); }
+.rd-terminal-head span { display: block; margin-top: 2px; color: var(--rd-muted); font-size: 12px; }
+.rd-terminal-head button {
+  border: 0;
+  background: transparent;
+  color: var(--rd-muted);
+  font: 24px/1 system-ui;
+  cursor: pointer;
+}
+.rd-terminal-consent { justify-content: space-between; font-size: 13px; color: var(--rd-muted); }
+.rd-terminal-consent input { accent-color: var(--rd-accent); }
+.rd-terminal-consent button,
+.rd-terminal-input-row button {
+  border: 0;
+  border-radius: 9px;
+  padding: 8px 13px;
+  color: #fff;
+  background: var(--rd-accent);
+  cursor: pointer;
+}
+.rd-terminal-output {
+  min-height: 0;
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #d9e3ee;
+  background: #080b0f;
+  font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+.rd-terminal-input-row {
+  border-top: 1px solid var(--rd-border);
+  border-bottom: 0;
+}
+.rd-terminal-input-row label { color: var(--rd-muted); font-size: 12px; }
+.rd-terminal-input-row input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--rd-border);
+  border-radius: 9px;
+  padding: 9px 11px;
+  color: var(--rd-fg);
+  background: var(--rd-surface-2);
+  font: 14px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+.rd-terminal-input-row button:disabled,
+.rd-terminal-input-row input:disabled { opacity: 0.5; cursor: default; }
+@media (max-width: 640px) {
+  .rd-terminal-modal { padding: 0; }
+  .rd-terminal-card { width: 100%; height: 100%; border-radius: 0; }
+  .rd-terminal-consent { align-items: flex-start; flex-direction: column; }
+  .rd-terminal-input-row label { display: none; }
+}
+
+.rd-camera-modal {
+  position: absolute;
+  inset: 0;
+  z-index: 89;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(4, 7, 12, 0.72);
+  backdrop-filter: blur(5px);
+}
+.rd-camera-card {
+  width: min(960px, 96vw);
+  height: min(700px, 88vh);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--rd-border);
+  border-radius: 16px;
+  background: #05070a;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+}
+.rd-camera-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--rd-border);
+  background: var(--rd-surface);
+}
+.rd-camera-head > div:first-child { margin-right: auto; }
+.rd-camera-head strong,
+.rd-camera-head span { display: block; }
+.rd-camera-head span { margin-top: 2px; color: var(--rd-muted); font-size: 12px; }
+.rd-camera-head > button {
+  border: 0;
+  background: transparent;
+  color: var(--rd-muted);
+  font: 24px/1 system-ui;
+  cursor: pointer;
+}
+.rd-camera-head [data-camera-selector] { display: flex; gap: 6px; }
+.rd-camera-head [data-camera-selector] button {
+  border: 1px solid var(--rd-border);
+  border-radius: 8px;
+  padding: 6px 9px;
+  color: var(--rd-muted);
+  background: var(--rd-surface-2);
+  cursor: pointer;
+}
+.rd-camera-head [data-camera-selector] button.rd-active { color: #fff; border-color: var(--rd-accent); }
+.rd-camera-viewport { position: relative; min-height: 0; overflow: hidden; }
+.rd-camera-viewport canvas,
+.rd-camera-viewport video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+@media (max-width: 640px) {
+  .rd-camera-modal { padding: 0; }
+  .rd-camera-card { width: 100%; height: 100%; border-radius: 0; }
+  .rd-camera-head [data-camera-selector] { max-width: 44vw; overflow-x: auto; }
+}
+#rd-remote-cursor {
+  position: absolute;
+  z-index: 35;
+  pointer-events: none;
+  transform-origin: top left;
+  max-width: none;
+  user-select: none;
+}
+#rd-remote-cursor[hidden] { display: none; }
+.rd-display-slider {
+  display: grid;
+  grid-template-columns: minmax(92px, auto) minmax(90px, 1fr) 30px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  color: var(--rd-muted);
+  font-size: 12px;
+}
+.rd-display-slider input { min-width: 90px; accent-color: var(--rd-accent); }
+.rd-display-slider output { text-align: right; font-variant-numeric: tabular-nums; }
+.rd-mon-tile:disabled { opacity: 0.48; cursor: not-allowed; }
+
+.rd-recording-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 999px;
+  padding: 5px 8px;
+  color: #fff;
+  background: #b42318;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+}
+.rd-recording-indicator[hidden] { display: none; }
+.rd-media-volume {
+  display: grid;
+  grid-template-columns: auto minmax(80px, 1fr) 38px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  color: var(--rd-muted);
+  font-size: 12px;
+}
+.rd-media-volume input { min-width: 90px; accent-color: var(--rd-accent); }
+.rd-media-volume output { text-align: right; font-variant-numeric: tabular-nums; }
+.rd-clipboard-sync-offer {
+  position: absolute;
+  left: 50%;
+  bottom: 92px;
+  z-index: 42;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  max-width: calc(100% - 24px);
+  border: 1px solid var(--rd-border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  color: var(--rd-fg);
+  background: var(--rd-surface);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  font-size: 13px;
+}
+.rd-clipboard-sync-offer button {
+  flex: none;
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 9px;
+  color: #fff;
+  background: var(--rd-accent);
+  cursor: pointer;
+}
+.rd-clipboard-sync-offer button.rd-quiet { color: var(--rd-muted); background: var(--rd-surface-2); }
+@media (max-width: 640px) {
+  .rd-recording-indicator { position: absolute; top: 54px; left: 50%; transform: translateX(-50%); }
+  .rd-clipboard-sync-offer { bottom: 82px; flex-wrap: wrap; justify-content: center; width: calc(100% - 24px); }
+  .rd-clipboard-sync-offer span { flex-basis: 100%; text-align: center; }
 }

@@ -56,6 +56,7 @@ class Device extends Model
         'device_group_id',
         'last_online_at',
         'last_online_ip',
+        'registered_ip',
     ];
 
     protected function casts(): array
@@ -199,6 +200,20 @@ class Device extends Model
             'ios' => 'iOS',
             default => '',
         };
+    }
+
+    /**
+     * The OS string without its "family / " prefix — clients report
+     * "windows / Windows 10 Pro - 10 (19045)", and next to a platform icon the
+     * first half says nothing the icon does not. Falls back to the raw value
+     * when the shape is unexpected; exports keep the raw value either way.
+     */
+    public function osDescription(): string
+    {
+        $os = (string) $this->os;
+        $parts = explode(' / ', $os, 2);
+
+        return isset($parts[1]) && trim($parts[1]) !== '' ? trim($parts[1]) : $os;
     }
 
     /** Platform slug used to pick an OS icon: windows, macos, linux, android, ios. */
