@@ -98,6 +98,11 @@ class DeviceList extends Component
     /** One-line outcome of the last bulk action ("Added 4, 2 already there"). */
     public string $bulkResult = '';
 
+    /** "Move to Group" picker (issue #47). -1 means no target selected; 0 means no group. */
+    public bool $groupPickerOpen = false;
+
+    public int $moveGroupId = -1;
+
     #[Url(except: '')]
     public string $search = '';
 
@@ -306,6 +311,7 @@ class DeviceList extends Component
         $this->selected = [];
         $this->bulkResult = '';
         $this->abPickerOpen = false;
+        $this->groupPickerOpen = false;
     }
 
     /** Header checkbox: select every row on the current page. */
@@ -341,6 +347,71 @@ class DeviceList extends Component
         $count = $devices->count();
         $this->clearSelection();
         $this->bulkResult = $count.' '.Str::plural('device', $count).' moved to the recycle bin.';
+    }
+
+    public function openGroupPicker(): void
+    {
+        $this->authorizeConsole('device', 'rw');
+
+        if ($this->selected === []) {
+            return;
+        }
+
+        $this->moveGroupId = -1;
+        $this->groupPickerOpen = true;
+    }
+
+    public function closeGroupPicker(): void
+    {
+        $this->groupPickerOpen = false;
+    }
+
+    /** Move the selected, still-visible devices to an accessible group or no group. */
+    public function moveSelectedToGroup(): void
+    {
+        $this->authorizeConsole('device', 'rw');
+
+        if ($this->moveGroupId < 0) {
+            $this->addError('moveGroupId', 'Pick a device group.');
+
+            return;
+        }
+
+        $group = $this->moveGroupId === 0
+            ? null
+            : $this->accessibleDeviceGroups()->firstWhere('id', $this->moveGroupId);
+        if ($this->moveGroupId > 0 && ! $group) {
+            $this->addError('moveGroupId', 'Pick an accessible device group.');
+
+            return;
+        }
+
+        $targetId = $group?->id;
+        $targetName = $group?->name ?? 'No group';
+        $moved = 0;
+        $unchanged = 0;
+
+        foreach ($this->selectedDevices() as $device) {
+            if ((int) $device->device_group_id === (int) $targetId) {
+                $unchanged++;
+
+                continue;
+            }
+
+            $device->update(['device_group_id' => $targetId]);
+            $moved++;
+        }
+
+        ConsoleAudit::record(
+            'device.group-move',
+            'Moved '.$moved.' '.Str::plural('device', $moved).' to '.$targetName.'; '.$unchanged.' unchanged.',
+            'device-group',
+            $targetId === null ? null : (string) $targetId,
+        );
+
+        $this->clearSelection();
+        $this->bulkResult = 'Moved '.$moved.' '.Str::plural('device', $moved).' to '.$targetName.'. '
+            .$unchanged.' unchanged.';
     }
 
     public function openAbPicker(): void
@@ -619,9 +690,7 @@ class DeviceList extends Component
                 && ($key !== 'owner' || $user->is_admin);
         }
 
-        $groups = $user->seesAllDevices()
-            ? DeviceGroup::orderBy('name')->get()
-            : DeviceGroup::whereIn('id', $user->accessibleDeviceGroupIds())->orderBy('name')->get();
+        $groups = $this->accessibleDeviceGroups();
 
         return view('livewire.device-list', [
             'devices' => $devices,
@@ -638,6 +707,16 @@ class DeviceList extends Component
             'trashedCount' => Device::visibleTo($user)->onlyTrashed()->count(),
             'pendingCount' => $pendingCount,
         ]);
+    }
+
+    /** Device groups this actor may see and therefore may choose as move targets. */
+    private function accessibleDeviceGroups()
+    {
+        $user = auth()->user();
+
+        return DeviceGroup::orderBy('name')
+            ->when(! $user->seesAllDevices(), fn ($q) => $q->whereIn('id', $user->accessibleDeviceGroupIds() ?: [0]))
+            ->get();
     }
 
     /**

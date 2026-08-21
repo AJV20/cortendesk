@@ -151,15 +151,18 @@
             </div>
         @endunless
 
-        {{-- Bulk actions bar (issue #15) — appears when rows are selected. --}}
+        {{-- Bulk actions bar (issue #15, #47) — appears when rows are selected. --}}
         @if (! $trashed && ($selected !== [] || $bulkResult !== ''))
-            <div class="rd-toolbar d-none d-md-flex">
+            <div class="rd-toolbar d-flex flex-wrap gap-2 align-items-center">
                 @if ($selected !== [])
                     <span class="fs-13 fw-semibold">{{ count($selected) }} selected</span>
                     <button type="button" class="btn btn-sm btn-light" wire:click="openAbPicker">
                         <i class="ri-contacts-book-2-line me-1"></i>Add to Address Book…
                     </button>
                     @if (auth()->user()?->consoleAllows('device', 'rw'))
+                        <button type="button" class="btn btn-sm btn-light" wire:click="openGroupPicker">
+                            <i class="ri-folder-transfer-line me-1"></i>Move to Group…
+                        </button>
                         <button type="button" class="btn btn-sm btn-outline-danger" wire:click="bulkDelete"
                                 wire:confirm="Move {{ count($selected) }} selected device(s) to the recycle bin?">
                             <i class="ri-delete-bin-line me-1"></i>Delete
@@ -367,6 +370,10 @@
                                 <span class="rd-mini-sub text-truncate">{{ $device->alias ?: $device->hostname }}</span>
                             </div>
                         </div>
+                        @unless ($trashed)
+                            <input type="checkbox" class="form-check-input flex-shrink-0" value="{{ $device->id }}"
+                                   wire:model.live="selected" aria-label="Select device {{ $device->rustdesk_id }}">
+                        @endunless
                         @if ($trashed)
                             <span class="badge bg-warning-subtle text-warning flex-shrink-0">Deleted</span>
                         @elseif ($device->isOnline())
@@ -434,6 +441,38 @@
             {{ $devices->links() }}
         </div>
     </div>
+
+    {{-- "Move to Group" picker (issue #47) --}}
+    @if ($groupPickerOpen)
+        <div class="modal fade show d-block" tabindex="-1" style="background: rgba(0,0,0,.6);" wire:keydown.escape="closeGroupPicker">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <form wire:submit="moveSelectedToGroup">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Move {{ count($selected) }} {{ Str::plural('device', count($selected)) }} to a group</h5>
+                            <button type="button" class="btn-close" wire:click="closeGroupPicker"></button>
+                        </div>
+                        <div class="modal-body">
+                            <label class="form-label">Device group</label>
+                            <select class="form-select @error('moveGroupId') is-invalid @enderror" wire:model="moveGroupId">
+                                <option value="-1">Choose…</option>
+                                <option value="0">No group</option>
+                                @foreach ($groups as $group)
+                                    <option value="{{ $group->id }}">{{ $group->name }}</option>
+                                @endforeach
+                            </select>
+                            @error('moveGroupId') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                            <div class="form-text">Only device groups you can access are listed.</div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-light" wire:click="closeGroupPicker">Cancel</button>
+                            <button type="submit" class="btn btn-primary">Move</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    @endif
 
     {{-- "Add to Address Book" picker (issue #15) --}}
     @if ($abPickerOpen)
