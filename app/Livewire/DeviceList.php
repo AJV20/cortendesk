@@ -334,6 +334,18 @@ class DeviceList extends Component
             ->get();
     }
 
+    /** Selected devices are constrained to the current rendered page. */
+    private function selectedDevicesOnCurrentPage()
+    {
+        $selectedIds = array_values(array_unique(array_filter(array_map('intval', $this->selected))));
+
+        return $this->filteredQuery(auth()->user())
+            ->paginate($this->perPage)
+            ->getCollection()
+            ->whereIn('id', $selectedIds)
+            ->values();
+    }
+
     public function bulkDelete(): void
     {
         $this->authorizeConsole('device', 'rw');
@@ -371,6 +383,10 @@ class DeviceList extends Component
     {
         $this->authorizeConsole('device', 'rw');
 
+        if ($this->selected === []) {
+            return;
+        }
+
         if ($this->moveGroupId < 0) {
             $this->addError('moveGroupId', 'Pick a device group.');
 
@@ -386,12 +402,19 @@ class DeviceList extends Component
             return;
         }
 
+        $devices = $this->selectedDevicesOnCurrentPage();
+        if ($devices->isEmpty()) {
+            $this->clearSelection();
+
+            return;
+        }
+
         $targetId = $group?->id;
         $targetName = $group?->name ?? 'No group';
         $moved = 0;
         $unchanged = 0;
 
-        foreach ($this->selectedDevices() as $device) {
+        foreach ($devices as $device) {
             if ((int) $device->device_group_id === (int) $targetId) {
                 $unchanged++;
 
