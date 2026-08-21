@@ -425,12 +425,14 @@ class DeviceList extends Component
             $moved++;
         }
 
-        ConsoleAudit::record(
-            'device.group-move',
-            'Moved '.$moved.' '.Str::plural('device', $moved).' to '.$targetName.'; '.$unchanged.' unchanged.',
-            'device-group',
-            $targetId === null ? null : (string) $targetId,
-        );
+        if ($moved > 0) {
+            ConsoleAudit::record(
+                'device.group-move',
+                'Moved '.$moved.' '.Str::plural('device', $moved).' to '.$targetName.'; '.$unchanged.' unchanged.',
+                'device-group',
+                $targetId === null ? null : (string) $targetId,
+            );
+        }
 
         $this->clearSelection();
         $this->bulkResult = 'Moved '.$moved.' '.Str::plural('device', $moved).' to '.$targetName.'. '

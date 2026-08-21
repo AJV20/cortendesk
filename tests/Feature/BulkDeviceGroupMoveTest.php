@@ -56,6 +56,30 @@ test('a device manager bulk moves only visible selected devices and reports move
     expect(ConsoleAudit::count())->toBe(1);
 });
 
+test('a device manager reports an unchanged current-page group move without auditing it', function () {
+    $manager = User::factory()->create();
+    $target = DeviceGroup::create(['name' => 'Target']);
+    $manager->deviceGroups()->attach($target->id);
+    $device = Device::create([
+        'rustdesk_id' => '103',
+        'uuid' => 'already-in-target',
+        'status' => Device::STATUS_ACTIVE,
+        'device_group_id' => $target->id,
+    ]);
+
+    $this->actingAs($manager);
+
+    Livewire::test(DeviceList::class)
+        ->set('selected', [(string) $device->id])
+        ->set('moveGroupId', $target->id)
+        ->call('moveSelectedToGroup')
+        ->assertSet('selected', [])
+        ->assertSet('bulkResult', 'Moved 0 devices to Target. 1 unchanged.');
+
+    expect($device->fresh()->device_group_id)->toBe($target->id)
+        ->and(ConsoleAudit::count())->toBe(0);
+});
+
 test('a device manager cannot bulk move a selected device from another page', function () {
     $manager = User::factory()->create();
     $source = DeviceGroup::create(['name' => 'Source']);
