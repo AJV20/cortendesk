@@ -14,6 +14,17 @@ class DevicePresenceNotificationState extends Model
         return ['offline_notified_at' => 'datetime'];
     }
 
+    /**
+     * Atomically consume the single outstanding recovery marker for a device.
+     *
+     * A conditional DELETE is one database statement, so the scheduler and a
+     * concurrent heartbeat cannot both win the right to emit a recovery alert.
+     */
+    public static function consumeFor(Device $device): bool
+    {
+        return static::query()->where('device_id', $device->id)->delete() === 1;
+    }
+
     public function device(): BelongsTo
     {
         return $this->belongsTo(Device::class);

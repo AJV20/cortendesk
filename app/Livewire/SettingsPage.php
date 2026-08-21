@@ -527,7 +527,7 @@ class SettingsPage extends Component
 
     public function createPresenceSnooze(): void
     {
-        $this->authorizeConsole('setting', 'rw');
+        $this->authorizePresenceMaintenance();
         $this->validate([
             'presenceSnoozeTargetType' => 'required|in:device,group',
             'presenceSnoozeTargetId' => 'required|integer|min:1',
@@ -549,7 +549,7 @@ class SettingsPage extends Component
 
     public function clearPresenceSnooze(int $id): void
     {
-        $this->authorizeConsole('setting', 'rw');
+        $this->authorizePresenceMaintenance();
         DevicePresenceSnooze::query()->whereKey($id)->delete();
         ConsoleAudit::record('settings.presence-snooze-clear', 'Cleared a device presence alert snooze', 'settings', null);
     }
@@ -565,8 +565,15 @@ class SettingsPage extends Component
         ConsoleAudit::record('settings.notification-test', 'Sent an Apprise test notification', 'settings', null);
     }
 
+    private function authorizePresenceMaintenance(): void
+    {
+        abort_unless(auth()->user()?->is_admin, 403);
+    }
+
     public function render()
     {
+        $isAdmin = (bool) auth()->user()?->is_admin;
+
         return view('livewire.settings-page', [
             'apiUrl' => rtrim(config('app.url'), '/'),
             'userGroups' => UserGroup::query()->orderBy('name')->get(['id', 'name']),
@@ -577,9 +584,9 @@ class SettingsPage extends Component
             'appriseDeviceGroups' => DeviceGroup::query()->orderBy('name')->get(['id', 'name']),
             'appriseDevices' => Device::query()->approved()->orderByRaw("COALESCE(NULLIF(alias, ''), NULLIF(hostname, ''), rustdesk_id)")->get(['id', 'rustdesk_id', 'alias', 'hostname']),
             'notificationDeliveries' => NotificationDelivery::query()->latest()->limit(10)->get(),
-            'presenceSnoozes' => DevicePresenceSnooze::query()->active()->orderBy('expires_at')->get(),
-            'presenceSnoozeGroups' => DeviceGroup::query()->orderBy('name')->get(['id', 'name']),
-            'presenceSnoozeDevices' => Device::query()->approved()->orderByRaw("COALESCE(NULLIF(alias, ''), NULLIF(hostname, ''), rustdesk_id)")->get(['id', 'rustdesk_id', 'alias', 'hostname']),
+            'presenceSnoozes' => $isAdmin ? DevicePresenceSnooze::query()->active()->orderBy('expires_at')->get() : collect(),
+            'presenceSnoozeGroups' => $isAdmin ? DeviceGroup::query()->orderBy('name')->get(['id', 'name']) : collect(),
+            'presenceSnoozeDevices' => $isAdmin ? Device::query()->approved()->orderByRaw("COALESCE(NULLIF(alias, ''), NULLIF(hostname, ''), rustdesk_id)")->get(['id', 'rustdesk_id', 'alias', 'hostname']) : collect(),
         ]);
     }
 }

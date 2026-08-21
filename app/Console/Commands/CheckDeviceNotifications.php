@@ -30,13 +30,11 @@ class CheckDeviceNotifications extends Command
         $recovered = 0;
 
         Device::query()->approved()->orderBy('id')->each(function (Device $device) use ($notifications, &$offline, &$recovered): void {
-            $state = DevicePresenceNotificationState::query()->firstOrNew(['device_id' => $device->id]);
-
             if ($device->isOnline()) {
-                if ($state->exists) {
-                    // A maintenance window suppresses both halves of a presence
-                    // transition. Clearing here also prevents a late recovery
-                    // after the window expires.
+                // Claim before sending: this one-statement conditional delete
+                // lets only the scheduler or a concurrent heartbeat own the
+                // paired recovery. A snooze still consumes the marker silently.
+                if (DevicePresenceNotificationState::consumeFor($device)) {
                     if (! DevicePresenceSnooze::isActiveFor($device)) {
                         $notifications->send(
                             'device.online',
@@ -47,12 +45,12 @@ class CheckDeviceNotifications extends Command
                         );
                         $recovered++;
                     }
-
-                    $state->delete();
                 }
 
                 return;
             }
+
+            $state = DevicePresenceNotificationState::query()->firstOrNew(['device_id' => $device->id]);
 
             if ($state->exists || DevicePresenceSnooze::isActiveFor($device) || ! $this->pastOfflineGrace($device)) {
                 return;
@@ -90,8 +88,9 @@ class CheckDeviceNotifications extends Command
             return;
         }
 
-        $state = DevicePresenceNotificationState::query()->where('device_id', $device->id)->first();
-        if ($state === null) {
+        // Atomically claim the marker before queuing transport work. A scheduler
+        // sweep racing this heartbeat receives false and emits nothing.
+        if (! DevicePresenceNotificationState::consumeFor($device)) {
             return;
         }
 
@@ -107,8 +106,6 @@ class CheckDeviceNotifications extends Command
                 $device,
             );
         }
-
-        $state->delete();
     }
 
     public static function deviceLabel(Device $device): string

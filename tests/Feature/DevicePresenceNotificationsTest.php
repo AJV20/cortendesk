@@ -5,6 +5,7 @@ use App\Models\Device;
 use App\Models\DeviceGroup;
 use App\Models\DevicePresenceNotificationState;
 use App\Models\DevicePresenceSnooze;
+use App\Models\Role;
 use App\Models\Setting;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -91,7 +92,19 @@ test('recovery is sent only for an outage whose offline delivery succeeded', fun
     expect(DevicePresenceNotificationState::query()->whereIn('device_id', [$delivered->id, $undelivered->id])->exists())->toBeFalse();
 });
 
-test('a settings administrator can create a bounded group maintenance snooze', function (): void {
+test('a recovery marker has exactly one atomic consumer', function (): void {
+    $device = presenceDevice();
+    DevicePresenceNotificationState::query()->create([
+        'device_id' => $device->id,
+        'offline_notified_at' => now(),
+    ]);
+
+    expect(DevicePresenceNotificationState::consumeFor($device))->toBeTrue()
+        ->and(DevicePresenceNotificationState::consumeFor($device))->toBeFalse()
+        ->and(DevicePresenceNotificationState::query()->where('device_id', $device->id)->exists())->toBeFalse();
+});
+
+test('an administrator can create a bounded group maintenance snooze', function (): void {
     Carbon::setTestNow('2026-08-21 12:00:00');
     $group = DeviceGroup::query()->create(['name' => 'Weekend work']);
     $admin = User::factory()->create(['is_admin' => true]);
@@ -109,4 +122,56 @@ test('a settings administrator can create a bounded group maintenance snooze', f
         'target_id' => $group->id,
         'expires_at' => now()->addMinutes(90),
     ]);
+});
+
+function delegatedSettingsManager(): User
+{
+    $role = Role::query()->create([
+        'name' => 'Settings manager',
+        'permissions' => ['setting' => 'rw'],
+    ]);
+
+    return User::factory()->create(['role_id' => $role->id]);
+}
+
+test('a delegated settings manager cannot create a presence snooze', function (): void {
+    $group = DeviceGroup::query()->create(['name' => 'Private maintenance']);
+    $manager = delegatedSettingsManager();
+
+    Livewire::actingAs($manager)
+        ->test(SettingsPage::class)
+        ->set('presenceSnoozeTargetType', 'group')
+        ->set('presenceSnoozeTargetId', $group->id)
+        ->call('createPresenceSnooze')
+        ->assertForbidden();
+
+    expect(DevicePresenceSnooze::query()->count())->toBe(0);
+});
+
+test('a delegated settings manager cannot end a presence snooze', function (): void {
+    $device = presenceDevice();
+    $snooze = DevicePresenceSnooze::snoozeDevice($device, now()->addHour());
+    $manager = delegatedSettingsManager();
+
+    Livewire::actingAs($manager)
+        ->test(SettingsPage::class)
+        ->call('clearPresenceSnooze', $snooze->id)
+        ->assertForbidden();
+
+    expect(DevicePresenceSnooze::query()->whereKey($snooze->id)->exists())->toBeTrue();
+});
+
+test('a delegated settings manager cannot see presence maintenance controls or targets', function (): void {
+    $group = DeviceGroup::query()->create(['name' => 'Secret fleet group']);
+    $device = presenceDevice(['hostname' => 'Secret fleet device']);
+    DevicePresenceSnooze::snoozeGroup($group, now()->addHour());
+    $manager = delegatedSettingsManager();
+
+    Livewire::actingAs($manager)
+        ->test(SettingsPage::class)
+        ->assertDontSee('Presence alert maintenance')
+        ->assertDontSee('Secret fleet group')
+        ->assertDontSee('Secret fleet device')
+        ->assertDontSee('Snooze alerts')
+        ->assertDontSee('End now');
 });

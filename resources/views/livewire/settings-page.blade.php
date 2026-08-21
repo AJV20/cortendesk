@@ -674,8 +674,9 @@
                             </form>
                         </div>
                     </div>
-                    <div class="card">
-                        <div class="card-header"><h5 class="card-title mb-0">Presence alert maintenance</h5></div>
+                    @if (auth()->user()?->is_admin)
+                        <div class="card">
+                            <div class="card-header"><h5 class="card-title mb-0">Presence alert maintenance</h5></div>
                         <div class="card-body">
                             <p class="text-muted fs-13">Temporarily suppress offline and recovery notifications for one device or an entire group. Security and login alerts are not affected.</p>
                             <form wire:submit="createPresenceSnooze" class="row g-2 align-items-end">
@@ -694,7 +695,8 @@
                                 @endforelse
                             </div>
                         </div>
-                    </div>
+                        </div>
+                    @endif
                     <div class="card">
                         <div class="card-header"><h5 class="card-title mb-0">Recent deliveries</h5></div>
                         <div class="card-body">
