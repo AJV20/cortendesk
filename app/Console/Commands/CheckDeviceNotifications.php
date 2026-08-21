@@ -3,23 +3,17 @@
 namespace App\Console\Commands;
 
 use App\Models\Device;
+use App\Models\DevicePresenceNotificationState;
+use App\Models\DevicePresenceSnooze;
+use App\Models\NotificationDelivery;
+use App\Models\Setting;
 use App\Services\AppriseNotifications;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Carbon;
 
-/**
- * Tracks presence transitions for notifications. Device rows intentionally do
- * not carry notification state: cache keys expire after a bounded retention,
- * preserve existing schema semantics, and make disabling/re-enabling alerts
- * innocuous. The online endpoint also clears an offline marker immediately,
- * which means recovery is prompt rather than waiting for this minute sweep.
- */
+/** Detect device presence transitions for Apprise notifications. */
 class CheckDeviceNotifications extends Command
 {
-    public const OFFLINE_MARKER_PREFIX = 'apprise:device-offline:';
-
-    private const MARKER_TTL_DAYS = 30;
-
     protected $signature = 'cortendesk:check-device-notifications';
 
     protected $description = 'Detect device offline/recovery transitions for Apprise notifications';
@@ -36,32 +30,51 @@ class CheckDeviceNotifications extends Command
         $recovered = 0;
 
         Device::query()->approved()->orderBy('id')->each(function (Device $device) use ($notifications, &$offline, &$recovered): void {
-            $marker = self::marker($device->rustdesk_id);
+            $state = DevicePresenceNotificationState::query()->firstOrNew(['device_id' => $device->id]);
 
-            if (! $device->isOnline()) {
-                if (Cache::add($marker, true, now()->addDays(self::MARKER_TTL_DAYS))) {
-                    $notifications->send(
-                        'device.offline',
-                        'Device offline',
-                        self::deviceLabel($device).' stopped heartbeating.',
-                        'device:'.$device->rustdesk_id,
-                        $device,
-                    );
-                    $offline++;
+            if ($device->isOnline()) {
+                if ($state->exists) {
+                    // A maintenance window suppresses both halves of a presence
+                    // transition. Clearing here also prevents a late recovery
+                    // after the window expires.
+                    if (! DevicePresenceSnooze::isActiveFor($device)) {
+                        $notifications->send(
+                            'device.online',
+                            'Device recovered',
+                            self::deviceLabel($device).' is online again.',
+                            'device:'.$device->rustdesk_id,
+                            $device,
+                        );
+                        $recovered++;
+                    }
+
+                    $state->delete();
                 }
 
                 return;
             }
 
-            if (Cache::pull($marker)) {
-                $notifications->send(
-                    'device.online',
-                    'Device recovered',
-                    self::deviceLabel($device).' is online again.',
-                    'device:'.$device->rustdesk_id,
-                    $device,
-                );
-                $recovered++;
+            if ($state->exists || DevicePresenceSnooze::isActiveFor($device) || ! $this->pastOfflineGrace($device)) {
+                return;
+            }
+
+            $delivery = $notifications->send(
+                'device.offline',
+                'Device offline',
+                self::deviceLabel($device).' stopped heartbeating.',
+                'device:'.$device->rustdesk_id,
+                $device,
+            );
+
+            // Only a confirmed send creates the durable outage marker. A failed,
+            // disabled, scoped-out, or cooldown-suppressed send cannot produce a
+            // recovery alert later, and can be retried by a future sweep.
+            if ($delivery?->status === NotificationDelivery::STATUS_SENT) {
+                DevicePresenceNotificationState::query()->create([
+                    'device_id' => $device->id,
+                    'offline_notified_at' => now(),
+                ]);
+                $offline++;
             }
         });
 
@@ -70,27 +83,32 @@ class CheckDeviceNotifications extends Command
         return self::SUCCESS;
     }
 
-    /** Notify recovery on the first heartbeat after the scheduled sweep marked a device offline. */
+    /** Notify recovery on the first heartbeat after a confirmed offline delivery. */
     public static function reportOnline(Device $device, AppriseNotifications $notifications): void
     {
-        if ($device->status !== Device::STATUS_ACTIVE || ! Cache::pull(self::marker($device->rustdesk_id))) {
+        if ($device->status !== Device::STATUS_ACTIVE) {
             return;
         }
 
-        // Called from the heartbeat and sysinfo endpoints, so this must not
-        // hold the response open while an unreachable endpoint times out.
-        $notifications->sendAfterResponse(
-            'device.online',
-            'Device recovered',
-            self::deviceLabel($device).' is online again.',
-            'device:'.$device->rustdesk_id,
-            $device,
-        );
-    }
+        $state = DevicePresenceNotificationState::query()->where('device_id', $device->id)->first();
+        if ($state === null) {
+            return;
+        }
 
-    public static function marker(string $rustdeskId): string
-    {
-        return self::OFFLINE_MARKER_PREFIX.sha1($rustdeskId);
+        // See handle(): a snooze closes the outage without emitting either side.
+        if (! DevicePresenceSnooze::isActiveFor($device)) {
+            // Called from heartbeat/sysinfo endpoints, so keep transport work
+            // after the HTTP response has been flushed.
+            $notifications->sendAfterResponse(
+                'device.online',
+                'Device recovered',
+                self::deviceLabel($device).' is online again.',
+                'device:'.$device->rustdesk_id,
+                $device,
+            );
+        }
+
+        $state->delete();
     }
 
     public static function deviceLabel(Device $device): string
@@ -98,5 +116,19 @@ class CheckDeviceNotifications extends Command
         $name = trim((string) ($device->alias ?: $device->hostname));
 
         return $name === '' ? 'Device '.$device->rustdesk_id : $name.' ('.$device->rustdesk_id.')';
+    }
+
+    private function pastOfflineGrace(Device $device): bool
+    {
+        $offlineSince = $device->last_online_at?->copy()->addSeconds(Device::onlineWindow())
+            ?? $device->created_at;
+
+        return $offlineSince instanceof Carbon
+            && $offlineSince->addMinutes($this->offlineGraceMinutes())->lte(now());
+    }
+
+    private function offlineGraceMinutes(): int
+    {
+        return max(0, min(1440, (int) Setting::get('apprise_offline_grace_minutes', '0')));
     }
 }
