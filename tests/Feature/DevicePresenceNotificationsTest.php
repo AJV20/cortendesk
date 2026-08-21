@@ -10,7 +10,9 @@ use App\Models\Setting;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Livewire\Livewire;
 
@@ -102,6 +104,101 @@ test('a recovery marker has exactly one atomic consumer', function (): void {
     expect(DevicePresenceNotificationState::consumeFor($device))->toBeTrue()
         ->and(DevicePresenceNotificationState::consumeFor($device))->toBeFalse()
         ->and(DevicePresenceNotificationState::query()->where('device_id', $device->id)->exists())->toBeFalse();
+});
+
+test('only one contender can claim an offline delivery and only its token can mark it delivered', function (): void {
+    $device = presenceDevice();
+
+    $firstClaim = DevicePresenceNotificationState::claimOfflineFor($device);
+    $secondClaim = DevicePresenceNotificationState::claimOfflineFor($device);
+
+    expect($firstClaim)->toBeString()->not->toBe('')
+        ->and($secondClaim)->toBeNull()
+        ->and(DevicePresenceNotificationState::markDelivered($device, $firstClaim))->toBeTrue()
+        ->and(DevicePresenceNotificationState::query()->where('device_id', $device->id)->value('offline_notified_at'))->not->toBeNull();
+});
+
+test('a stale pending offline claim can be reclaimed but a fresh claim cannot', function (): void {
+    Carbon::setTestNow('2026-08-21 12:00:00');
+    $device = presenceDevice();
+    $staleToken = DevicePresenceNotificationState::claimOfflineFor($device);
+
+    expect(DevicePresenceNotificationState::claimOfflineFor($device))->toBeNull();
+
+    Carbon::setTestNow(now()->addSeconds(DevicePresenceNotificationState::CLAIM_TIMEOUT_SECONDS + 1));
+    $replacement = DevicePresenceNotificationState::claimOfflineFor($device);
+
+    expect($replacement)->toBeString()->not->toBe($staleToken)
+        ->and(DevicePresenceNotificationState::markDelivered($device, $staleToken))->toBeFalse()
+        ->and(DevicePresenceNotificationState::markDelivered($device, $replacement))->toBeTrue();
+});
+
+test('an offline device with a legacy cache marker is migrated without a duplicate offline alert', function (): void {
+    Carbon::setTestNow('2026-08-21 12:00:00');
+    $device = presenceDevice(['rustdesk_id' => 'legacy-offline']);
+    Cache::put('apprise:device-offline:'.sha1($device->rustdesk_id), true, now()->addDays(30));
+
+    $this->artisan('cortendesk:check-device-notifications')->assertSuccessful();
+
+    Http::assertNothingSent();
+    expect(DevicePresenceNotificationState::query()->where('device_id', $device->id)->value('offline_notified_at'))->not->toBeNull();
+});
+
+test('an online device atomically consumes a legacy marker and sends at most one recovery', function (): void {
+    Carbon::setTestNow('2026-08-21 12:00:00');
+    $device = presenceDevice(['rustdesk_id' => 'legacy-recovered', 'last_online_at' => now()]);
+    $key = 'apprise:device-offline:'.sha1($device->rustdesk_id);
+    Cache::put($key, true, now()->addDays(30));
+
+    $this->artisan('cortendesk:check-device-notifications')->assertSuccessful();
+    $this->artisan('cortendesk:check-device-notifications')->assertSuccessful();
+
+    Http::assertSentCount(1);
+    expect(Cache::has($key))->toBeFalse();
+});
+
+test('scheduled sweeps prune expired snoozes and aged orphaned targets', function (): void {
+    Carbon::setTestNow('2026-08-21 12:00:00');
+    $device = presenceDevice();
+    $expired = DevicePresenceSnooze::snoozeDevice($device, now()->subSecond());
+    $orphan = DevicePresenceSnooze::query()->create([
+        'target_type' => DevicePresenceSnooze::TARGET_DEVICE,
+        'target_id' => 999999,
+        'expires_at' => now()->addHour(),
+        'created_at' => now()->subDays(7)->subSecond(),
+        'updated_at' => now(),
+    ]);
+    DevicePresenceSnooze::query()->whereKey($orphan->id)->update(['created_at' => now()->subDays(7)->subSecond()]);
+
+    $this->artisan('cortendesk:check-device-notifications')->assertSuccessful();
+
+    expect(DevicePresenceSnooze::query()->whereKey($expired->id)->exists())->toBeFalse()
+        ->and(DevicePresenceSnooze::query()->whereKey($orphan->id)->exists())->toBeFalse();
+});
+
+test('only the owner of a pending claim can release it', function (): void {
+    $device = presenceDevice();
+    $claim = DevicePresenceNotificationState::claimOfflineFor($device);
+
+    expect(DevicePresenceNotificationState::releaseClaim($device, 'not-'.$claim))->toBeFalse()
+        ->and(DevicePresenceNotificationState::query()->where('device_id', $device->id)->exists())->toBeTrue()
+        ->and(DevicePresenceNotificationState::releaseClaim($device, $claim))->toBeTrue()
+        ->and(DevicePresenceNotificationState::query()->where('device_id', $device->id)->exists())->toBeFalse();
+});
+
+test('a sweep preloads snoozes and notification state instead of querying them per device', function (): void {
+    Carbon::setTestNow('2026-08-21 12:00:00');
+    presenceDevice(['rustdesk_id' => 'batch-one']);
+    presenceDevice(['rustdesk_id' => 'batch-two']);
+    $queries = [];
+    DB::listen(function ($query) use (&$queries): void {
+        $queries[] = $query->sql;
+    });
+
+    $this->artisan('cortendesk:check-device-notifications')->assertSuccessful();
+
+    expect(collect($queries)->filter(fn (string $sql) => str_starts_with(strtolower($sql), 'select') && str_contains($sql, 'device_presence_notification_states'))->count())->toBeLessThanOrEqual(1)
+        ->and(collect($queries)->filter(fn (string $sql) => str_starts_with(strtolower($sql), 'select') && str_contains($sql, 'device_presence_snoozes'))->count())->toBeLessThanOrEqual(1);
 });
 
 test('an administrator can create a bounded group maintenance snooze', function (): void {

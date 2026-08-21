@@ -35,6 +35,40 @@ class DevicePresenceSnooze extends Model
         return self::put(self::TARGET_GROUP, (int) $group->id, $expiresAt);
     }
 
+    /** Remove expired windows and bounded old targets deleted outside normal UI flows. */
+    public static function pruneForSweep(): void
+    {
+        static::query()->where('expires_at', '<=', now())->delete();
+
+        static::query()
+            ->where('created_at', '<=', now()->subDays(7))
+            ->where(function (Builder $query): void {
+                $query->where(function (Builder $query): void {
+                    $query->where('target_type', self::TARGET_DEVICE)
+                        ->whereNotExists(fn ($subquery) => $subquery->selectRaw('1')
+                            ->from('devices')
+                            ->whereColumn('devices.id', 'device_presence_snoozes.target_id'));
+                })->orWhere(function (Builder $query): void {
+                    $query->where('target_type', self::TARGET_GROUP)
+                        ->whereNotExists(fn ($subquery) => $subquery->selectRaw('1')
+                            ->from('device_groups')
+                            ->whereColumn('device_groups.id', 'device_presence_snoozes.target_id'));
+                });
+            })->delete();
+    }
+
+    /** @return array{device: array<int, true>, group: array<int, true>} */
+    public static function activeTargets(): array
+    {
+        $targets = [self::TARGET_DEVICE => [], self::TARGET_GROUP => []];
+
+        static::query()->active()->get(['target_type', 'target_id'])->each(function (self $snooze) use (&$targets): void {
+            $targets[$snooze->target_type][(int) $snooze->target_id] = true;
+        });
+
+        return $targets;
+    }
+
     public static function isActiveFor(Device $device): bool
     {
         return self::query()->active()->where(function (Builder $query) use ($device): void {
