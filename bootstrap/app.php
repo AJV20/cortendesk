@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\HealthController;
 use App\Http\Middleware\ApiTokenCan;
 use App\Http\Middleware\ConsoleCan;
 use App\Http\Middleware\EnsureAdmin;
@@ -13,6 +14,7 @@ use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Route;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -20,6 +22,12 @@ return Application::configure(basePath: dirname(__DIR__))
         api: __DIR__.'/../routes/api.php',
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
+        then: function (): void {
+            // These public probes intentionally bypass the web middleware group:
+            // liveness must not require session or database access.
+            Route::get('/health/live', [HealthController::class, 'live'])->middleware('throttle:120,1');
+            Route::get('/health/ready', [HealthController::class, 'ready'])->middleware('throttle:30,1');
+        },
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([

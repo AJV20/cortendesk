@@ -75,6 +75,6 @@ EXPOSE 8080 21115 21116 21116/udp 21117 21118 21119
 VOLUME /data
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s \
-    CMD wget -q -O /dev/null http://127.0.0.1:8080/login || exit 1
+    CMD wget -q -O /dev/null http://127.0.0.1:8080/health/ready || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
