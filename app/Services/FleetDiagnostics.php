@@ -17,7 +17,7 @@ class FleetDiagnostics
     {
         $database = $this->databaseIsAvailable();
         $idServer = $database && $this->configuredServerIsAvailable('id_server', 21116);
-        $relayServer = $database && $this->configuredServerIsAvailable('relay_server', 21117);
+        $relayServer = $database && $this->relayPoolIsAvailable();
 
         return [
             'ready' => $database && $idServer && $relayServer,
@@ -132,6 +132,23 @@ class FleetDiagnostics
         $server = $this->serverProbe($key, $defaultPort);
 
         return ! $server['configured'] || $server['ok'];
+    }
+
+    /**
+     * Every configured relay in the active pool is required; an empty pool is
+     * intentionally not a readiness dependency.
+     */
+    private function relayPoolIsAvailable(): bool
+    {
+        foreach (Setting::relayServers() as $relay) {
+            [$host, $port] = $this->parseServer($relay['address'], 21117);
+
+            if ($host !== '' && ! $this->tcp->check($host, $port, 1.0)['ok']) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function serverProbe(string $key, int $defaultPort): array

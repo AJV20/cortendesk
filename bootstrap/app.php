@@ -13,6 +13,7 @@ use App\Models\TrustedDevice;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Middleware\TrustProxies;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -24,8 +25,9 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
         then: function (): void {
             // These public probes intentionally bypass the web middleware group:
-            // liveness must not require session or database access.
-            Route::get('/health/live', [HealthController::class, 'live'])->middleware('throttle:120,1');
+            // Liveness must remain process/request-only: a database-backed cache
+            // makes the normal throttle middleware a database dependency.
+            Route::get('/health/live', [HealthController::class, 'live']);
             Route::get('/health/ready', [HealthController::class, 'ready'])->middleware('throttle:30,1');
         },
     )
@@ -61,7 +63,7 @@ return Application::configure(basePath: dirname(__DIR__))
         // here meant TRUSTED_PROXIES in .env was silently ignored in production
         // (reported in #7).
         $middleware->replace(
-            \Illuminate\Http\Middleware\TrustProxies::class,
+            TrustProxies::class,
             TrustConfiguredProxies::class,
         );
     })
