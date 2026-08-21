@@ -31,6 +31,30 @@ test('liveness remains process-only when the default database cache is unavailab
         ->assertExactJson(['live' => true]);
 });
 
+test('readiness returns 503 dependency booleans when the database and database cache are unavailable', function () {
+    config()->set('database.default', 'health_unavailable');
+    config()->set('database.connections.health_unavailable', [
+        'driver' => 'sqlite',
+        'database' => '/tmp/cortendesk-health-unavailable/database.sqlite',
+        'prefix' => '',
+        'foreign_key_constraints' => true,
+    ]);
+    config()->set('cache.default', 'database');
+    config()->set('cache.stores.database.connection', 'health_unavailable');
+    config()->set('cache.stores.database.table', 'unavailable_cache');
+    app('db')->purge('health_unavailable');
+    app('cache')->forgetDriver('database');
+
+    $this->getJson('/health/ready')
+        ->assertServiceUnavailable()
+        ->assertExactJson([
+            'ready' => false,
+            'database' => false,
+            'id_server' => false,
+            'relay_server' => false,
+        ]);
+});
+
 test('readiness returns only dependency booleans when every configured relay in the operative pool is available', function () {
     Setting::put('relay_servers', json_encode([
         ['address' => 'relay-one.example.test:21117', 'geo' => 'one'],

@@ -24,11 +24,13 @@ return Application::configure(basePath: dirname(__DIR__))
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
         then: function (): void {
-            // These public probes intentionally bypass the web middleware group:
-            // Liveness must remain process/request-only: a database-backed cache
-            // makes the normal throttle middleware a database dependency.
+            // These public probes intentionally bypass the web middleware group.
+            // A normal throttle can use a database-backed cache before either
+            // controller runs, masking an outage as a 500 instead of readiness's
+            // documented 503. Keep both paths dependency-free until readiness
+            // explicitly checks its dependencies.
             Route::get('/health/live', [HealthController::class, 'live']);
-            Route::get('/health/ready', [HealthController::class, 'ready'])->middleware('throttle:30,1');
+            Route::get('/health/ready', [HealthController::class, 'ready']);
         },
     )
     ->withMiddleware(function (Middleware $middleware): void {
