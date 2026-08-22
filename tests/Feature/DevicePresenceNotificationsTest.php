@@ -1,5 +1,6 @@
 <?php
 
+use App\Console\Commands\CheckDeviceNotifications;
 use App\Livewire\SettingsPage;
 use App\Models\Device;
 use App\Models\DeviceGroup;
@@ -8,6 +9,7 @@ use App\Models\DevicePresenceSnooze;
 use App\Models\Role;
 use App\Models\Setting;
 use App\Models\User;
+use App\Services\AppriseNotifications;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -155,6 +157,64 @@ test('an online device atomically consumes a legacy marker and sends at most one
 
     Http::assertSentCount(1);
     expect(Cache::has($key))->toBeFalse();
+});
+
+test('a stale legacy marker paired with delivered state cannot send a second recovery', function (): void {
+    Carbon::setTestNow('2026-08-21 12:00:00');
+    $device = presenceDevice(['rustdesk_id' => 'legacy-and-durable-recovered', 'last_online_at' => now()]);
+    $key = 'apprise:device-offline:'.sha1($device->rustdesk_id);
+    DevicePresenceNotificationState::recordLegacyOffline($device);
+    Cache::put($key, true, now()->addDays(30));
+
+    $this->artisan('cortendesk:check-device-notifications')->assertSuccessful();
+    $this->artisan('cortendesk:check-device-notifications')->assertSuccessful();
+
+    Http::assertSentCount(1);
+    expect(Cache::has($key))->toBeFalse()
+        ->and(DevicePresenceNotificationState::query()->where('device_id', $device->id)->exists())->toBeFalse();
+});
+
+test('a legacy marker claim makes a concurrent recovery lose without resurrecting durable state', function (): void {
+    Carbon::setTestNow('2026-08-21 12:00:00');
+    $device = presenceDevice(['rustdesk_id' => 'legacy-offline-online-race']);
+    $key = 'apprise:device-offline:'.sha1($device->rustdesk_id);
+    Cache::put($key, true, now()->addDays(30));
+
+    $sweepClaim = DevicePresenceNotificationState::claimLegacyMarkerFor($device);
+
+    expect($sweepClaim)->toBeString()->not->toBe('')
+        ->and(DevicePresenceNotificationState::claimLegacyMarkerFor($device))->toBeNull();
+
+    // The online heartbeat loses the sweep's shared claim and must not send a
+    // recovery. The competing sweep also cannot resurrect a durable marker.
+    CheckDeviceNotifications::reportOnline($device, app(AppriseNotifications::class));
+    Http::assertNothingSent();
+
+    $this->artisan('cortendesk:check-device-notifications')->assertSuccessful();
+
+    expect(DevicePresenceNotificationState::query()->where('device_id', $device->id)->exists())->toBeFalse()
+        ->and(DevicePresenceNotificationState::convertClaimedLegacyMarkerFor($device, $sweepClaim))->toBeTrue();
+
+    expect(Cache::has($key))->toBeFalse()
+        ->and(DevicePresenceNotificationState::query()->where('device_id', $device->id)->value('offline_notified_at'))->not->toBeNull()
+        ->and(DevicePresenceNotificationState::claimLegacyMarkerFor($device))->toBeFalse()
+        ->and(DevicePresenceNotificationState::consumeFor($device))->toBeTrue()
+        ->and(DevicePresenceNotificationState::query()->where('device_id', $device->id)->exists())->toBeFalse();
+});
+
+test('an expired legacy claim can be recovered only by its replacement token', function (): void {
+    Carbon::setTestNow('2026-08-21 12:00:00');
+    $device = presenceDevice(['rustdesk_id' => 'legacy-claim-expiry']);
+    Cache::put('apprise:device-offline:'.sha1($device->rustdesk_id), true, now()->addDays(30));
+
+    $expired = DevicePresenceNotificationState::claimLegacyMarkerFor($device);
+    Carbon::setTestNow(now()->addSeconds(DevicePresenceNotificationState::CLAIM_TIMEOUT_SECONDS + 1));
+    $replacement = DevicePresenceNotificationState::claimLegacyMarkerFor($device);
+
+    expect($expired)->toBeString()
+        ->and($replacement)->toBeString()->not->toBe($expired)
+        ->and(DevicePresenceNotificationState::consumeClaimedLegacyMarkerFor($device, $expired))->toBeFalse()
+        ->and(DevicePresenceNotificationState::consumeClaimedLegacyMarkerFor($device, $replacement))->toBeTrue();
 });
 
 test('scheduled sweeps prune expired snoozes and aged orphaned targets', function (): void {

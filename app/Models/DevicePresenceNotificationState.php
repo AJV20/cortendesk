@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 
 class DevicePresenceNotificationState extends Model
@@ -18,6 +19,75 @@ class DevicePresenceNotificationState extends Model
             'offline_notified_at' => 'datetime',
             'offline_claimed_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Atomically claim a bounded legacy cache marker for either conversion or
+     * recovery. Null means another contender owns the short-lived claim; false
+     * means no marker exists. The owner must consume before acting.
+     */
+    public static function claimLegacyMarkerFor(Device $device): string|false|null
+    {
+        $token = (string) Str::uuid();
+        $lock = Cache::lock(static::legacyClaimKey($device), self::CLAIM_TIMEOUT_SECONDS, $token);
+
+        if (! $lock->get()) {
+            return null;
+        }
+
+        if (! Cache::has(static::legacyMarkerKey($device))) {
+            $lock->release();
+
+            return false;
+        }
+
+        return $token;
+    }
+
+    /**
+     * Consume a legacy marker only while this token still owns its claim.
+     *
+     * A process dying before this pull leaves the original marker recoverable
+     * when its lock expires. Once pulled, recovery is deliberately at-most-once.
+     */
+    public static function consumeClaimedLegacyMarkerFor(Device $device, string $token): bool
+    {
+        $lock = Cache::lock(static::legacyClaimKey($device), self::CLAIM_TIMEOUT_SECONDS, $token);
+
+        if (! $lock->isOwnedByCurrentProcess()) {
+            return false;
+        }
+
+        try {
+            return Cache::pull(static::legacyMarkerKey($device)) !== null;
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /**
+     * Consume the marker and materialize its delivered state before releasing
+     * the shared claim, so recovery cannot delete state between those steps.
+     */
+    public static function convertClaimedLegacyMarkerFor(Device $device, string $token): bool
+    {
+        $lock = Cache::lock(static::legacyClaimKey($device), self::CLAIM_TIMEOUT_SECONDS, $token);
+
+        if (! $lock->isOwnedByCurrentProcess()) {
+            return false;
+        }
+
+        try {
+            if (Cache::pull(static::legacyMarkerKey($device)) === null) {
+                return false;
+            }
+
+            static::recordLegacyOffline($device);
+
+            return true;
+        } finally {
+            $lock->release();
+        }
     }
 
     /** Preserve a delivered offline marker from the legacy 30-day cache key. */
@@ -102,6 +172,16 @@ class DevicePresenceNotificationState extends Model
             ->where('device_id', $device->id)
             ->whereNotNull('offline_notified_at')
             ->delete() === 1;
+    }
+
+    private static function legacyClaimKey(Device $device): string
+    {
+        return 'apprise:device-offline-claim:'.sha1($device->rustdesk_id);
+    }
+
+    private static function legacyMarkerKey(Device $device): string
+    {
+        return 'apprise:device-offline:'.sha1($device->rustdesk_id);
     }
 
     public function device(): BelongsTo

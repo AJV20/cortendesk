@@ -10,7 +10,6 @@ use App\Models\Setting;
 use App\Services\AppriseNotifications;
 use Illuminate\Console\Command;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Facades\Cache;
 
 /** Detect device presence transitions for Apprise notifications. */
 class CheckDeviceNotifications extends Command
@@ -43,8 +42,7 @@ class CheckDeviceNotifications extends Command
                 || ($device->device_group_id !== null && isset($snoozedTargets[DevicePresenceSnooze::TARGET_GROUP][$device->device_group_id]));
 
             if ($device->isOnline()) {
-                if (($state?->offline_notified_at !== null || Cache::has(self::legacyMarkerKey($device)))
-                    && self::consumeRecoveryFor($device)) {
+                if (self::consumeRecoveryFor($device)) {
                     // Recovery is at-most-once: consumeRecoveryFor removes the
                     // marker before transport, so a failed recovery is never
                     // retried and concurrent commands cannot duplicate it.
@@ -67,10 +65,16 @@ class CheckDeviceNotifications extends Command
                 return;
             }
 
-            if (Cache::has(self::legacyMarkerKey($device))) {
-                // Keep the bounded 30-day legacy marker until online. The
-                // durable marker prevents another offline send after upgrade.
-                DevicePresenceNotificationState::recordLegacyOffline($device);
+            // The legacy marker belongs to exactly one contender. A sweep
+            // winner consumes it before materializing delivered state; an
+            // online recovery winner consumes it for its sole recovery.
+            $legacyClaim = DevicePresenceNotificationState::claimLegacyMarkerFor($device);
+            if ($legacyClaim === null) {
+                return;
+            }
+
+            if (is_string($legacyClaim)) {
+                DevicePresenceNotificationState::convertClaimedLegacyMarkerFor($device, $legacyClaim);
 
                 return;
             }
@@ -130,40 +134,27 @@ class CheckDeviceNotifications extends Command
         return $name === '' ? 'Device '.$device->rustdesk_id : $name.' ('.$device->rustdesk_id.')';
     }
 
-    /** Consume a durable marker or the bounded legacy cache fallback once. */
+    /** Consume a durable marker or the shared legacy claim exactly once. */
     private static function consumeRecoveryFor(Device $device): bool
     {
-        if (DevicePresenceNotificationState::consumeFor($device)) {
-            Cache::forget(self::legacyMarkerKey($device));
+        $legacyClaim = DevicePresenceNotificationState::claimLegacyMarkerFor($device);
 
-            return true;
-        }
-
-        // Cache::pull() alone is not atomic on every supported cache driver.
-        // Claim the legacy marker first; a crashed consumer only delays retry by
-        // this short timeout while the original 30-day marker remains bounded.
-        $claimKey = self::legacyClaimKey($device);
-        if (! Cache::add($claimKey, true, DevicePresenceNotificationState::CLAIM_TIMEOUT_SECONDS)) {
+        // A claimant may be converting the marker into durable state. Let that
+        // winner finish rather than deleting state it is about to materialize.
+        if ($legacyClaim === null) {
             return false;
         }
 
-        if (Cache::pull(self::legacyMarkerKey($device)) !== null) {
-            return true;
+        if ($legacyClaim === false) {
+            return DevicePresenceNotificationState::consumeFor($device);
         }
 
-        Cache::forget($claimKey);
+        // Keep the legacy lock through both deletions. This also cleans up old
+        // upgrades that had durable state plus the original cache marker.
+        $durableRecovery = DevicePresenceNotificationState::consumeFor($device);
+        $legacyRecovery = DevicePresenceNotificationState::consumeClaimedLegacyMarkerFor($device, $legacyClaim);
 
-        return false;
-    }
-
-    private static function legacyClaimKey(Device $device): string
-    {
-        return 'apprise:device-offline-claim:'.sha1($device->rustdesk_id);
-    }
-
-    private static function legacyMarkerKey(Device $device): string
-    {
-        return 'apprise:device-offline:'.sha1($device->rustdesk_id);
+        return $durableRecovery || $legacyRecovery;
     }
 
     private function pastOfflineGrace(Device $device, int $graceMinutes): bool
