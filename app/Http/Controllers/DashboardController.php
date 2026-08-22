@@ -18,10 +18,13 @@ class DashboardController extends Controller
     public function index(Request $request): View
     {
         $user = $request->user();
+        $canAudit = $user->consoleAllows('audit', 'r');
 
         // Non-admins: everything on the dashboard is scoped to the devices
-        // they can see. Admins: null = no scope (whole fleet).
-        $visibleIds = $user->seesAllDevices()
+        // they can see. Admins: null = no scope (whole fleet). Do not resolve
+        // audit scope at all when the role cannot view logs: even aggregate
+        // connection activity is part of the gated Logs area.
+        $visibleIds = ! $canAudit || $user->seesAllDevices()
             ? null
             : Device::query()->visibleTo($user)->pluck('rustdesk_id')->all();
 
@@ -35,12 +38,12 @@ class DashboardController extends Controller
         return view('overview', [
             'range' => $range,
             'ranges' => self::RANGES,
-            'connectionSeries' => $this->connectionSeries($visibleIds, $range),
+            'connectionSeries' => $canAudit ? $this->connectionSeries($visibleIds, $range) : null,
             'platformMix' => $this->platformMix($user),
             'versionCounts' => $this->versionCounts($user),
             // Alarm detail is an audit screen; the count tile is fleet-level but
             // the rows name devices, so this panel is gated. null = not allowed.
-            'recentAlarms' => $user->consoleAllows('audit', 'r')
+            'recentAlarms' => $canAudit
                 ? $this->recentAlarms($visibleIds)
                 : null,
         ]);

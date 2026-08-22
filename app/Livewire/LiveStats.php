@@ -15,8 +15,11 @@ class LiveStats extends Component
     {
         $user = auth()->user();
         $admin = $user->seesAllDevices();
+        $canAudit = $user->consoleAllows('audit', 'r');
 
-        $visibleIds = $admin ? null : Device::query()->visibleTo($user)->pluck('rustdesk_id')->all();
+        $visibleIds = ! $canAudit || $admin
+            ? null
+            : Device::query()->visibleTo($user)->pluck('rustdesk_id')->all();
 
         $devices = Device::query()->visibleTo($user)->count();
         $online = Device::query()->visibleTo($user)->online()->count();
@@ -33,26 +36,29 @@ class LiveStats extends Component
         $connections = fn () => AuditConnection::query()
             ->when($visibleIds !== null, fn ($q) => $q->whereIn('rustdesk_id', $visibleIds));
 
-        $connectionsToday = $connections()->whereDate('created_at', today())->count();
-        $connectionsYesterday = $connections()->whereDate('created_at', today()->subDay())->count();
+        $connectionsToday = $canAudit ? $connections()->whereDate('created_at', today())->count() : null;
+        $connectionsYesterday = $canAudit ? $connections()->whereDate('created_at', today()->subDay())->count() : null;
 
         // Deliberately the same predicate as App\Livewire\ActiveSessions, so the
         // tile and the table underneath it can never disagree.
-        $sessions = $connections()
-            ->whereNull('closed_at')
-            ->whereNotNull('from_peer')
-            ->where('from_peer', '!=', '')
-            ->where('created_at', '>=', now()->subDay())
-            ->count();
+        $sessions = $canAudit
+            ? $connections()
+                ->whereNull('closed_at')
+                ->whereNotNull('from_peer')
+                ->where('from_peer', '!=', '')
+                ->where('created_at', '>=', now()->subDay())
+                ->count()
+            : null;
 
         $alarms = fn () => AlarmLog::query()
             ->when($visibleIds !== null, fn ($q) => $q->whereIn('rustdesk_id', $visibleIds))
             ->where('created_at', '>=', now()->subDay());
 
-        $alarms24h = $alarms()->count();
+        $alarms24h = $canAudit ? $alarms()->count() : null;
 
         return view('livewire.live-stats', [
             'admin' => $admin,
+            'canAudit' => $canAudit,
             'devices' => $devices,
             'online' => $online,
             'onlinePct' => $devices > 0 ? (int) round($online / $devices * 100) : null,
@@ -69,10 +75,10 @@ class LiveStats extends Component
                     ->count('user_id')
                 : null,
             'connectionsToday' => $connectionsToday,
-            'connectionTrend' => $connectionsToday - $connectionsYesterday,
+            'connectionTrend' => $canAudit ? $connectionsToday - $connectionsYesterday : null,
             'sessions' => $sessions,
             'alarms24h' => $alarms24h,
-            'lastAlarmAt' => $alarms24h > 0 ? $alarms()->latest('id')->value('created_at') : null,
+            'lastAlarmAt' => $canAudit && $alarms24h > 0 ? $alarms()->latest('id')->value('created_at') : null,
         ]);
     }
 }

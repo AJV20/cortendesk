@@ -27,6 +27,7 @@
     @livewire(App\Livewire\LiveStats::class)
 
     <div class="row rd-row-equal">
+        @if ($connectionSeries !== null)
         <div class="col-xl-8">
             <div class="card">
                 <div class="card-header d-flex flex-wrap align-items-center gap-2">
@@ -50,8 +51,9 @@
                 </div>
             </div>
         </div>
+        @endif
 
-        <div class="col-xl-4">
+        <div class="{{ $connectionSeries !== null ? 'col-xl-4' : 'col-12' }}">
             @php
                 $platformTotal = array_sum($platformMix['values']);
                 // Same order as the chart series palette in the script below.
@@ -94,17 +96,19 @@
     </div>
 
     @php
-        // Alerts is permission-gated (the controller nulls it without audit
-        // read), so the remaining two cards have to widen to keep the row at
-        // twelve columns — an equal-height row is not an equal-WIDTH one.
+        // Every audit-derived panel is permission-gated. The remaining fleet
+        // card widens when Logs access is absent.
+        $hasAudit = $connectionSeries !== null;
         $hasAlerts = $recentAlarms !== null;
     @endphp
     <div class="row rd-row-equal">
+        @if ($hasAudit)
         <div class="{{ $hasAlerts ? 'col-xl-5' : 'col-xl-7' }}">
             @livewire(App\Livewire\ActiveSessions::class)
         </div>
+        @endif
 
-        <div class="{{ $hasAlerts ? 'col-xl-4' : 'col-xl-5' }}">
+        <div class="{{ ! $hasAudit ? 'col-12' : ($hasAlerts ? 'col-xl-4' : 'col-xl-5') }}">
             @php
                 $versionTotal = array_sum($versionCounts['values']);
                 $versionMax = $versionCounts['values'] ? max($versionCounts['values']) : 0;
@@ -245,36 +249,38 @@
         charts = [];
         var t = theme();
 
-        // Daily connections, stacked by type. Bars thin out as the range grows
-        // so 90 days stays readable; a hairline gap separates the segments.
-        var days = connectionData.labels.length;
-        var connEl = document.querySelector("#chart-connections");
-        // Date labels need ~62px each. Ask for only as many ticks as the card
-        // is actually wide enough for, or 90 days collides into a smear.
-        var ticks = Math.max(3, Math.floor((connEl.clientWidth || 600) / 62));
+        if (connectionData) {
+            // Daily connections, stacked by type. Bars thin out as the range
+            // grows so 90 days stays readable; a hairline gap separates them.
+            var days = connectionData.labels.length;
+            var connEl = document.querySelector("#chart-connections");
+            // Date labels need ~62px each. Ask for only as many ticks as the
+            // card is actually wide enough for.
+            var ticks = Math.max(3, Math.floor((connEl.clientWidth || 600) / 62));
 
-        var conn = new ApexCharts(connEl, Object.assign(baseOptions(t), {
-            chart: Object.assign(baseOptions(t).chart, { type: "bar", height: 300, stacked: true }),
-            series: connectionData.series,
-            colors: t.series.slice(0, 3),
-            plotOptions: { bar: {
-                columnWidth: days > 60 ? "80%" : (days > 20 ? "62%" : "45%"),
-                borderRadius: 3,
-                borderRadiusApplication: "end",
-                borderRadiusWhenStacked: "last"
-            } },
-            stroke: { show: true, width: 2, colors: [t.surface] },
-            xaxis: {
-                categories: connectionData.labels,
-                tickAmount: Math.min(days, ticks),
-                axisBorder: { color: t.grid },
-                axisTicks: { show: false },
-                labels: { rotate: 0, hideOverlappingLabels: true }
-            },
-            yaxis: { labels: { formatter: function (v) { return Math.round(v); } } },
-            legend: Object.assign(baseOptions(t).legend, { position: "bottom", horizontalAlign: "left", offsetY: 4 })
-        }));
-        charts.push(conn);
+            var conn = new ApexCharts(connEl, Object.assign(baseOptions(t), {
+                chart: Object.assign(baseOptions(t).chart, { type: "bar", height: 300, stacked: true }),
+                series: connectionData.series,
+                colors: t.series.slice(0, 3),
+                plotOptions: { bar: {
+                    columnWidth: days > 60 ? "80%" : (days > 20 ? "62%" : "45%"),
+                    borderRadius: 3,
+                    borderRadiusApplication: "end",
+                    borderRadiusWhenStacked: "last"
+                } },
+                stroke: { show: true, width: 2, colors: [t.surface] },
+                xaxis: {
+                    categories: connectionData.labels,
+                    tickAmount: Math.min(days, ticks),
+                    axisBorder: { color: t.grid },
+                    axisTicks: { show: false },
+                    labels: { rotate: 0, hideOverlappingLabels: true }
+                },
+                yaxis: { labels: { formatter: function (v) { return Math.round(v); } } },
+                legend: Object.assign(baseOptions(t).legend, { position: "bottom", horizontalAlign: "left", offsetY: 4 })
+            }));
+            charts.push(conn);
+        }
 
         // Platform donut: wide hole carrying the total; identity is carried by
         // the .rd-legend list beside it, so Apex's own legend stays off.

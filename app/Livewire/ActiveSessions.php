@@ -2,6 +2,7 @@
 
 namespace App\Livewire;
 
+use App\Livewire\Concerns\AuthorizesConsole;
 use App\Models\AuditConnection;
 use App\Models\ConsoleAudit;
 use App\Models\Device;
@@ -9,6 +10,13 @@ use Livewire\Component;
 
 class ActiveSessions extends Component
 {
+    use AuthorizesConsole;
+
+    public function mount(): void
+    {
+        $this->authorizeConsole('audit', 'r');
+    }
+
     /**
      * Ask the controlled device to close a live session.
      *
@@ -20,6 +28,7 @@ class ActiveSessions extends Component
      */
     public function disconnect(int $id): void
     {
+        $this->authorizeConsole('audit', 'r');
         $user = auth()->user();
 
         $session = AuditConnection::query()
@@ -58,6 +67,9 @@ class ActiveSessions extends Component
 
     public function render()
     {
+        // Polls and Livewire updates are separate requests. Re-check so a role
+        // losing Logs access stops receiving session data immediately.
+        $this->authorizeConsole('audit', 'r');
         $user = auth()->user();
         $visibleIds = $user->seesAllDevices()
             ? null
