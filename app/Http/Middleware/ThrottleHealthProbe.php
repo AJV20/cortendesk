@@ -15,7 +15,10 @@ class ThrottleHealthProbe
     {
         try {
             $maximumAttempts = (int) config('health.probe_limits.'.$endpoint, 1);
-            $allowed = app(HealthProbeLimiter::class)->allows($endpoint, (string) $request->ip(), $maximumAttempts);
+            // Health probes are public load-shedding endpoints. A single bucket
+            // per endpoint is intentional: forwarded client addresses are not a
+            // safe identity when private reverse proxies are broadly trusted.
+            $allowed = app(HealthProbeLimiter::class)->allows($endpoint, 'global', $maximumAttempts);
         } catch (Throwable) {
             $allowed = true;
         }
@@ -34,6 +37,7 @@ class ThrottleHealthProbe
                 ? ['live' => false]
                 : ['ready' => false, 'database' => false, 'id_server' => false, 'relay_server' => false],
             429,
+            ['Retry-After' => '60'],
         );
     }
 }

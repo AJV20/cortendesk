@@ -3,11 +3,17 @@
 use App\Contracts\HealthProbeLimiter;
 use App\Contracts\TcpProbe;
 use App\Models\Setting;
+use App\Services\FileHealthProbeLimiter;
+use Illuminate\Contracts\Cache\Factory as CacheFactory;
+use Illuminate\Contracts\Cache\Lock;
+use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schema;
 
 beforeEach(function () {
     Cache::store('file')->flush();
+    Schema::dropIfExists('settings');
 
     Schema::create('settings', function ($table) {
         $table->string('key')->primary();
@@ -87,7 +93,45 @@ test('liveness is rate limited with a booleans-only liveness response', function
     $this->getJson('/health/live')->assertOk();
     $this->getJson('/health/live')
         ->assertTooManyRequests()
+        ->assertHeader('Retry-After', '60')
         ->assertExactJson(['live' => false]);
+});
+
+test('liveness uses one endpoint bucket despite forwarded client rotation from a private proxy', function () {
+    config()->set('health.probe_limits.live', 2);
+
+    $this->withServerVariables([
+        'REMOTE_ADDR' => '10.0.0.10',
+        'HTTP_X_FORWARDED_FOR' => '198.51.100.1',
+    ])->getJson('/health/live')->assertOk();
+
+    $this->withServerVariables([
+        'REMOTE_ADDR' => '10.0.0.10',
+        'HTTP_X_FORWARDED_FOR' => '198.51.100.2',
+    ])->getJson('/health/live')->assertOk();
+
+    $this->withServerVariables([
+        'REMOTE_ADDR' => '10.0.0.10',
+        'HTTP_X_FORWARDED_FOR' => '198.51.100.3',
+    ])->getJson('/health/live')
+        ->assertTooManyRequests()
+        ->assertHeader('Retry-After', '60')
+        ->assertExactJson(['live' => false]);
+});
+
+test('a contended limiter lock rejects rather than freely allowing the request', function () {
+    $lock = Mockery::mock(Lock::class);
+    $lock->shouldReceive('block')->once()
+        ->with(1, Mockery::type(Closure::class))
+        ->andThrow(new LockTimeoutException);
+
+    $store = Mockery::mock(Repository::class);
+    $store->shouldReceive('lock')->once()->andReturn($lock);
+
+    $cache = Mockery::mock(CacheFactory::class);
+    $cache->shouldReceive('store')->once()->with('file')->andReturn($store);
+
+    expect((new FileHealthProbeLimiter($cache))->allows('live', 'global', 1))->toBeFalse();
 });
 
 test('readiness has its own rate limit with a booleans-only readiness response', function () {
@@ -103,6 +147,7 @@ test('readiness has its own rate limit with a booleans-only readiness response',
     $this->getJson('/health/ready')->assertOk();
     $this->getJson('/health/ready')
         ->assertTooManyRequests()
+        ->assertHeader('Retry-After', '60')
         ->assertExactJson([
             'ready' => false,
             'database' => false,
