@@ -444,17 +444,17 @@
 
     {{-- "Move to Group" picker (issue #47) --}}
     @if ($groupPickerOpen)
-        <div class="modal fade show d-block" tabindex="-1" style="background: rgba(0,0,0,.6);" wire:keydown.escape="closeGroupPicker">
+        <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="move-group-title" style="background: rgba(0,0,0,.6);" wire:keydown.escape="closeGroupPicker">
             <div class="modal-dialog modal-dialog-centered">
                 <div class="modal-content">
                     <form wire:submit="moveSelectedToGroup">
                         <div class="modal-header">
-                            <h5 class="modal-title">Move {{ count($selected) }} {{ Str::plural('device', count($selected)) }} to a group</h5>
-                            <button type="button" class="btn-close" wire:click="closeGroupPicker"></button>
+                            <h5 id="move-group-title" class="modal-title">Move {{ count($selected) }} {{ Str::plural('device', count($selected)) }} to a group</h5>
+                            <button type="button" class="btn-close" aria-label="Close move to group dialog" wire:click="closeGroupPicker"></button>
                         </div>
                         <div class="modal-body">
-                            <label class="form-label">Device group</label>
-                            <select class="form-select @error('moveGroupId') is-invalid @enderror" wire:model="moveGroupId">
+                            <label class="form-label" for="move-group-id">Device group</label>
+                            <select id="move-group-id" class="form-select @error('moveGroupId') is-invalid @enderror" wire:model="moveGroupId">
                                 <option value="-1">Choose…</option>
                                 <option value="0">No group</option>
                                 @foreach ($groups as $group)

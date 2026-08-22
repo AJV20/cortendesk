@@ -172,6 +172,82 @@ test('a device manager bulk move with an empty selection does nothing', function
         ->and(ConsoleAudit::count())->toBe(0);
 });
 
+test('the move to group picker renders accessible dialog and form semantics', function () {
+    $manager = User::factory()->create();
+    $group = DeviceGroup::create(['name' => 'Accessible target']);
+    $manager->deviceGroups()->attach($group->id);
+    $device = Device::create([
+        'rustdesk_id' => 'accessibility',
+        'uuid' => 'accessible-picker',
+        'status' => Device::STATUS_ACTIVE,
+        'device_group_id' => $group->id,
+    ]);
+
+    $this->actingAs($manager);
+
+    Livewire::test(DeviceList::class)
+        ->set('selected', [(string) $device->id])
+        ->call('openGroupPicker')
+        ->assertSeeHtml('role="dialog"')
+        ->assertSeeHtml('aria-modal="true"')
+        ->assertSeeHtml('aria-labelledby="move-group-title"')
+        ->assertSeeHtml('id="move-group-title"')
+        ->assertSeeHtml('aria-label="Close move to group dialog"')
+        ->assertSeeHtml('for="move-group-id"')
+        ->assertSeeHtml('id="move-group-id"');
+});
+
+test('a forged inaccessible group target is rejected without mutation or audit', function () {
+    $manager = User::factory()->create();
+    $source = DeviceGroup::create(['name' => 'Source']);
+    $inaccessibleTarget = DeviceGroup::create(['name' => 'Inaccessible target']);
+    $manager->deviceGroups()->attach($source->id);
+    $device = Device::create([
+        'rustdesk_id' => 'forged-target',
+        'uuid' => 'forged-target',
+        'status' => Device::STATUS_ACTIVE,
+        'device_group_id' => $source->id,
+    ]);
+
+    $this->actingAs($manager);
+
+    Livewire::test(DeviceList::class)
+        ->set('selected', [(string) $device->id])
+        ->set('moveGroupId', $inaccessibleTarget->id)
+        ->call('moveSelectedToGroup')
+        ->assertHasErrors(['moveGroupId' => 'Pick an accessible device group.'])
+        ->assertSet('selected', [(string) $device->id])
+        ->assertSet('bulkResult', '');
+
+    expect($device->fresh()->device_group_id)->toBe($source->id)
+        ->and(ConsoleAudit::count())->toBe(0);
+});
+
+test('a missing move target is rejected without mutation or audit', function () {
+    $manager = User::factory()->create();
+    $source = DeviceGroup::create(['name' => 'Source']);
+    $manager->deviceGroups()->attach($source->id);
+    $device = Device::create([
+        'rustdesk_id' => 'missing-target',
+        'uuid' => 'missing-target',
+        'status' => Device::STATUS_ACTIVE,
+        'device_group_id' => $source->id,
+    ]);
+
+    $this->actingAs($manager);
+
+    Livewire::test(DeviceList::class)
+        ->set('selected', [(string) $device->id])
+        ->set('moveGroupId', -1)
+        ->call('moveSelectedToGroup')
+        ->assertHasErrors(['moveGroupId' => 'Pick a device group.'])
+        ->assertSet('selected', [(string) $device->id])
+        ->assertSet('bulkResult', '');
+
+    expect($device->fresh()->device_group_id)->toBe($source->id)
+        ->and(ConsoleAudit::count())->toBe(0);
+});
+
 test('a device manager can bulk remove visible selected devices from their group', function () {
     $manager = User::factory()->create();
     $source = DeviceGroup::create(['name' => 'Source']);
