@@ -8,6 +8,7 @@ use App\Http\Middleware\EnsureUserIsActive;
 use App\Http\Middleware\RequireEmailAddress;
 use App\Http\Middleware\RequireMailHealthy;
 use App\Http\Middleware\RequireTwoFactor;
+use App\Http\Middleware\ThrottleHealthProbe;
 use App\Http\Middleware\TrustConfiguredProxies;
 use App\Models\TrustedDevice;
 use Illuminate\Foundation\Application;
@@ -25,12 +26,10 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
         then: function (): void {
             // These public probes intentionally bypass the web middleware group.
-            // A normal throttle can use a database-backed cache before either
-            // controller runs, masking an outage as a 500 instead of readiness's
-            // documented 503. Keep both paths dependency-free until readiness
-            // explicitly checks its dependencies.
-            Route::get('/health/live', [HealthController::class, 'live']);
-            Route::get('/health/ready', [HealthController::class, 'ready']);
+            // Their dedicated limiter explicitly uses the persistent file cache,
+            // never the configured default store (which can be database-backed).
+            Route::get('/health/live', [HealthController::class, 'live'])->middleware('health-probe:live');
+            Route::get('/health/ready', [HealthController::class, 'ready'])->middleware('health-probe:ready');
         },
     )
     ->withMiddleware(function (Middleware $middleware): void {
@@ -40,6 +39,7 @@ return Application::configure(basePath: dirname(__DIR__))
             // Delegated console roles (PLAN D4). `admin` stays the super-admin
             // gate; `console-can` is the per-area one.
             'console-can' => ConsoleCan::class,
+            'health-probe' => ThrottleHealthProbe::class,
         ]);
         $middleware->appendToGroup('web', EnsureUserIsActive::class);
         // 2FA enrollment enforcement runs after the active-user check.

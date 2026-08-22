@@ -2,9 +2,11 @@
 
 namespace App\Providers;
 
+use App\Contracts\HealthProbeLimiter;
 use App\Contracts\TcpProbe;
 use App\Models\ApiToken;
 use App\Models\ClientToken;
+use App\Services\FileHealthProbeLimiter;
 use App\Services\SocketTcpProbe;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -18,6 +20,7 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->bind(TcpProbe::class, SocketTcpProbe::class);
+        $this->app->bind(HealthProbeLimiter::class, FileHealthProbeLimiter::class);
     }
 
     /**

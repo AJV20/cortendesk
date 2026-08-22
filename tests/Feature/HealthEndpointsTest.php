@@ -1,10 +1,14 @@
 <?php
 
+use App\Contracts\HealthProbeLimiter;
 use App\Contracts\TcpProbe;
 use App\Models\Setting;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schema;
 
 beforeEach(function () {
+    Cache::store('file')->flush();
+
     Schema::create('settings', function ($table) {
         $table->string('key')->primary();
         $table->text('value')->nullable();
@@ -13,6 +17,13 @@ beforeEach(function () {
 
     config()->set('cortendesk.id_server', 'id.example.test:21116');
     config()->set('cortendesk.relay_server', 'relay.example.test:21117');
+});
+
+test('health routes attach the dedicated probe limiter middleware', function () {
+    $routes = collect($this->app['router']->getRoutes()->getRoutes())->keyBy(fn ($route) => $route->uri());
+
+    expect($routes['health/live']->gatherMiddleware())->toContain('health-probe:live');
+    expect($routes['health/ready']->gatherMiddleware())->toContain('health-probe:ready');
 });
 
 test('liveness is public and proves the application can serve a request', function () {
@@ -25,6 +36,20 @@ test('liveness remains process-only when the default database cache is unavailab
     config()->set('cache.default', 'database');
     config()->set('cache.stores.database.table', 'unavailable_cache');
     app('cache')->forgetDriver('database');
+
+    $this->getJson('/health/live')
+        ->assertOk()
+        ->assertExactJson(['live' => true]);
+});
+
+test('liveness remains process-only when the health probe limiter backend fails', function () {
+    $this->app->instance(HealthProbeLimiter::class, new class implements HealthProbeLimiter
+    {
+        public function allows(string $endpoint, string $identity, int $maximumAttempts): bool
+        {
+            throw new RuntimeException('file cache is unavailable');
+        }
+    });
 
     $this->getJson('/health/live')
         ->assertOk()
@@ -47,6 +72,37 @@ test('readiness returns 503 dependency booleans when the database and database c
 
     $this->getJson('/health/ready')
         ->assertServiceUnavailable()
+        ->assertExactJson([
+            'ready' => false,
+            'database' => false,
+            'id_server' => false,
+            'relay_server' => false,
+        ]);
+});
+
+test('liveness is rate limited with a booleans-only liveness response', function () {
+    config()->set('health.probe_limits.live', 2);
+
+    $this->getJson('/health/live')->assertOk();
+    $this->getJson('/health/live')->assertOk();
+    $this->getJson('/health/live')
+        ->assertTooManyRequests()
+        ->assertExactJson(['live' => false]);
+});
+
+test('readiness has its own rate limit with a booleans-only readiness response', function () {
+    config()->set('health.probe_limits.ready', 1);
+    $this->app->instance(TcpProbe::class, new class implements TcpProbe
+    {
+        public function check(string $host, int $port, float $timeout): array
+        {
+            return ['ok' => true, 'latency_ms' => 1, 'error' => null];
+        }
+    });
+
+    $this->getJson('/health/ready')->assertOk();
+    $this->getJson('/health/ready')
+        ->assertTooManyRequests()
         ->assertExactJson([
             'ready' => false,
             'database' => false,
