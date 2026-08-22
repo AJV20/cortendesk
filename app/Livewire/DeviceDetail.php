@@ -79,10 +79,14 @@ class DeviceDetail extends Component
 
         // Only books this user could open anyway — membership alone must not
         // reveal a shared book they have no rule for.
+        $groupIds = $user->is_admin
+            ? []
+            : $user->groups()->pluck('user_groups.id')->all();
         $books = AddressBook::query()
             ->whereHas('entries', fn ($q) => $q->where('rustdesk_id', $device->rustdesk_id))
+            ->with(['owner', 'rules'])
             ->get()
-            ->filter(fn (AddressBook $b) => $b->permissionFor($user) > 0)
+            ->filter(fn (AddressBook $b) => $b->permissionFor($user, $groupIds) > 0)
             ->values();
 
         return view('livewire.device-detail', [

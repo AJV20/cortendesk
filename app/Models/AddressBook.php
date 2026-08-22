@@ -78,9 +78,12 @@ class AddressBook extends Model
      *   PERM_FULL (3)       = manage entries + tags + rules
      *
      * Owners (and admins) always have full control; personal books are private
-     * to their owner.
+     * to their owner. Callers evaluating many books may pass the user's group
+     * ids once to avoid repeating the same membership query for every book.
+     *
+     * @param  array<int, int|string>|null  $groupIds
      */
-    public function permissionFor(User $user): int
+    public function permissionFor(User $user, ?array $groupIds = null): int
     {
         if ($this->is_personal) {
             if ($this->owner_user_id === $user->id) {
@@ -99,14 +102,17 @@ class AddressBook extends Model
             return AddressBookRule::PERM_FULL;
         }
 
-        $groupIds = $user->groups()->pluck('user_groups.id')->all();
+        $groupIds = array_map(
+            'intval',
+            $groupIds ?? $user->groups()->pluck('user_groups.id')->all(),
+        );
 
         return (int) $this->rules
             ->filter(function (AddressBookRule $rule) use ($user, $groupIds) {
                 return match ($rule->subject_type) {
                     'everyone' => true,
                     'user' => (int) $rule->subject_id === $user->id,
-                    'group' => in_array((int) $rule->subject_id, array_map('intval', $groupIds), true),
+                    'group' => in_array((int) $rule->subject_id, $groupIds, true),
                     default => false,
                 };
             })
