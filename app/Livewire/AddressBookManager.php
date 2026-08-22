@@ -516,7 +516,7 @@ class AddressBookManager extends Component
     {
         $book = $this->book();
 
-        if (! $book || $book->permissionFor(auth()->user()) < $required) {
+        if (! $book || $this->permission() < $required) {
             return null;
         }
 
@@ -566,7 +566,7 @@ class AddressBookManager extends Component
 
         // Effective tier of the current user on the selected book (PLAN B4) —
         // drives which action buttons render.
-        $permission = $book ? $book->permissionFor(auth()->user()) : 0;
+        $permission = $this->permission();
 
         return view('livewire.address-book-manager', [
             'books' => $books,

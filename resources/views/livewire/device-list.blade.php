@@ -156,9 +156,11 @@
             <div class="rd-toolbar d-none d-md-flex">
                 @if ($selected !== [])
                     <span class="fs-13 fw-semibold">{{ count($selected) }} selected</span>
-                    <button type="button" class="btn btn-sm btn-light" wire:click="openAbPicker">
-                        <i class="ri-contacts-book-2-line me-1"></i>Add to Address Book…
-                    </button>
+                    @if (auth()->user()?->consoleAllows('address_book', 'rw'))
+                        <button type="button" class="btn btn-sm btn-light" wire:click="openAbPicker">
+                            <i class="ri-contacts-book-2-line me-1"></i>Add to Address Book…
+                        </button>
+                    @endif
                     @if (auth()->user()?->consoleAllows('device', 'rw'))
                         <button type="button" class="btn btn-sm btn-outline-danger" wire:click="bulkDelete"
                                 wire:confirm="Move {{ count($selected) }} selected device(s) to the recycle bin?">

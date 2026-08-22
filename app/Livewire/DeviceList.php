@@ -345,6 +345,8 @@ class DeviceList extends Component
 
     public function openAbPicker(): void
     {
+        $this->authorizeConsole('address_book', 'rw');
+
         if ($this->selected === []) {
             return;
         }
@@ -364,6 +366,8 @@ class DeviceList extends Component
 
     public function addSelectedToBook(): void
     {
+        $this->authorizeConsole('address_book', 'rw');
+
         $book = $this->writableBooks()->firstWhere('id', $this->abBookId);
         if (! $book) {
             $this->addError('abBookId', 'Pick an address book.');
@@ -419,6 +423,10 @@ class DeviceList extends Component
     private function writableBooks()
     {
         $user = auth()->user();
+
+        if (! $this->consoleAllows('address_book', 'rw')) {
+            return collect();
+        }
 
         return AddressBook::query()
             ->with('rules')
