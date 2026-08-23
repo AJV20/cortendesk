@@ -897,8 +897,8 @@ it('fails baseline backfill before writing evidence when legacy options json is 
         $this->fail('The migration accepted malformed legacy strategy options.');
     } catch (RuntimeException $exception) {
         expect($exception->getMessage())->toContain("strategy {$strategyId}")
-            ->and(DB::table('strategy_revisions')->count())->toBe(0)
-            ->and(DB::table('strategies')->where('id', $strategyId)->value('active_revision_id'))->toBeNull();
+            ->and(Schema::hasTable('strategy_revisions'))->toBeFalse()
+            ->and(Schema::hasColumn('strategies', 'active_revision_id'))->toBeFalse();
     }
 });
 
@@ -925,13 +925,43 @@ it('rejects falsey legacy option values before writing baseline evidence', funct
         $this->fail('The migration accepted a falsey non-object legacy strategy value.');
     } catch (RuntimeException $exception) {
         expect($exception->getMessage())->toContain("strategy {$strategyId}")
-            ->and(DB::table('strategy_revisions')->count())->toBe(0)
-            ->and(DB::table('strategies')->where('id', $strategyId)->value('active_revision_id'))->toBeNull();
+            ->and(Schema::hasTable('strategy_revisions'))->toBeFalse()
+            ->and(Schema::hasColumn('strategies', 'active_revision_id'))->toBeFalse();
     }
 })->with([
     'zero scalar' => '0',
     'empty string' => '',
 ]);
+
+it('leaves the schema retryable after legacy option preflight rejects a row', function () {
+    $migration = require database_path('migrations/2026_08_22_000010_create_strategy_revision_and_rollout_tables.php');
+    $migration->down();
+    $strategyId = DB::table('strategies')->insertGetId([
+        'name' => 'Retryable legacy policy',
+        'note' => null,
+        'enabled' => true,
+        'is_default' => false,
+        'enforce' => false,
+        'options' => '0',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    expect(fn () => $migration->up())->toThrow(RuntimeException::class)
+        ->and(Schema::hasTable('strategy_revisions'))->toBeFalse()
+        ->and(Schema::hasTable('strategy_rollouts'))->toBeFalse()
+        ->and(Schema::hasColumn('strategies', 'active_revision_id'))->toBeFalse()
+        ->and(Schema::hasColumn('strategies', 'deleted_at'))->toBeFalse();
+
+    DB::table('strategies')->where('id', $strategyId)->update([
+        'options' => json_encode([], JSON_THROW_ON_ERROR),
+    ]);
+    $migration->up();
+
+    expect(Schema::hasTable('strategy_revisions'))->toBeTrue()
+        ->and(DB::table('strategies')->where('id', $strategyId)->value('active_revision_id'))->not->toBeNull()
+        ->and(DB::table('strategy_revisions')->where('strategy_id', $strategyId)->count())->toBe(1);
+});
 
 it('blocks device owner and group resolution changes while a rollout is open', function () {
     $admin = User::factory()->admin()->create();

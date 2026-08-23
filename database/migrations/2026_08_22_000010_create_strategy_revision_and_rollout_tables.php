@@ -9,6 +9,30 @@ return new class extends Migration
 {
     public function up(): void
     {
+        $decodeLegacyOptions = static function (object $strategy): array {
+            try {
+                $rawOptions = $strategy->options === null ? '[]' : (string) $strategy->options;
+                $options = json_decode($rawOptions, true, 512, JSON_THROW_ON_ERROR);
+            } catch (JsonException $exception) {
+                throw new RuntimeException(
+                    "Cannot create a baseline revision for strategy {$strategy->id}: options contains invalid JSON.",
+                    previous: $exception,
+                );
+            }
+
+            if (! is_array($options) || ($options !== [] && array_is_list($options))) {
+                throw new RuntimeException(
+                    "Cannot create a baseline revision for strategy {$strategy->id}: options must be a JSON object.",
+                );
+            }
+
+            return $options;
+        };
+
+        // Preflight every legacy row before irreversible schema DDL. Retain the
+        // decoder during backfill below as defense in depth.
+        DB::table('strategies')->orderBy('id')->cursor()->each($decodeLegacyOptions);
+
         Schema::table('strategies', function (Blueprint $table) {
             $table->softDeletes();
         });
@@ -71,31 +95,6 @@ return new class extends Migration
             $table->index(['strategy_rollout_id', 'position']);
             $table->index(['device_id', 'delivered_version', 'confirmed_at'], 'srd_device_version_confirmed_idx');
         });
-
-        $decodeLegacyOptions = static function (object $strategy): array {
-            try {
-                $rawOptions = $strategy->options === null ? '[]' : (string) $strategy->options;
-                $options = json_decode($rawOptions, true, 512, JSON_THROW_ON_ERROR);
-            } catch (JsonException $exception) {
-                throw new RuntimeException(
-                    "Cannot create a baseline revision for strategy {$strategy->id}: options contains invalid JSON.",
-                    previous: $exception,
-                );
-            }
-
-            if (! is_array($options) || ($options !== [] && array_is_list($options))) {
-                throw new RuntimeException(
-                    "Cannot create a baseline revision for strategy {$strategy->id}: options must be a JSON object.",
-                );
-            }
-
-            return $options;
-        };
-
-        // Validate every legacy row before writing any revision evidence. SQLite
-        // accepts malformed text in JSON-declared columns, so fail visibly rather
-        // than silently recording an empty policy snapshot.
-        DB::table('strategies')->orderBy('id')->cursor()->each($decodeLegacyOptions);
 
         // Existing strategies become revision 1 without changing their live behavior.
         DB::table('strategies')->orderBy('id')->each(function (object $strategy) use ($decodeLegacyOptions): void {
