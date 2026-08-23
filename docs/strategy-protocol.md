@@ -35,6 +35,10 @@ Every normal editor and assignment mutation is a two-step server-side action:
 
 The legacy Livewire `save` and `saveAssign` action names now open their respective previews; they no longer bypass review. Fleet scans and rollout target materialization are chunked. The interactive assignment editor rejects sets above 5,000 direct targets and directs operators toward device groups instead of serializing an unbounded Livewire payload.
 
+## Upgrade safety
+
+Before any Strategies V2 schema DDL runs, the migration preflights every legacy `strategies.options` value. Only SQL `NULL` defaults to an empty policy; malformed JSON, empty strings, scalars, and list-shaped JSON fail closed. Because rejection happens before new tables or columns are created, an operator can correct the legacy row and retry the migration without manually repairing a partially applied schema. The same decoder runs again during baseline-revision backfill as defense in depth.
+
 ## Compliance states
 
 Compliance is calculated against the desired snapshot for each device, including released rollout candidates:
