@@ -12,6 +12,7 @@ use App\Models\DeviceGroup;
 use App\Models\Strategy;
 use App\Models\Tag;
 use App\Models\User;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Crypt;
@@ -175,22 +176,18 @@ class DeviceCliController extends Controller
             $attributes['username'] = (string) $request->input('device_username');
         }
 
-        $contextAttributes = array_intersect_key($attributes, array_flip(['user_id', 'device_group_id']));
-        if ($contextAttributes !== []
-            && Device::strategyResolutionWouldChange($device, $contextAttributes)
-            && ! $this->tokenAllows($request, 'strategy')) {
-            return $this->message("Token lacks 'rw' permission on 'strategy'.", 403);
-        }
-
+        $mayChangeResolvedStrategy = $this->tokenAllows($request, 'strategy');
         try {
-            $device = DB::transaction(function () use ($device, $attributes, $strategyChange): Device {
-                $device = Device::updateWithStrategyContext($device, $attributes);
+            $device = DB::transaction(function () use ($device, $attributes, $strategyChange, $mayChangeResolvedStrategy): Device {
+                $device = Device::updateWithStrategyContext($device, $attributes, $mayChangeResolvedStrategy);
                 if ($strategyChange !== null) {
                     Strategy::assignTo(Strategy::LEVEL_DEVICE, (int) $device->id, $strategyChange);
                 }
 
                 return $device;
             });
+        } catch (AuthorizationException $exception) {
+            return $this->message($exception->getMessage(), 403);
         } catch (ValidationException $exception) {
             return $this->message($exception->getMessage(), 409);
         }

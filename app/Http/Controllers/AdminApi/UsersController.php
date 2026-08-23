@@ -115,7 +115,10 @@ class UsersController extends AdminApiController
 
         $username = $user->username;
         DB::transaction(function () use ($user): void {
-            Device::bulkUpdateStrategyContext($user->devices()->pluck('devices.id')->all(), ['user_id' => null]);
+            Device::bulkUpdateStrategyContext(
+                Device::query()->where('user_id', $user->id),
+                ['user_id' => null],
+            );
             $user->delete();
         });
 

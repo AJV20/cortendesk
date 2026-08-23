@@ -1,11 +1,15 @@
 <?php
 
+use App\Http\Controllers\Api\DeviceCliController;
 use App\Livewire\StrategyList;
+use App\Models\ApiToken;
 use App\Models\Device;
+use App\Models\DeviceGroup;
 use App\Models\Strategy;
 use App\Models\StrategyRevision;
 use App\Models\StrategyRollout;
 use App\Models\User;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -234,4 +238,96 @@ it('serializes mysql immediate save with a default-restoring rollback', function
     expect(collect($results)->every(fn (array $result): bool => $result['ok']))->toBeTrue()
         ->and(Strategy::query()->where('is_default', true)->count())->toBe(1)
         ->and(StrategyRevision::query()->where('strategy_id', $restoredStrategy->id)->count())->toBeGreaterThan(1);
+});
+
+it('authorizes cli context changes against the locked mysql strategy state', function () {
+    $creator = User::factory()->admin()->create();
+    $owner = User::factory()->create(['username' => 'mysql-cli-owner']);
+    $fallback = Strategy::create(['name' => 'MySQL CLI fallback', 'enabled' => true, 'is_default' => true]);
+    $ownerPolicy = Strategy::create(['name' => 'MySQL CLI owner policy', 'enabled' => true]);
+    $device = Device::create([
+        'rustdesk_id' => 'mysql-cli-auth-race',
+        'uuid' => 'mysql-cli-auth-race-uuid',
+    ]);
+    [, $plain] = ApiToken::issue($creator, 'mysql-cli-auth-race', [
+        'device' => 'rw',
+        'strategy' => 'none',
+    ]);
+    $token = ApiToken::where('token_hash', hash('sha256', $plain))->firstOrFail();
+    $prefix = sys_get_temp_dir().'/cortendesk-cli-auth-'.bin2hex(random_bytes(6));
+    $assignmentLocked = $prefix.'.locked';
+    $cliStarted = $prefix.'.started';
+
+    $results = runStrategyMysqlRace([
+        function () use ($owner, $ownerPolicy, $assignmentLocked, $cliStarted): array {
+            DB::transaction(function () use ($owner, $ownerPolicy, $assignmentLocked, $cliStarted): void {
+                Strategy::assignTo(Strategy::LEVEL_USER, $owner->id, $ownerPolicy->id);
+                touch($assignmentLocked);
+                while (! file_exists($cliStarted)) {
+                    usleep(1000);
+                }
+            });
+
+            return ['assigned' => true];
+        },
+        function () use ($device, $owner, $token, $assignmentLocked, $cliStarted): array {
+            while (! file_exists($assignmentLocked)) {
+                usleep(1000);
+            }
+            touch($cliStarted);
+            $request = Request::create('/api/devices/cli', 'POST', [
+                'id' => $device->rustdesk_id,
+                'uuid' => $device->uuid,
+                'user_name' => $owner->username,
+            ]);
+            $request->attributes->set('api_token', ApiToken::findOrFail($token->id));
+            $response = app(DeviceCliController::class)->assign($request);
+
+            return ['status' => $response->getStatusCode()];
+        },
+    ]);
+
+    @unlink($assignmentLocked);
+    @unlink($cliStarted);
+    expect(collect($results)->every(fn (array $result): bool => $result['ok']))->toBeTrue()
+        ->and($results[1]['value']['status'])->toBe(403)
+        ->and($device->fresh()->user_id)->toBeNull()
+        ->and($device->fresh()->strategy_id_resolved)->toBe($fallback->id)
+        ->and(Strategy::assignedStrategyId(Strategy::LEVEL_USER, $owner->id))->toBe($ownerPolicy->id);
+});
+
+it('streams large mysql owner and group context updates in bounded batches', function () {
+    $owner = User::factory()->create();
+    $group = DeviceGroup::create(['name' => 'MySQL large context group']);
+    $now = now();
+    foreach (array_chunk(range(1, 1201), 250) as $numbers) {
+        DB::table('devices')->insert(array_map(fn (int $number): array => [
+            'rustdesk_id' => 'mysql-large-context-'.str_pad((string) $number, 5, '0', STR_PAD_LEFT),
+            'uuid' => 'mysql-large-context-uuid-'.$number,
+            'status' => Device::STATUS_ACTIVE,
+            'user_id' => $owner->id,
+            'device_group_id' => $group->id,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ], $numbers));
+    }
+
+    $maxBindings = 0;
+    DB::listen(function ($query) use (&$maxBindings): void {
+        $maxBindings = max($maxBindings, count($query->bindings));
+    });
+    $ownersChanged = Device::bulkUpdateStrategyContext(
+        Device::query()->where('user_id', $owner->id),
+        ['user_id' => null],
+    );
+    $groupsChanged = Device::bulkUpdateStrategyContext(
+        Device::query()->where('device_group_id', $group->id),
+        ['device_group_id' => null],
+    );
+
+    expect($ownersChanged)->toBe(1201)
+        ->and($groupsChanged)->toBe(1201)
+        ->and($maxBindings)->toBeLessThanOrEqual(501)
+        ->and(Device::query()->whereNotNull('user_id')->count())->toBe(0)
+        ->and(Device::query()->whereNotNull('device_group_id')->count())->toBe(0);
 });

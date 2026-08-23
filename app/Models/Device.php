@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -98,12 +99,15 @@ class Device extends Model
      *
      * @param  array<string,mixed>  $attributes
      */
-    public static function updateWithStrategyContext(Device $device, array $attributes): Device
-    {
+    public static function updateWithStrategyContext(
+        Device $device,
+        array $attributes,
+        bool $mayChangeResolvedStrategy = true,
+    ): Device {
         $touchesContext = array_key_exists('user_id', $attributes)
             || array_key_exists('device_group_id', $attributes);
 
-        return DB::transaction(function () use ($device, $attributes, $touchesContext): Device {
+        return DB::transaction(function () use ($device, $attributes, $touchesContext, $mayChangeResolvedStrategy): Device {
             if ($touchesContext) {
                 Strategy::query()->orderBy('id')->lockForUpdate()->get(['id']);
             }
@@ -111,11 +115,18 @@ class Device extends Model
             $locked = $device->exists
                 ? static::query()->whereKey($device->getKey())->lockForUpdate()->firstOrFail()
                 : $device;
+            $wasPersisted = $locked->exists;
+            $beforeResolution = $touchesContext ? Strategy::resolve($locked) : null;
             $locked->fill($attributes);
+            $contextChanged = $touchesContext && $locked->isDirty(['user_id', 'device_group_id']);
 
-            if ($locked->exists
-                && $touchesContext
-                && $locked->isDirty(['user_id', 'device_group_id'])) {
+            if ($contextChanged
+                && ! $mayChangeResolvedStrategy
+                && $beforeResolution !== Strategy::resolve($locked)) {
+                throw new AuthorizationException("Token lacks 'rw' permission on 'strategy'.");
+            }
+
+            if ($wasPersisted && $contextChanged) {
                 self::rejectOpenRolloutContextChange();
             }
 
@@ -129,49 +140,63 @@ class Device extends Model
      * Apply one owner/group change to a bounded set of existing devices while
      * preserving the same rollout lock invariant as updateWithStrategyContext().
      *
-     * @param  array<int,int|string>  $deviceIds
      * @param  array{user_id?:?int,device_group_id?:?int}  $attributes
      */
-    public static function bulkUpdateStrategyContext(array $deviceIds, array $attributes): int
+    public static function bulkUpdateStrategyContext(Builder $scope, array $attributes): int
     {
-        $ids = collect($deviceIds)->map(fn ($id) => (int) $id)->filter()->unique()->sort()->values()->all();
-        if ($ids === []) {
+        $attributes = array_intersect_key($attributes, array_flip(['user_id', 'device_group_id']));
+        if ($attributes === []) {
             return 0;
         }
 
-        return DB::transaction(function () use ($ids, $attributes): int {
+        return DB::transaction(function () use ($scope, $attributes): int {
             Strategy::query()->orderBy('id')->lockForUpdate()->get(['id']);
-            $devices = static::query()->whereKey($ids)->orderBy('id')->lockForUpdate()->get();
-            $changedIds = $devices
-                ->filter(function (Device $device) use ($attributes): bool {
-                    $device->fill($attributes);
+            $changedScope = (clone $scope)->where(function (Builder $dirty) use ($attributes): void {
+                $first = true;
+                foreach ($attributes as $column => $desired) {
+                    $method = $first ? 'where' : 'orWhere';
+                    $dirty->{$method}(function (Builder $columnQuery) use ($column, $desired): void {
+                        $qualified = 'devices.'.$column;
+                        if ($desired === null) {
+                            $columnQuery->whereNotNull($qualified);
+                        } else {
+                            $columnQuery->whereNull($qualified)->orWhere($qualified, '!=', $desired);
+                        }
+                    });
+                    $first = false;
+                }
+            });
 
-                    return $device->isDirty(['user_id', 'device_group_id']);
-                })
-                ->pluck('id')->all();
-
-            if ($changedIds === []) {
+            if (! (clone $changedScope)->exists()) {
                 return 0;
             }
 
             self::rejectOpenRolloutContextChange();
-            static::query()->whereKey($changedIds)->update($attributes);
-            static::query()->whereKey($changedIds)->orderBy('id')->eachById(
-                fn (Device $changed) => Strategy::syncResolvedFor($changed),
-                500,
-            );
+            $changedCount = 0;
+            $lastId = 0;
+            do {
+                $ids = (clone $changedScope)
+                    ->where('devices.id', '>', $lastId)
+                    ->reorder('devices.id')
+                    ->limit(500)
+                    ->lockForUpdate()
+                    ->pluck('devices.id')
+                    ->map(fn ($id) => (int) $id)
+                    ->all();
+                if ($ids === []) {
+                    break;
+                }
 
-            return count($changedIds);
+                static::query()->whereKey($ids)->update($attributes);
+                static::query()->whereKey($ids)->orderBy('id')->each(
+                    fn (Device $changed) => Strategy::syncResolvedFor($changed),
+                );
+                $changedCount += count($ids);
+                $lastId = max($ids);
+            } while (count($ids) === 500);
+
+            return $changedCount;
         });
-    }
-
-    /** @param array<string,mixed> $attributes */
-    public static function strategyResolutionWouldChange(Device $device, array $attributes): bool
-    {
-        $candidate = clone $device;
-        $candidate->fill($attributes);
-
-        return Strategy::resolve($device) !== Strategy::resolve($candidate);
     }
 
     private static function rejectOpenRolloutContextChange(): void

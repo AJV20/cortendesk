@@ -174,7 +174,7 @@ class GroupList extends Component
             $name = $group->name;
             DB::transaction(function () use ($group, $id): void {
                 Device::bulkUpdateStrategyContext(
-                    Device::where('device_group_id', $id)->pluck('id')->all(),
+                    Device::query()->where('device_group_id', $id),
                     ['device_group_id' => null],
                 );
                 GroupAccess::purgeFor(GroupAccess::TARGET_DEVICE_GROUP, $group->id);

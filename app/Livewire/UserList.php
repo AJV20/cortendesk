@@ -354,7 +354,10 @@ class UserList extends Component
 
         DB::transaction(function () use ($user): void {
             // Keep the devices, just detach them from the deleted owner.
-            Device::bulkUpdateStrategyContext($user->devices()->pluck('devices.id')->all(), ['user_id' => null]);
+            Device::bulkUpdateStrategyContext(
+                Device::query()->where('user_id', $user->id),
+                ['user_id' => null],
+            );
             $user->delete();
         });
 
@@ -411,12 +414,16 @@ class UserList extends Component
         DB::transaction(function () use ($ids, $user): void {
             // Devices to gain this owner, and this user's current devices to
             // release. Both paths pass through the rollout lock boundary.
-            Device::bulkUpdateStrategyContext($ids, ['user_id' => $user->id]);
-            $releaseIds = $this->assignableDevices()
-                ->where('user_id', $user->id)
-                ->whereNotIn('id', $ids ?: [0])
-                ->pluck('id')->all();
-            Device::bulkUpdateStrategyContext($releaseIds, ['user_id' => null]);
+            Device::bulkUpdateStrategyContext(
+                Device::query()->whereIn('id', $ids ?: [0]),
+                ['user_id' => $user->id],
+            );
+            Device::bulkUpdateStrategyContext(
+                $this->assignableDevices()
+                    ->where('user_id', $user->id)
+                    ->whereNotIn('id', $ids ?: [0]),
+                ['user_id' => null],
+            );
         });
 
         ConsoleAudit::record(

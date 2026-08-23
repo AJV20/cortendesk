@@ -63,7 +63,10 @@ class DeviceGroupsController extends AdminApiController
         $name = $deviceGroup->name;
         DB::transaction(function () use ($deviceGroup): void {
             // Detach devices (keep them), then remove the folder.
-            Device::bulkUpdateStrategyContext($deviceGroup->devices()->pluck('devices.id')->all(), ['device_group_id' => null]);
+            Device::bulkUpdateStrategyContext(
+                Device::query()->where('device_group_id', $deviceGroup->id),
+                ['device_group_id' => null],
+            );
             $deviceGroup->userGroups()->detach();
             $deviceGroup->delete();
         });
