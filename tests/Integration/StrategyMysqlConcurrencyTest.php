@@ -1,5 +1,6 @@
 <?php
 
+use App\Livewire\StrategyList;
 use App\Models\Device;
 use App\Models\Strategy;
 use App\Models\StrategyRevision;
@@ -8,6 +9,7 @@ use App\Models\User;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
+use Livewire\Livewire;
 use Tests\TestCase;
 
 uses(TestCase::class);
@@ -186,4 +188,50 @@ it('blocks mysql cancel and assignment mutations racing a due scheduler', functi
         ->and($rollout->fresh()->status)->toBe(StrategyRollout::STATUS_ACTIVE)
         ->and($rollout->fresh()->targets()->whereNotNull('released_at')->count())->toBe(4)
         ->and(Strategy::assignedStrategyId(Strategy::LEVEL_DEVICE, $devices[0]->id))->toBe($rollout->strategy_id);
+});
+
+it('serializes mysql immediate save with a default-restoring rollback', function () {
+    $admin = User::factory()->admin()->create();
+    $currentDefault = Strategy::create([
+        'name' => 'MySQL current default',
+        'enabled' => true,
+        'is_default' => true,
+        'note' => 'before race',
+    ]);
+    $currentRevision = StrategyRevision::capture($currentDefault, $admin->id, 'Current default');
+    $currentDefault->forceFill(['active_revision_id' => $currentRevision->id])->saveQuietly();
+
+    $restoredStrategy = Strategy::create([
+        'name' => 'MySQL restored default',
+        'enabled' => true,
+        'is_default' => false,
+    ]);
+    $defaultRevision = StrategyRevision::captureSnapshot($restoredStrategy, [
+        ...$restoredStrategy->snapshot(),
+        'is_default' => true,
+    ], $admin->id, 'Historical default');
+
+    $results = runStrategyMysqlRace([
+        function () use ($admin, $currentDefault): array {
+            Livewire::actingAs(User::findOrFail($admin->id))
+                ->test(StrategyList::class)
+                ->call('edit', $currentDefault->id)
+                ->set('formNote', 'saved during race')
+                ->call('previewSave')
+                ->call('confirmSave');
+
+            return ['saved' => true];
+        },
+        function () use ($admin, $defaultRevision): array {
+            Livewire::actingAs(User::findOrFail($admin->id))
+                ->test(StrategyList::class)
+                ->call('restoreRevision', $defaultRevision->id);
+
+            return ['restored' => true];
+        },
+    ]);
+
+    expect(collect($results)->every(fn (array $result): bool => $result['ok']))->toBeTrue()
+        ->and(Strategy::query()->where('is_default', true)->count())->toBe(1)
+        ->and(StrategyRevision::query()->where('strategy_id', $restoredStrategy->id)->count())->toBeGreaterThan(1);
 });

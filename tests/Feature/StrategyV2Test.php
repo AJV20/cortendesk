@@ -902,6 +902,37 @@ it('fails baseline backfill before writing evidence when legacy options json is 
     }
 });
 
+it('rejects falsey legacy option values before writing baseline evidence', function (string $legacyOptions) {
+    if (DB::connection()->getDriverName() !== 'sqlite') {
+        $this->markTestSkipped('SQLite permits legacy falsey text in JSON-declared columns.');
+    }
+
+    $migration = require database_path('migrations/2026_08_22_000010_create_strategy_revision_and_rollout_tables.php');
+    $migration->down();
+    $strategyId = DB::table('strategies')->insertGetId([
+        'name' => 'Falsey legacy policy '.bin2hex(random_bytes(3)),
+        'note' => null,
+        'enabled' => true,
+        'is_default' => false,
+        'enforce' => false,
+        'options' => $legacyOptions,
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    try {
+        $migration->up();
+        $this->fail('The migration accepted a falsey non-object legacy strategy value.');
+    } catch (RuntimeException $exception) {
+        expect($exception->getMessage())->toContain("strategy {$strategyId}")
+            ->and(DB::table('strategy_revisions')->count())->toBe(0)
+            ->and(DB::table('strategies')->where('id', $strategyId)->value('active_revision_id'))->toBeNull();
+    }
+})->with([
+    'zero scalar' => '0',
+    'empty string' => '',
+]);
+
 it('blocks device owner and group resolution changes while a rollout is open', function () {
     $admin = User::factory()->admin()->create();
     $fallback = Strategy::create(['name' => 'Context fallback', 'enabled' => true, 'is_default' => true]);

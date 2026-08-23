@@ -77,7 +77,7 @@ For an active or paused rollout, released devices receive the candidate snapshot
 
 Assignment mutations involving a strategy are blocked while its rollout is scheduled, active, or paused. Assignment writers lock every currently/newly involved strategy in stable order, so a concurrent schedule either sees the updated preview state or wins the lock and causes the assignment to fail safely. Existing-device owner and device-group changes use the same boundary across the console, admin API, and RustDesk CLI; because either field can change precedence, they are blocked while any fleet rollout is open. CLI context changes that actually alter the resolved strategy additionally require `strategy:rw`.
 
-The scheduler runs `cortendesk:advance-strategy-rollouts` every minute with overlap protection. Dedicated MySQL CI races multiple schedulers against each other and against pause, cancel, and assignment mutations to exercise production row-lock semantics.
+The scheduler runs `cortendesk:advance-strategy-rollouts` every minute with overlap protection. Dedicated MySQL CI races multiple schedulers against each other and against pause, cancel, assignment, and default-restoring rollback mutations to exercise production row-lock semantics.
 
 ## Authorization and auditability
 

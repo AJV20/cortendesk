@@ -611,8 +611,14 @@ class StrategyList extends Component
         $this->authorizeConsole('strategy', 'rw');
 
         $restored = DB::transaction(function () use ($revisionId): ?Strategy {
+            // Revisions are immutable, so discover the owner without locking,
+            // then acquire the shared strategy-source lock before any row lock.
+            // This keeps rollback ordered with save, rollout, and assignment paths.
+            $revisionStrategyId = StrategyRevision::query()->findOrFail($revisionId)->strategy_id;
+            Strategy::query()->orderBy('id')->lockForUpdate()->get(['id']);
             $revision = StrategyRevision::query()->lockForUpdate()->findOrFail($revisionId);
-            $strategy = Strategy::query()->lockForUpdate()->findOrFail($revision->strategy_id);
+            abort_unless((int) $revision->strategy_id === (int) $revisionStrategyId, 409);
+            $strategy = Strategy::query()->findOrFail($revision->strategy_id);
 
             $hasRollout = DB::table('strategy_rollouts')
                 ->where('strategy_id', $strategy->id)

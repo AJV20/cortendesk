@@ -74,7 +74,8 @@ return new class extends Migration
 
         $decodeLegacyOptions = static function (object $strategy): array {
             try {
-                $options = json_decode($strategy->options ?: '[]', true, 512, JSON_THROW_ON_ERROR);
+                $rawOptions = $strategy->options === null ? '[]' : (string) $strategy->options;
+                $options = json_decode($rawOptions, true, 512, JSON_THROW_ON_ERROR);
             } catch (JsonException $exception) {
                 throw new RuntimeException(
                     "Cannot create a baseline revision for strategy {$strategy->id}: options contains invalid JSON.",
