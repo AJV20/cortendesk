@@ -13,6 +13,7 @@ use App\Models\StrategyRolloutDevice;
 use App\Models\User;
 use App\Services\StrategyCompliance;
 use App\Services\StrategyImpact;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
@@ -863,6 +864,20 @@ it('backfills an active baseline revision for strategies that predate v2', funct
 });
 
 it('fails baseline backfill before writing evidence when legacy options json is malformed', function () {
+    if (DB::connection()->getDriverName() !== 'sqlite') {
+        expect(fn () => DB::table('strategies')->insert([
+            'name' => 'Malformed current policy',
+            'enabled' => true,
+            'is_default' => false,
+            'enforce' => false,
+            'options' => '{not-json',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]))->toThrow(QueryException::class);
+
+        return;
+    }
+
     $migration = require database_path('migrations/2026_08_22_000010_create_strategy_revision_and_rollout_tables.php');
     $migration->down();
 

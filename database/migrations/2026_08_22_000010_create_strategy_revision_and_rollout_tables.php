@@ -69,7 +69,7 @@ return new class extends Migration
             $table->timestamps();
             $table->unique(['strategy_rollout_id', 'device_id']);
             $table->index(['strategy_rollout_id', 'position']);
-            $table->index(['device_id', 'delivered_version', 'confirmed_at']);
+            $table->index(['device_id', 'delivered_version', 'confirmed_at'], 'srd_device_version_confirmed_idx');
         });
 
         $decodeLegacyOptions = static function (object $strategy): array {

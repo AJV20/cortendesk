@@ -47,6 +47,16 @@ jobs:
       - name: Install PHP dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
 
+      - name: Run feature suite on MySQL
+        env:
+          DB_CONNECTION: mysql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_DATABASE: cortendesk_test
+          DB_USERNAME: cortendesk
+          DB_PASSWORD: cortendesk-test
+        run: composer test -- --colors=always
+
       - name: Exercise rollout races on MySQL
         env:
           DB_CONNECTION: mysql
