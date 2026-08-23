@@ -435,7 +435,7 @@ class ImportLejianwen extends Command
 
             $device = Device::withTrashed()->firstOrNew(['rustdesk_id' => $rustdeskId]);
             $isNew = ! $device->exists;
-            $device->fill([
+            $attributes = [
                 'uuid' => (string) $row->uuid,
                 'hostname' => trim((string) $row->hostname) ?: null,
                 'os' => trim((string) $row->os) ?: null,
@@ -450,8 +450,12 @@ class ImportLejianwen extends Command
                     ? Carbon::createFromTimestamp((int) $row->last_online_time)
                     : null,
                 'last_online_ip' => trim((string) $row->last_online_ip) ?: null,
-            ]);
-            $device->save();
+            ];
+            if ($isNew) {
+                $device->fill($attributes)->save();
+            } else {
+                $device = Device::updateWithStrategyContext($device, $attributes);
+            }
             $this->track('devices', $device, $isNew);
         }
     }

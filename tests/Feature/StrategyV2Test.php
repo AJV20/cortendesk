@@ -14,6 +14,7 @@ use App\Models\User;
 use App\Services\StrategyCompliance;
 use App\Services\StrategyImpact;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
@@ -961,6 +962,40 @@ it('leaves the schema retryable after legacy option preflight rejects a row', fu
     expect(Schema::hasTable('strategy_revisions'))->toBeTrue()
         ->and(DB::table('strategies')->where('id', $strategyId)->value('active_revision_id'))->not->toBeNull()
         ->and(DB::table('strategy_revisions')->where('strategy_id', $strategyId)->count())->toBe(1);
+});
+
+it('rejects lejianwen import context changes while a rollout is open', function () {
+    $admin = User::factory()->admin()->create();
+    $fallback = Strategy::create(['name' => 'Import fallback', 'enabled' => true, 'is_default' => true]);
+    $groupPolicy = Strategy::create(['name' => 'Import group policy', 'enabled' => true]);
+    $group = DeviceGroup::create(['name' => 'Imported strategy group']);
+    Strategy::assignTo(Strategy::LEVEL_DEVICE_GROUP, $group->id, $groupPolicy->id);
+    $device = v2Device('983000097');
+    $candidate = StrategyRevision::captureSnapshot($fallback, [
+        ...$fallback->snapshot(),
+        'options' => ['enable-audio' => 'N'],
+    ], $admin->id, 'Import context candidate');
+    StrategyRollout::schedule($fallback, $candidate, [$device->id], now()->addHour(), 1, 5, $admin->id);
+
+    $sourcePath = sys_get_temp_dir().'/cortendesk-lejianwen-strategy-'.bin2hex(random_bytes(6)).'.sqlite';
+    $source = new PDO('sqlite:'.$sourcePath);
+    $source->exec('CREATE TABLE device_groups (id INTEGER PRIMARY KEY, name TEXT NOT NULL)');
+    $source->exec("INSERT INTO device_groups (id, name) VALUES (1, 'Imported strategy group')");
+    $source->exec('CREATE TABLE peers (row_id INTEGER PRIMARY KEY, id TEXT, uuid TEXT, hostname TEXT, os TEXT, cpu TEXT, memory TEXT, username TEXT, version TEXT, alias TEXT, user_id INTEGER, group_id INTEGER, last_online_time INTEGER, last_online_ip TEXT)');
+    $insert = $source->prepare('INSERT INTO peers (row_id, id, uuid, hostname, os, cpu, memory, username, version, alias, user_id, group_id, last_online_time, last_online_ip) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 0, ?)');
+    $insert->execute([$device->rustdesk_id, $device->uuid, 'imported-host', '', '', '', '', '', '', '']);
+    unset($source);
+
+    try {
+        expect(fn () => Artisan::call('cortendesk:import-lejianwen', ['path' => $sourcePath]))
+            ->toThrow(ValidationException::class);
+    } finally {
+        DB::purge('lejianwen');
+        @unlink($sourcePath);
+    }
+
+    expect($device->fresh()->device_group_id)->toBeNull()
+        ->and($device->fresh()->strategy_id_resolved)->toBe($fallback->id);
 });
 
 it('blocks device owner and group resolution changes while a rollout is open', function () {
