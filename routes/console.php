@@ -22,5 +22,8 @@ Schedule::command('cortendesk:close-stale-sessions')->everyFiveMinutes()->withou
 // Presence transitions for configurable Apprise notifications.
 Schedule::command('cortendesk:check-device-notifications')->everyMinute()->withoutOverlapping();
 
+// Start and release staged strategy rollouts without overlapping workers.
+Schedule::command('cortendesk:advance-strategy-rollouts')->everyMinute()->withoutOverlapping();
+
 // Proves the scheduler is alive, for the diagnostics page.
 Schedule::command('cortendesk:diagnostics-heartbeat')->everyMinute()->withoutOverlapping();

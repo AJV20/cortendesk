@@ -66,6 +66,8 @@ class Device extends Model
             'strategy_options' => 'array',
             'strategy_acked_options' => 'array',
             'strategy_acked_at' => 'datetime',
+            'strategy_sent_at' => 'datetime',
+            'strategy_rollout_ack_pending' => 'boolean',
         ];
     }
 

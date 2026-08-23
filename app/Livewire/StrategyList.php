@@ -7,9 +7,16 @@ use App\Models\ConsoleAudit;
 use App\Models\Device;
 use App\Models\DeviceGroup;
 use App\Models\Strategy;
+use App\Models\StrategyRevision;
+use App\Models\StrategyRollout;
 use App\Models\User;
+use App\Services\StrategyAssignmentImpact;
+use App\Services\StrategyCompliance;
+use App\Services\StrategyImpact;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Livewire\Component;
 
 /**
@@ -32,6 +39,8 @@ class StrategyList extends Component
 {
     use AuthorizesConsole;
 
+    private const MAX_EDITOR_ASSIGNMENTS = 5000;
+
     /** Editor state: null = closed, 0 = creating, >0 = editing that strategy. */
     public ?int $editingId = null;
 
@@ -45,8 +54,35 @@ class StrategyList extends Component
 
     public bool $formEnforce = false;
 
+    public int $formConfirmationTimeout = 15;
+
     /** @var array<string,string> option key => form value ('' = not managed) */
     public array $formOptions = [];
+
+    public bool $previewing = false;
+
+    /** @var array<string,mixed> */
+    public array $impactPreview = [];
+
+    public ?string $previewFingerprint = null;
+
+    public string $revisionNote = '';
+
+    public string $rolloutStartAt = '';
+
+    public int $rolloutBatchSize = 25;
+
+    public int $rolloutIntervalMinutes = 15;
+
+    public ?int $historyStrategyId = null;
+
+    public ?int $compareFromRevisionId = null;
+
+    public ?int $compareToRevisionId = null;
+
+    public ?int $complianceStrategyId = null;
+
+    public string $complianceState = 'all';
 
     /** Assignment editor state: strategy id, or null when closed. */
     public ?int $assigningId = null;
@@ -63,6 +99,13 @@ class StrategyList extends Component
 
     /** @var array<int,int|string> */
     public array $assignGroupIds = [];
+
+    public bool $assignPreviewing = false;
+
+    /** @var array<string,mixed> */
+    public array $assignmentImpact = [];
+
+    public ?string $assignmentFingerprint = null;
 
     /** Section titles + the apply-timing caveat that belongs to each group. */
     private const GROUP_META = [
@@ -203,6 +246,7 @@ class StrategyList extends Component
         $this->formEnabled = (bool) $strategy->enabled;
         $this->formIsDefault = (bool) $strategy->is_default;
         $this->formEnforce = (bool) $strategy->enforce;
+        $this->formConfirmationTimeout = (int) ($strategy->confirmation_timeout_minutes ?: 15);
 
         foreach ($strategy->optionMap() as $key => $value) {
             if (array_key_exists($key, $this->formOptions)) {
@@ -213,55 +257,113 @@ class StrategyList extends Component
 
     public function save(): void
     {
+        // Backward-compatible action name: old clients still receive the review
+        // step, but no public Livewire action can persist without confirmation.
+        $this->previewSave();
+    }
+
+    private function persist(): void
+    {
         $this->authorizeConsole('strategy', 'rw');
+        $this->resetValidation('rollout');
 
-        $this->validate([
-            'formName' => [
-                'required', 'string', 'max:255',
-                Rule::unique('strategies', 'name')->ignore($this->editingId ?: 0),
-            ],
-            'formNote' => ['nullable', 'string', 'max:500'],
-        ], [], ['formName' => 'name', 'formNote' => 'note']);
-
-        // Range-check the numeric options here rather than letting
-        // sanitizeOptions() drop them silently — a value that vanishes without
-        // a word is how an operator ends up believing a policy is in force.
-        $options = [];
-        foreach ($this->formOptions as $key => $value) {
-            $spec = Strategy::OPTION_KEYS[$key] ?? null;
-            $value = is_string($value) ? trim($value) : '';
-
-            if ($spec === null || $value === '') {
-                continue; // unknown key, or "not managed by this strategy"
-            }
-
-            if ($spec['type'] === 'int' && ! (ctype_digit($value)
-                && (int) $value >= ($spec['min'] ?? 0)
-                && (int) $value <= ($spec['max'] ?? PHP_INT_MAX))) {
-                $this->addError('formOptions.'.$key, 'Enter a whole number between '
-                    .($spec['min'] ?? 0).' and '.($spec['max'] ?? PHP_INT_MAX).'.');
-
-                continue;
-            }
-
-            $options[$key] = $value;
-        }
-
-        if ($this->getErrorBag()->isNotEmpty()) {
+        $snapshot = $this->validatedFormSnapshot();
+        if ($snapshot === null) {
             return;
         }
 
-        $strategy = $this->editingId ? Strategy::findOrFail($this->editingId) : new Strategy;
-        $strategy->fill([
-            'name' => $this->formName,
-            'note' => $this->formNote !== '' ? $this->formNote : null,
-            'enabled' => $this->formEnabled,
-            'is_default' => $this->formIsDefault,
-            'enforce' => $this->formEnforce,
-        ]);
-        $strategy->setOptions($options);
-        $creating = ! $strategy->exists;
-        $strategy->save();
+        if ($this->editingId && StrategyRollout::query()
+            ->where('strategy_id', $this->editingId)
+            ->whereIn('status', [StrategyRollout::STATUS_SCHEDULED, StrategyRollout::STATUS_ACTIVE, StrategyRollout::STATUS_PAUSED])
+            ->exists()) {
+            $this->addError('rollout', 'Cancel the current rollout before applying another revision.');
+
+            return;
+        }
+
+        $currentStrategy = $this->editingId ? Strategy::findOrFail($this->editingId) : null;
+        $affectedCount = (int) StrategyImpact::preview($currentStrategy, $snapshot)['affected_count'];
+
+        [$strategy, $creating] = DB::transaction(function () use ($snapshot, $affectedCount): array {
+            $strategy = $this->editingId ? Strategy::query()->lockForUpdate()->findOrFail($this->editingId) : new Strategy;
+            if ($strategy->exists && $strategy->rollouts()->whereIn('status', [
+                StrategyRollout::STATUS_SCHEDULED,
+                StrategyRollout::STATUS_ACTIVE,
+                StrategyRollout::STATUS_PAUSED,
+            ])->exists()) {
+                $this->addError('rollout', 'Cancel the current rollout before applying another revision.');
+
+                return [null, false];
+            }
+
+            $displacedDefault = null;
+            $displacedAffected = 0;
+            if ($snapshot['is_default']) {
+                $displacedDefault = Strategy::query()
+                    ->whereKeyNot($this->editingId ?: 0)
+                    ->where('is_default', true)
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($displacedDefault?->rollouts()->whereIn('status', [
+                    StrategyRollout::STATUS_SCHEDULED,
+                    StrategyRollout::STATUS_ACTIVE,
+                    StrategyRollout::STATUS_PAUSED,
+                ])->exists()) {
+                    $this->addError('rollout', 'Cancel the current rollout on the existing default strategy before replacing it.');
+
+                    return [null, false];
+                }
+
+                if ($displacedDefault !== null) {
+                    $displacedAffected = (int) StrategyImpact::preview($displacedDefault, [
+                        ...$displacedDefault->snapshot(),
+                        'is_default' => false,
+                    ])['affected_count'];
+                }
+            }
+
+            $strategy->fill([
+                'name' => $snapshot['name'],
+                'note' => $snapshot['note'],
+                'enabled' => $snapshot['enabled'],
+                'is_default' => $snapshot['is_default'],
+                'enforce' => $snapshot['enforce'],
+                'confirmation_timeout_minutes' => $snapshot['confirmation_timeout_minutes'],
+            ]);
+            $strategy->setOptions($snapshot['options']);
+            $creating = ! $strategy->exists;
+            $strategy->save();
+
+            $revision = StrategyRevision::captureSnapshot(
+                $strategy,
+                $strategy->snapshot(),
+                auth()->id(),
+                $this->revisionNote !== ''
+                    ? $this->revisionNote
+                    : ($creating ? 'Initial revision' : 'Saved from the strategy editor'),
+                $affectedCount,
+            );
+            $strategy->forceFill(['active_revision_id' => $revision->id])->saveQuietly();
+
+            if ($displacedDefault !== null) {
+                $displacedDefault->refresh();
+                $displacedRevision = StrategyRevision::captureSnapshot(
+                    $displacedDefault,
+                    $displacedDefault->snapshot(),
+                    auth()->id(),
+                    'Default status moved to '.$strategy->name,
+                    $displacedAffected,
+                );
+                $displacedDefault->forceFill(['active_revision_id' => $displacedRevision->id])->saveQuietly();
+            }
+
+            return [$strategy, $creating];
+        });
+
+        if ($strategy === null) {
+            return;
+        }
 
         ConsoleAudit::record(
             $creating ? 'strategy.create' : 'strategy.update',
@@ -272,6 +374,181 @@ class StrategyList extends Component
         );
 
         $this->closeModal();
+    }
+
+    public function previewSave(): void
+    {
+        $this->authorizeConsole('strategy', 'rw');
+
+        $snapshot = $this->validatedFormSnapshot();
+        if ($snapshot === null) {
+            return;
+        }
+
+        $strategy = $this->editingId ? Strategy::findOrFail($this->editingId) : null;
+        $this->impactPreview = StrategyImpact::preview($strategy, $snapshot);
+        $this->previewFingerprint = $this->impactPreview['fingerprint'];
+        $this->previewing = true;
+    }
+
+    public function confirmSave(): void
+    {
+        $this->authorizeConsole('strategy', 'rw');
+        $this->validate(['revisionNote' => ['nullable', 'string', 'max:500']]);
+
+        $snapshot = $this->validatedFormSnapshot();
+        if ($snapshot === null) {
+            return;
+        }
+
+        $strategy = $this->editingId ? Strategy::findOrFail($this->editingId) : null;
+        if (! $this->previewing || ! hash_equals(
+            (string) $this->previewFingerprint,
+            StrategyImpact::fingerprint($strategy, $snapshot),
+        )) {
+            $this->addError('preview', 'The strategy changed after the preview. Review the impact again.');
+
+            return;
+        }
+
+        $this->persist();
+    }
+
+    public function closePreview(): void
+    {
+        $this->reset('previewing', 'impactPreview', 'previewFingerprint');
+        $this->resetValidation(['preview', 'rollout', 'revisionNote']);
+    }
+
+    public function scheduleRollout(): void
+    {
+        $this->authorizeConsole('strategy', 'rw');
+        $this->resetValidation(['preview', 'rollout']);
+
+        if (! $this->editingId) {
+            $this->addError('rollout', 'Create the strategy before scheduling a staged rollout.');
+
+            return;
+        }
+
+        $this->validate([
+            'revisionNote' => ['nullable', 'string', 'max:500'],
+            'rolloutStartAt' => ['nullable', 'date'],
+            'rolloutBatchSize' => ['required', 'integer', 'min:1', 'max:1000'],
+            'rolloutIntervalMinutes' => ['required', 'integer', 'min:1', 'max:10080'],
+        ]);
+
+        $snapshot = $this->validatedFormSnapshot();
+        if ($snapshot === null) {
+            return;
+        }
+
+        $startsAt = $this->rolloutStartAt !== '' ? Carbon::parse($this->rolloutStartAt) : now();
+        $scheduled = DB::transaction(function () use ($snapshot, $startsAt): ?array {
+            $strategy = Strategy::query()->lockForUpdate()->findOrFail($this->editingId);
+            if (! $this->previewing) {
+                $this->addError('preview', 'The strategy changed after the preview. Review the impact again.');
+
+                return null;
+            }
+
+            if ($snapshot['name'] !== $strategy->name
+                || $snapshot['enabled'] !== (bool) $strategy->enabled
+                || $snapshot['is_default'] !== (bool) $strategy->is_default
+                || $snapshot['confirmation_timeout_minutes'] !== (int) $strategy->confirmation_timeout_minutes) {
+                $this->addError(
+                    'rollout',
+                    'Names, enabled state, default status, and confirmation timeout cannot be staged. Apply those changes to all devices now.',
+                );
+
+                return null;
+            }
+
+            $impact = StrategyImpact::preview($strategy, $snapshot);
+            if (! hash_equals((string) $this->previewFingerprint, $impact['fingerprint'])) {
+                $this->addError('preview', 'The strategy changed after the preview. Review the impact again.');
+
+                return null;
+            }
+            $affectedCount = (int) $impact['affected_count'];
+            if ($affectedCount === 0) {
+                $this->addError('rollout', 'There are no device policy changes to stage. Apply metadata-only changes now.');
+
+                return null;
+            }
+
+            $revision = StrategyRevision::captureSnapshot(
+                $strategy,
+                $snapshot,
+                auth()->id(),
+                $this->revisionNote !== '' ? $this->revisionNote : 'Staged rollout',
+                $affectedCount,
+            );
+            $rollout = StrategyRollout::schedule(
+                $strategy,
+                $revision,
+                StrategyImpact::affectedDeviceIds($strategy, $snapshot),
+                $startsAt,
+                $this->rolloutBatchSize,
+                $this->rolloutIntervalMinutes,
+                auth()->id(),
+            );
+
+            return [$rollout, $strategy, $affectedCount];
+        });
+
+        if ($scheduled === null) {
+            return;
+        }
+        [$rollout, $strategy, $affectedCount] = $scheduled;
+
+        ConsoleAudit::record(
+            'strategy.rollout.schedule',
+            "Scheduled revision {$rollout->revision->revision} of {$strategy->name} for {$affectedCount} device(s)",
+            'strategy',
+            $strategy->name,
+        );
+
+        $this->closeModal();
+    }
+
+    public function pauseRollout(int $id): void
+    {
+        $this->authorizeConsole('strategy', 'rw');
+        $this->resetValidation('rollout');
+        $rollout = StrategyRollout::findOrFail($id);
+        if (! $rollout->pause(auth()->id())) {
+            $this->addError('rollout', 'This rollout is no longer active.');
+
+            return;
+        }
+        ConsoleAudit::record('strategy.rollout.pause', 'Paused rollout '.$rollout->id, 'strategy', $rollout->strategy->name);
+    }
+
+    public function resumeRollout(int $id): void
+    {
+        $this->authorizeConsole('strategy', 'rw');
+        $this->resetValidation('rollout');
+        $rollout = StrategyRollout::findOrFail($id);
+        if (! $rollout->resume()) {
+            $this->addError('rollout', 'This rollout is no longer paused.');
+
+            return;
+        }
+        ConsoleAudit::record('strategy.rollout.resume', 'Resumed rollout '.$rollout->id, 'strategy', $rollout->strategy->name);
+    }
+
+    public function cancelRollout(int $id): void
+    {
+        $this->authorizeConsole('strategy', 'rw');
+        $this->resetValidation('rollout');
+        $rollout = StrategyRollout::findOrFail($id);
+        if (! $rollout->cancel()) {
+            $this->addError('rollout', 'This rollout is already closed.');
+
+            return;
+        }
+        ConsoleAudit::record('strategy.rollout.cancel', 'Cancelled rollout '.$rollout->id, 'strategy', $rollout->strategy->name);
     }
 
     public function closeModal(): void
@@ -285,25 +562,200 @@ class StrategyList extends Component
         $this->authorizeConsole('strategy', 'rw');
 
         $strategy = Strategy::findOrFail($id);
-        $strategy->update(['enabled' => ! $strategy->enabled]);
-
-        ConsoleAudit::record(
-            'strategy.toggle',
-            ($strategy->enabled ? 'Enabled' : 'Disabled').' strategy '.$strategy->name,
-            'strategy',
-            $strategy->name,
-        );
+        $this->edit($strategy->id);
+        $this->formEnabled = ! $strategy->enabled;
+        $this->previewSave();
     }
 
     public function deleteStrategy(int $id): void
     {
         $this->authorizeConsole('strategy', 'rw');
+        $this->resetValidation('rollout');
 
-        $strategy = Strategy::findOrFail($id);
-        $name = $strategy->name;
-        $strategy->delete(); // pivots cascade; the model hook re-resolves the fleet
+        $name = DB::transaction(function () use ($id): ?string {
+            $strategy = Strategy::query()->lockForUpdate()->findOrFail($id);
+            if ($strategy->rollouts()->whereIn('status', [
+                StrategyRollout::STATUS_SCHEDULED,
+                StrategyRollout::STATUS_ACTIVE,
+                StrategyRollout::STATUS_PAUSED,
+            ])->exists()) {
+                $this->addError('rollout', 'Cancel the current rollout before deleting this strategy.');
+
+                return null;
+            }
+
+            $name = $strategy->name;
+            $strategy->delete(); // pivots cascade; the model hook re-resolves the fleet
+
+            return $name;
+        });
+
+        if ($name === null) {
+            return;
+        }
 
         ConsoleAudit::record('strategy.delete', 'Deleted strategy '.$name, 'strategy', $name);
+    }
+
+    public function restoreRevision(int $revisionId): void
+    {
+        $this->authorizeConsole('strategy', 'rw');
+
+        $restored = DB::transaction(function () use ($revisionId): ?Strategy {
+            $revision = StrategyRevision::query()->lockForUpdate()->findOrFail($revisionId);
+            $strategy = Strategy::query()->lockForUpdate()->findOrFail($revision->strategy_id);
+
+            $hasRollout = DB::table('strategy_rollouts')
+                ->where('strategy_id', $strategy->id)
+                ->whereIn('status', ['scheduled', 'active', 'paused'])
+                ->exists();
+
+            if ($hasRollout) {
+                $this->addError('history', 'Cancel the current rollout before restoring a revision.');
+
+                return null;
+            }
+
+            $snapshot = is_array($revision->snapshot) ? $revision->snapshot : [];
+            $affectedCount = (int) StrategyImpact::preview($strategy, [
+                ...$snapshot,
+                'name' => $strategy->name,
+            ])['affected_count'];
+            $displacedDefault = null;
+            $displacedAffected = 0;
+            if ((bool) ($snapshot['is_default'] ?? false)) {
+                $displacedDefault = Strategy::query()
+                    ->whereKeyNot($strategy->id)
+                    ->where('is_default', true)
+                    ->lockForUpdate()
+                    ->first();
+                if ($displacedDefault?->rollouts()->whereIn('status', [
+                    StrategyRollout::STATUS_SCHEDULED,
+                    StrategyRollout::STATUS_ACTIVE,
+                    StrategyRollout::STATUS_PAUSED,
+                ])->exists()) {
+                    $this->addError('history', 'Cancel the rollout on the current default strategy before restoring this revision.');
+
+                    return null;
+                }
+                if ($displacedDefault !== null) {
+                    $displacedAffected = (int) StrategyImpact::preview($displacedDefault, [
+                        ...$displacedDefault->snapshot(),
+                        'is_default' => false,
+                    ])['affected_count'];
+                }
+            }
+            $strategy->fill([
+                // Strategy names are durable identities. A rollback restores the
+                // policy, not a historical name that may now belong to another row.
+                'note' => $snapshot['note'] ?? null,
+                'enabled' => (bool) ($snapshot['enabled'] ?? true),
+                'is_default' => (bool) ($snapshot['is_default'] ?? false),
+                'enforce' => (bool) ($snapshot['enforce'] ?? false),
+                'confirmation_timeout_minutes' => (int) ($snapshot['confirmation_timeout_minutes'] ?? 15),
+            ]);
+            $strategy->setOptions(is_array($snapshot['options'] ?? null) ? $snapshot['options'] : []);
+            $strategy->save();
+
+            $newRevision = StrategyRevision::captureSnapshot(
+                $strategy,
+                $strategy->snapshot(),
+                auth()->id(),
+                'Restored revision '.$revision->revision,
+                $affectedCount,
+            );
+            $strategy->forceFill(['active_revision_id' => $newRevision->id])->saveQuietly();
+
+            if ($displacedDefault !== null) {
+                $displacedDefault->refresh();
+                $displacedRevision = StrategyRevision::captureSnapshot(
+                    $displacedDefault,
+                    $displacedDefault->snapshot(),
+                    auth()->id(),
+                    'Default status moved to '.$strategy->name.' by rollback',
+                    $displacedAffected,
+                );
+                $displacedDefault->forceFill(['active_revision_id' => $displacedRevision->id])->saveQuietly();
+            }
+
+            return $strategy;
+        });
+
+        if ($restored === null) {
+            return;
+        }
+
+        ConsoleAudit::record(
+            'strategy.rollback',
+            'Restored an earlier revision of strategy '.$restored->name,
+            'strategy',
+            $restored->name,
+        );
+    }
+
+    public function showHistory(int $strategyId): void
+    {
+        $this->authorizeConsole('strategy', 'r');
+        $strategy = Strategy::findOrFail($strategyId);
+        $ids = $strategy->revisions()->orderBy('revision')->pluck('id');
+        $this->historyStrategyId = $strategy->id;
+        $this->compareFromRevisionId = $ids->count() > 1 ? (int) $ids->first() : null;
+        $this->compareToRevisionId = $ids->isNotEmpty() ? (int) $ids->last() : null;
+    }
+
+    public function closeHistory(): void
+    {
+        $this->reset('historyStrategyId', 'compareFromRevisionId', 'compareToRevisionId');
+        $this->resetValidation('history');
+    }
+
+    public function showCompliance(int $strategyId, string $state = 'all'): void
+    {
+        $this->authorizeConsole('strategy', 'r');
+        Strategy::findOrFail($strategyId);
+        $this->complianceStrategyId = $strategyId;
+        $this->setComplianceState($state);
+    }
+
+    public function setComplianceState(string $state): void
+    {
+        if (in_array($state, ['all', 'confirmed', 'pending', 'stale', 'offline', 'overridden'], true)) {
+            $this->complianceState = $state;
+        }
+    }
+
+    public function closeCompliance(): void
+    {
+        $this->reset('complianceStrategyId', 'complianceState');
+    }
+
+    public function getHistoryStrategyProperty(): ?Strategy
+    {
+        return $this->historyStrategyId ? Strategy::find($this->historyStrategyId) : null;
+    }
+
+    public function getRevisionHistoryProperty()
+    {
+        return $this->historyStrategyId
+            ? StrategyRevision::query()->where('strategy_id', $this->historyStrategyId)->with(['creator', 'rollouts'])->orderByDesc('revision')->get()
+            : collect();
+    }
+
+    /** @return array<int,array{key:string,before:mixed,after:mixed}> */
+    public function getRevisionComparisonProperty(): array
+    {
+        if (! $this->historyStrategyId || ! $this->compareFromRevisionId || ! $this->compareToRevisionId) {
+            return [];
+        }
+
+        $revisions = StrategyRevision::query()
+            ->where('strategy_id', $this->historyStrategyId)
+            ->whereIn('id', [$this->compareFromRevisionId, $this->compareToRevisionId])
+            ->get()->keyBy('id');
+        $from = $revisions->get($this->compareFromRevisionId);
+        $to = $revisions->get($this->compareToRevisionId);
+
+        return $from && $to ? StrategyRevision::diffSnapshots($from->snapshot, $to->snapshot) : [];
     }
 
     // --------------------------------------------------------- assignments ---
@@ -311,10 +763,27 @@ class StrategyList extends Component
     public function openAssign(int $id): void
     {
         $this->authorizeConsole('strategy', 'rw');
+        $this->resetValidation('assignment');
 
         $strategy = Strategy::findOrFail($id);
+        if ($strategy->rollouts()->whereIn('status', [
+            StrategyRollout::STATUS_SCHEDULED,
+            StrategyRollout::STATUS_ACTIVE,
+            StrategyRollout::STATUS_PAUSED,
+        ])->exists()) {
+            $this->addError('assignment', 'Cancel the open rollout before editing this strategy’s assignments.');
+
+            return;
+        }
+        $assignmentTotal = array_sum($strategy->assignmentCounts());
+        if ($assignmentTotal > self::MAX_EDITOR_ASSIGNMENTS) {
+            $this->addError('assignment', 'This strategy has too many direct assignments for the interactive editor. Consolidate devices into groups before editing assignments.');
+
+            return;
+        }
 
         $this->assigningId = $strategy->id;
+        $this->reset('assignPreviewing', 'assignmentImpact', 'assignmentFingerprint');
         $this->assignTab = 'devices';
         $this->assignSearch = '';
         $this->assignDeviceIds = $strategy->devices()->pluck('devices.id')->all();
@@ -332,23 +801,103 @@ class StrategyList extends Component
 
     public function saveAssign(): void
     {
+        // Backward-compatible action name: assignment changes also require review.
+        $this->previewAssign();
+    }
+
+    public function previewAssign(): void
+    {
         $this->authorizeConsole('strategy', 'rw');
-
         $strategy = Strategy::findOrFail($this->assigningId);
+        $this->validateAssignmentIds();
 
-        $this->validate([
-            'assignDeviceIds.*' => [Rule::exists('devices', 'id')],
-            'assignUserIds.*' => [Rule::exists('users', 'id')],
-            'assignGroupIds.*' => [Rule::exists('device_groups', 'id')],
-        ]);
+        $this->assignmentImpact = StrategyAssignmentImpact::preview(
+            $strategy,
+            $this->assignDeviceIds,
+            $this->assignUserIds,
+            $this->assignGroupIds,
+        );
+        $this->assignmentFingerprint = $this->assignmentImpact['fingerprint'];
+        $this->assignPreviewing = true;
+    }
 
-        $changed = 0;
-        $changed += $this->syncLevel($strategy, Strategy::LEVEL_DEVICE,
-            $strategy->devices()->pluck('devices.id')->all(), $this->assignDeviceIds);
-        $changed += $this->syncLevel($strategy, Strategy::LEVEL_USER,
-            $strategy->users()->pluck('users.id')->all(), $this->assignUserIds);
-        $changed += $this->syncLevel($strategy, Strategy::LEVEL_DEVICE_GROUP,
-            $strategy->deviceGroups()->pluck('device_groups.id')->all(), $this->assignGroupIds);
+    public function confirmAssign(): void
+    {
+        $this->authorizeConsole('strategy', 'rw');
+        $strategy = Strategy::findOrFail($this->assigningId);
+        $this->validateAssignmentIds();
+
+        if (! $this->assignPreviewing || $this->assignmentFingerprint === null) {
+            $this->addError('assignment', 'Assignments changed after the preview. Review the impact again.');
+
+            return;
+        }
+
+        $this->persistAssign($strategy);
+    }
+
+    public function closeAssignPreview(): void
+    {
+        $this->reset('assignPreviewing', 'assignmentImpact', 'assignmentFingerprint');
+        $this->resetValidation('assignment');
+    }
+
+    private function persistAssign(Strategy $strategy): void
+    {
+        $changed = DB::transaction(function () use ($strategy): ?int {
+            $currentAssignments = [
+                Strategy::LEVEL_DEVICE => $strategy->devices()->pluck('devices.id')->map(fn ($id) => (int) $id)->all(),
+                Strategy::LEVEL_USER => $strategy->users()->pluck('users.id')->map(fn ($id) => (int) $id)->all(),
+                Strategy::LEVEL_DEVICE_GROUP => $strategy->deviceGroups()->pluck('device_groups.id')->map(fn ($id) => (int) $id)->all(),
+            ];
+            $desiredAssignments = [
+                Strategy::LEVEL_DEVICE => array_map('intval', $this->assignDeviceIds),
+                Strategy::LEVEL_USER => array_map('intval', $this->assignUserIds),
+                Strategy::LEVEL_DEVICE_GROUP => array_map('intval', $this->assignGroupIds),
+            ];
+            $pivots = [
+                Strategy::LEVEL_DEVICE => ['device_strategy', 'device_id'],
+                Strategy::LEVEL_USER => ['strategy_user', 'user_id'],
+                Strategy::LEVEL_DEVICE_GROUP => ['device_group_strategy', 'device_group_id'],
+            ];
+            $involvedStrategyIds = [$strategy->id];
+            foreach ($pivots as $level => [$table, $column]) {
+                $targetIds = array_values(array_unique([...$currentAssignments[$level], ...$desiredAssignments[$level]]));
+                if ($targetIds !== []) {
+                    $involvedStrategyIds = [
+                        ...$involvedStrategyIds,
+                        ...DB::table($table)->whereIn($column, $targetIds)->pluck('strategy_id')->all(),
+                    ];
+                }
+            }
+            Strategy::guardAssignmentChanges($involvedStrategyIds);
+            $strategy = Strategy::findOrFail($strategy->id);
+            $current = StrategyAssignmentImpact::preview(
+                $strategy,
+                $this->assignDeviceIds,
+                $this->assignUserIds,
+                $this->assignGroupIds,
+            );
+            if (! hash_equals((string) $this->assignmentFingerprint, $current['fingerprint'])) {
+                $this->addError('assignment', 'Assignments changed after the preview. Review the impact again.');
+
+                return null;
+            }
+
+            $changed = 0;
+            $changed += $this->syncLevel($strategy, Strategy::LEVEL_DEVICE,
+                $currentAssignments[Strategy::LEVEL_DEVICE], $this->assignDeviceIds);
+            $changed += $this->syncLevel($strategy, Strategy::LEVEL_USER,
+                $currentAssignments[Strategy::LEVEL_USER], $this->assignUserIds);
+            $changed += $this->syncLevel($strategy, Strategy::LEVEL_DEVICE_GROUP,
+                $currentAssignments[Strategy::LEVEL_DEVICE_GROUP], $this->assignGroupIds);
+
+            return $changed;
+        });
+
+        if ($changed === null) {
+            return;
+        }
 
         ConsoleAudit::record(
             'strategy.assign',
@@ -362,6 +911,22 @@ class StrategyList extends Component
         );
 
         $this->closeAssign();
+    }
+
+    private function validateAssignmentIds(): void
+    {
+        $this->validate([
+            'assignDeviceIds' => ['array', 'max:'.self::MAX_EDITOR_ASSIGNMENTS],
+            'assignDeviceIds.*' => [Rule::exists('devices', 'id')],
+            'assignUserIds' => ['array', 'max:'.self::MAX_EDITOR_ASSIGNMENTS],
+            'assignUserIds.*' => [Rule::exists('users', 'id')],
+            'assignGroupIds' => ['array', 'max:'.self::MAX_EDITOR_ASSIGNMENTS],
+            'assignGroupIds.*' => [Rule::exists('device_groups', 'id')],
+        ]);
+
+        if (count($this->assignDeviceIds) + count($this->assignUserIds) + count($this->assignGroupIds) > self::MAX_EDITOR_ASSIGNMENTS) {
+            throw ValidationException::withMessages(['assignment' => 'Keep the interactive assignment set at 5,000 targets or fewer.']);
+        }
     }
 
     /**
@@ -396,16 +961,91 @@ class StrategyList extends Component
     public function closeAssign(): void
     {
         $this->assigningId = null;
-        $this->reset('assignTab', 'assignSearch', 'assignDeviceIds', 'assignUserIds', 'assignGroupIds');
+        $this->reset(
+            'assignTab', 'assignSearch', 'assignDeviceIds', 'assignUserIds', 'assignGroupIds',
+            'assignPreviewing', 'assignmentImpact', 'assignmentFingerprint',
+        );
+        $this->resetValidation(['assignDeviceIds', 'assignUserIds', 'assignGroupIds', 'assignment']);
     }
 
     // -------------------------------------------------------------- render ---
 
     private function resetForm(): void
     {
-        $this->reset('formName', 'formNote', 'formEnabled', 'formIsDefault', 'formEnforce');
+        $this->reset(
+            'formName', 'formNote', 'formEnabled', 'formIsDefault', 'formEnforce', 'formConfirmationTimeout',
+            'previewing', 'impactPreview', 'previewFingerprint',
+            'revisionNote', 'rolloutStartAt', 'rolloutBatchSize', 'rolloutIntervalMinutes',
+        );
         $this->resetValidation();
         $this->formOptions = array_fill_keys(array_keys(Strategy::OPTION_KEYS), '');
+    }
+
+    /** @return array{name:string,note:?string,enabled:bool,is_default:bool,enforce:bool,options:array<string,string>}|null */
+    private function validatedFormSnapshot(): ?array
+    {
+        $this->validate([
+            'formName' => [
+                'required', 'string', 'max:255',
+                Rule::unique('strategies', 'name')->ignore($this->editingId ?: 0),
+            ],
+            'formNote' => ['nullable', 'string', 'max:500'],
+            'formConfirmationTimeout' => ['required', 'integer', 'min:1', 'max:10080'],
+        ], [], ['formName' => 'name', 'formNote' => 'note']);
+
+        // Range-check numeric options instead of silently dropping them.
+        $options = [];
+        foreach ($this->formOptions as $key => $value) {
+            $spec = Strategy::OPTION_KEYS[$key] ?? null;
+            $value = is_string($value) ? trim($value) : '';
+
+            if ($spec === null || $value === '') {
+                continue;
+            }
+
+            if ($spec['type'] === 'bool' && ! in_array($value, ['Y', 'N'], true)) {
+                $this->addError('formOptions.'.$key, 'Choose Enabled, Disabled, or Not managed.');
+
+                continue;
+            }
+
+            if ($spec['type'] === 'enum' && ! in_array($value, $spec['values'] ?? [], true)) {
+                $this->addError('formOptions.'.$key, 'Choose one of the supported values.');
+
+                continue;
+            }
+
+            if ($spec['type'] === 'string' && mb_strlen($value) > 4096) {
+                $this->addError('formOptions.'.$key, 'Keep this setting under 4,096 characters.');
+
+                continue;
+            }
+
+            if ($spec['type'] === 'int' && ! (ctype_digit($value)
+                && (int) $value >= ($spec['min'] ?? 0)
+                && (int) $value <= ($spec['max'] ?? PHP_INT_MAX))) {
+                $this->addError('formOptions.'.$key, 'Enter a whole number between '
+                    .($spec['min'] ?? 0).' and '.($spec['max'] ?? PHP_INT_MAX).'.');
+
+                continue;
+            }
+
+            $options[$key] = $value;
+        }
+
+        if ($this->getErrorBag()->isNotEmpty()) {
+            return null;
+        }
+
+        return [
+            'name' => $this->formName,
+            'note' => $this->formNote !== '' ? $this->formNote : null,
+            'enabled' => $this->formEnabled,
+            'is_default' => $this->formIsDefault,
+            'enforce' => $this->formEnforce,
+            'confirmation_timeout_minutes' => $this->formConfirmationTimeout,
+            'options' => $options,
+        ];
     }
 
     /**
@@ -456,10 +1096,50 @@ class StrategyList extends Component
             ->orderBy('name')
             ->get();
 
+        $complianceState = in_array($this->complianceState, ['all', 'confirmed', 'pending', 'stale', 'offline', 'overridden'], true)
+            ? $this->complianceState
+            : 'all';
+        $strategySummaries = app(StrategyCompliance::class)->summaries(
+            $strategies,
+            $this->complianceStrategyId,
+            $complianceState,
+        );
+        $emptyStates = array_fill_keys(['confirmed', 'pending', 'stale', 'offline', 'overridden'], []);
+        $complianceSummary = $this->complianceStrategyId
+            ? ($strategySummaries[$this->complianceStrategyId] ?? [
+                'counts' => array_map('count', $emptyStates),
+                'devices' => $emptyStates,
+            ])
+            : null;
+        $complianceDevices = $complianceSummary === null
+            ? []
+            : ($complianceState === 'all'
+                ? collect($complianceSummary['devices'])->flatten(1)->sortBy('rustdesk_id')->values()->all()
+                : $complianceSummary['devices'][$complianceState]);
+        $openRollouts = StrategyRollout::query()
+            ->with('revision')
+            ->withCount([
+                'targets',
+                'targets as released_targets_count' => fn ($query) => $query->whereNotNull('released_at'),
+                'targets as confirmed_targets_count' => fn ($query) => $query->whereNotNull('confirmed_at'),
+            ])
+            ->whereIn('status', [StrategyRollout::STATUS_SCHEDULED, StrategyRollout::STATUS_ACTIVE, StrategyRollout::STATUS_PAUSED])
+            ->get()
+            ->keyBy('strategy_id');
+
         return view('livewire.strategy-list', [
             'strategies' => $strategies,
             'catalog' => self::catalog(),
-            'assigning' => $this->assigningId ? $strategies->firstWhere('id', $this->assigningId) : null,
+            'strategySummaries' => $strategySummaries,
+            'openRollouts' => $openRollouts,
+            'historyStrategy' => $this->historyStrategy,
+            'revisionHistory' => $this->revisionHistory,
+            'revisionComparison' => $this->revisionComparison,
+            'complianceSummary' => $complianceSummary,
+            'complianceDevices' => $complianceDevices,
+            'assigning' => $this->assigningId && auth()->user()->consoleAllows('strategy', 'rw')
+                ? $strategies->firstWhere('id', $this->assigningId)
+                : null,
         ] + $this->assignCandidates());
 
         // (assignCandidates() is only non-empty while the assignment modal is open)
@@ -477,7 +1157,7 @@ class StrategyList extends Component
     {
         $empty = ['assignDevices' => collect(), 'assignUsers' => collect(), 'assignGroups' => collect(), 'assignTaken' => []];
 
-        if ($this->assigningId === null) {
+        if ($this->assigningId === null || ! auth()->user()->consoleAllows('strategy', 'rw')) {
             return $empty;
         }
 

@@ -2817,6 +2817,20 @@ html[data-sidenav-size="sm-hover"]:not([data-layout="topnav"]) .wrapper .leftsid
        40px inline-flex box in the middle of it breaks the baseline the
        separator and the sibling link share. */
 @media (max-width: 767.98px) {
+    /* Strategies V2 uses touch-safe controls without changing legacy screens. */
+    .strategy-v2 .btn:not(.btn-close),
+    .strategy-v2 .form-control,
+    .strategy-v2 .form-select,
+    .strategy-v2 .rd-iconbtn {
+        min-height: 44px;
+        min-width: 44px;
+    }
+
+    .strategy-v2 .form-control,
+    .strategy-v2 .form-select {
+        font-size: 16px;
+    }
+
     .btn:not(.btn-close):not(.btn-link) {
         display: inline-flex;
         align-items: center;
