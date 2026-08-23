@@ -72,8 +72,32 @@ return new class extends Migration
             $table->index(['device_id', 'delivered_version', 'confirmed_at']);
         });
 
+        $decodeLegacyOptions = static function (object $strategy): array {
+            try {
+                $options = json_decode($strategy->options ?: '[]', true, 512, JSON_THROW_ON_ERROR);
+            } catch (JsonException $exception) {
+                throw new RuntimeException(
+                    "Cannot create a baseline revision for strategy {$strategy->id}: options contains invalid JSON.",
+                    previous: $exception,
+                );
+            }
+
+            if (! is_array($options) || ($options !== [] && array_is_list($options))) {
+                throw new RuntimeException(
+                    "Cannot create a baseline revision for strategy {$strategy->id}: options must be a JSON object.",
+                );
+            }
+
+            return $options;
+        };
+
+        // Validate every legacy row before writing any revision evidence. SQLite
+        // accepts malformed text in JSON-declared columns, so fail visibly rather
+        // than silently recording an empty policy snapshot.
+        DB::table('strategies')->orderBy('id')->cursor()->each($decodeLegacyOptions);
+
         // Existing strategies become revision 1 without changing their live behavior.
-        DB::table('strategies')->orderBy('id')->each(function (object $strategy): void {
+        DB::table('strategies')->orderBy('id')->each(function (object $strategy) use ($decodeLegacyOptions): void {
             $snapshot = json_encode([
                 'name' => $strategy->name,
                 'note' => $strategy->note,
@@ -81,7 +105,7 @@ return new class extends Migration
                 'is_default' => (bool) $strategy->is_default,
                 'enforce' => (bool) $strategy->enforce,
                 'confirmation_timeout_minutes' => (int) $strategy->confirmation_timeout_minutes,
-                'options' => json_decode($strategy->options ?: '[]', true) ?: [],
+                'options' => $decodeLegacyOptions($strategy),
             ], JSON_THROW_ON_ERROR);
 
             $revisionId = DB::table('strategy_revisions')->insertGetId([

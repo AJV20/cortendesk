@@ -281,35 +281,44 @@ class StrategyList extends Component
             return;
         }
 
-        $currentStrategy = $this->editingId ? Strategy::findOrFail($this->editingId) : null;
-        $affectedCount = (int) StrategyImpact::preview($currentStrategy, $snapshot)['affected_count'];
-
-        [$strategy, $creating] = DB::transaction(function () use ($snapshot, $affectedCount): array {
-            $strategy = $this->editingId ? Strategy::query()->lockForUpdate()->findOrFail($this->editingId) : new Strategy;
+        [$strategy, $creating] = DB::transaction(function () use ($snapshot): array {
+            // Impact fingerprints include precedence and assignments. Lock every
+            // strategy in stable order so all fleet-policy writers share one
+            // source boundary before we revalidate the reviewed plan.
+            $lockedStrategies = Strategy::query()->orderBy('id')->lockForUpdate()->get();
+            $strategy = $this->editingId ? Strategy::findOrFail($this->editingId) : new Strategy;
             if ($strategy->exists && $strategy->rollouts()->whereIn('status', [
                 StrategyRollout::STATUS_SCHEDULED,
                 StrategyRollout::STATUS_ACTIVE,
                 StrategyRollout::STATUS_PAUSED,
-            ])->exists()) {
+            ])->lockForUpdate()->first() !== null) {
                 $this->addError('rollout', 'Cancel the current rollout before applying another revision.');
 
                 return [null, false];
             }
 
+            $impact = StrategyImpact::preview($strategy->exists ? $strategy : null, $snapshot);
+            if (! $this->previewing
+                || $this->previewFingerprint === null
+                || ! hash_equals($this->previewFingerprint, $impact['fingerprint'])) {
+                $this->addError('preview', 'The strategy changed after the preview. Review the impact again.');
+
+                return [null, false];
+            }
+            $affectedCount = (int) $impact['affected_count'];
+
             $displacedDefault = null;
             $displacedAffected = 0;
             if ($snapshot['is_default']) {
-                $displacedDefault = Strategy::query()
-                    ->whereKeyNot($this->editingId ?: 0)
-                    ->where('is_default', true)
-                    ->lockForUpdate()
-                    ->first();
+                $displacedDefault = $lockedStrategies->first(
+                    fn (Strategy $candidate): bool => $candidate->id !== $strategy->id && $candidate->is_default,
+                );
 
                 if ($displacedDefault?->rollouts()->whereIn('status', [
                     StrategyRollout::STATUS_SCHEDULED,
                     StrategyRollout::STATUS_ACTIVE,
                     StrategyRollout::STATUS_PAUSED,
-                ])->exists()) {
+                ])->lockForUpdate()->first() !== null) {
                     $this->addError('rollout', 'Cancel the current rollout on the existing default strategy before replacing it.');
 
                     return [null, false];
@@ -401,16 +410,14 @@ class StrategyList extends Component
             return;
         }
 
-        $strategy = $this->editingId ? Strategy::findOrFail($this->editingId) : null;
-        if (! $this->previewing || ! hash_equals(
-            (string) $this->previewFingerprint,
-            StrategyImpact::fingerprint($strategy, $snapshot),
-        )) {
+        if (! $this->previewing || $this->previewFingerprint === null) {
             $this->addError('preview', 'The strategy changed after the preview. Review the impact again.');
 
             return;
         }
 
+        // persist() revalidates the reviewed impact while holding the shared
+        // strategy/assignment source locks; this outer check is UX only.
         $this->persist();
     }
 
@@ -445,7 +452,8 @@ class StrategyList extends Component
 
         $startsAt = $this->rolloutStartAt !== '' ? Carbon::parse($this->rolloutStartAt) : now();
         $scheduled = DB::transaction(function () use ($snapshot, $startsAt): ?array {
-            $strategy = Strategy::query()->lockForUpdate()->findOrFail($this->editingId);
+            Strategy::query()->orderBy('id')->lockForUpdate()->get(['id']);
+            $strategy = Strategy::findOrFail($this->editingId);
             if (! $this->previewing) {
                 $this->addError('preview', 'The strategy changed after the preview. Review the impact again.');
 
@@ -555,6 +563,7 @@ class StrategyList extends Component
     {
         $this->editingId = null;
         $this->resetForm();
+        $this->dispatch('strategy-dialog-closed');
     }
 
     public function toggleEnabled(int $id): void
@@ -707,6 +716,7 @@ class StrategyList extends Component
     {
         $this->reset('historyStrategyId', 'compareFromRevisionId', 'compareToRevisionId');
         $this->resetValidation('history');
+        $this->dispatch('strategy-dialog-closed');
     }
 
     public function showCompliance(int $strategyId, string $state = 'all'): void
@@ -727,6 +737,7 @@ class StrategyList extends Component
     public function closeCompliance(): void
     {
         $this->reset('complianceStrategyId', 'complianceState');
+        $this->dispatch('strategy-dialog-closed');
     }
 
     public function getHistoryStrategyProperty(): ?Strategy
@@ -845,6 +856,9 @@ class StrategyList extends Component
     private function persistAssign(Strategy $strategy): void
     {
         $changed = DB::transaction(function () use ($strategy): ?int {
+            // Assignment writers lock the strategy set first, then target rows,
+            // so two strategies cannot concurrently claim the same target.
+            Strategy::query()->orderBy('id')->lockForUpdate()->get(['id']);
             $currentAssignments = [
                 Strategy::LEVEL_DEVICE => $strategy->devices()->pluck('devices.id')->map(fn ($id) => (int) $id)->all(),
                 Strategy::LEVEL_USER => $strategy->users()->pluck('users.id')->map(fn ($id) => (int) $id)->all(),
@@ -855,6 +869,18 @@ class StrategyList extends Component
                 Strategy::LEVEL_USER => array_map('intval', $this->assignUserIds),
                 Strategy::LEVEL_DEVICE_GROUP => array_map('intval', $this->assignGroupIds),
             ];
+            Device::query()->whereIn('id', array_values(array_unique([
+                ...$currentAssignments[Strategy::LEVEL_DEVICE],
+                ...$desiredAssignments[Strategy::LEVEL_DEVICE],
+            ])))->orderBy('id')->lockForUpdate()->get(['id']);
+            User::query()->whereIn('id', array_values(array_unique([
+                ...$currentAssignments[Strategy::LEVEL_USER],
+                ...$desiredAssignments[Strategy::LEVEL_USER],
+            ])))->orderBy('id')->lockForUpdate()->get(['id']);
+            DeviceGroup::query()->whereIn('id', array_values(array_unique([
+                ...$currentAssignments[Strategy::LEVEL_DEVICE_GROUP],
+                ...$desiredAssignments[Strategy::LEVEL_DEVICE_GROUP],
+            ])))->orderBy('id')->lockForUpdate()->get(['id']);
             $pivots = [
                 Strategy::LEVEL_DEVICE => ['device_strategy', 'device_id'],
                 Strategy::LEVEL_USER => ['strategy_user', 'user_id'],
@@ -966,6 +992,7 @@ class StrategyList extends Component
             'assignPreviewing', 'assignmentImpact', 'assignmentFingerprint',
         );
         $this->resetValidation(['assignDeviceIds', 'assignUserIds', 'assignGroupIds', 'assignment']);
+        $this->dispatch('strategy-dialog-closed');
     }
 
     // -------------------------------------------------------------- render ---

@@ -1,4 +1,6 @@
-<div class="strategy-v2">
+<div class="strategy-v2" x-data="{ returnFocusKey: null }"
+     @click.capture="trigger = $event.target.closest('[data-dialog-trigger]'); if (trigger) returnFocusKey = trigger.dataset.dialogTrigger"
+     @strategy-dialog-closed.window="setTimeout(() => { target = [...document.querySelectorAll('[data-dialog-trigger]')].find(el => el.dataset.dialogTrigger === returnFocusKey && el.offsetParent !== null); target?.focus(); returnFocusKey = null })">
     @php($canWriteStrategies = auth()->user()->consoleAllows('strategy', 'rw'))
     <div class="card">
 
@@ -10,7 +12,7 @@
                 </div>
                 @if ($canWriteStrategies)
                     <div class="rd-toolbar-actions">
-                        <button type="button" class="btn btn-primary" wire:click="create">
+                        <button type="button" class="btn btn-primary" data-dialog-trigger="create" wire:click="create">
                             <i class="ri-add-line"></i>Add Strategy
                         </button>
                     </div>
@@ -89,11 +91,11 @@
                             </td>
                             <td>
                                 <div class="d-flex flex-wrap gap-1" aria-label="Strategy confirmation status">
-                                    <button type="button" class="btn btn-sm py-0 px-1 bg-success-subtle text-success" wire:click="showCompliance({{ $strategy->id }}, 'confirmed')" title="Confirmed" aria-label="Confirmed: {{ $summary['confirmed'] }} devices">✓ {{ $summary['confirmed'] }}</button>
-                                    <button type="button" class="btn btn-sm py-0 px-1 bg-warning-subtle text-warning" wire:click="showCompliance({{ $strategy->id }}, 'pending')" title="Pending" aria-label="Pending: {{ $summary['pending'] }} devices">◷ {{ $summary['pending'] }}</button>
-                                    <button type="button" class="btn btn-sm py-0 px-1 bg-danger-subtle text-danger" wire:click="showCompliance({{ $strategy->id }}, 'stale')" title="Stale" aria-label="Stale: {{ $summary['stale'] }} devices">! {{ $summary['stale'] }}</button>
-                                    <button type="button" class="btn btn-sm py-0 px-1 bg-secondary-subtle text-secondary" wire:click="showCompliance({{ $strategy->id }}, 'offline')" title="Offline" aria-label="Offline: {{ $summary['offline'] }} devices">○ {{ $summary['offline'] }}</button>
-                                    <button type="button" class="btn btn-sm py-0 px-1 bg-info-subtle text-info" wire:click="showCompliance({{ $strategy->id }}, 'overridden')" title="Overridden" aria-label="Overridden: {{ $summary['overridden'] }} devices">↳ {{ $summary['overridden'] }}</button>
+                                    <button type="button" class="btn btn-sm py-0 px-1 bg-success-subtle text-success" data-dialog-trigger="compliance-{{ $strategy->id }}-confirmed" wire:click="showCompliance({{ $strategy->id }}, 'confirmed')" title="Confirmed" aria-label="Confirmed: {{ $summary['confirmed'] }} devices">✓ {{ $summary['confirmed'] }}</button>
+                                    <button type="button" class="btn btn-sm py-0 px-1 bg-warning-subtle text-warning" data-dialog-trigger="compliance-{{ $strategy->id }}-pending" wire:click="showCompliance({{ $strategy->id }}, 'pending')" title="Pending" aria-label="Pending: {{ $summary['pending'] }} devices">◷ {{ $summary['pending'] }}</button>
+                                    <button type="button" class="btn btn-sm py-0 px-1 bg-danger-subtle text-danger" data-dialog-trigger="compliance-{{ $strategy->id }}-stale" wire:click="showCompliance({{ $strategy->id }}, 'stale')" title="Stale" aria-label="Stale: {{ $summary['stale'] }} devices">! {{ $summary['stale'] }}</button>
+                                    <button type="button" class="btn btn-sm py-0 px-1 bg-secondary-subtle text-secondary" data-dialog-trigger="compliance-{{ $strategy->id }}-offline" wire:click="showCompliance({{ $strategy->id }}, 'offline')" title="Offline" aria-label="Offline: {{ $summary['offline'] }} devices">○ {{ $summary['offline'] }}</button>
+                                    <button type="button" class="btn btn-sm py-0 px-1 bg-info-subtle text-info" data-dialog-trigger="compliance-{{ $strategy->id }}-overridden" wire:click="showCompliance({{ $strategy->id }}, 'overridden')" title="Overridden" aria-label="Overridden: {{ $summary['overridden'] }} devices">↳ {{ $summary['overridden'] }}</button>
                                 </div>
                             </td>
                             <td>
@@ -117,13 +119,13 @@
                                         <button type="button" class="btn btn-link btn-sm p-0 me-2 text-danger" aria-label="Cancel rollout for {{ $strategy->name }}" wire:click="cancelRollout({{ $rollout->id }})" wire:confirm="Cancel this rollout? {{ $rollout->released_targets_count }} released device(s) return to the current revision on their next heartbeat.">Cancel rollout</button>
                                     @endif
                                 @endif
-                                <button type="button" class="btn btn-link btn-sm p-0 me-2 rd-act" aria-label="Revision history for {{ $strategy->name }}" wire:click="showHistory({{ $strategy->id }})">History</button>
+                                <button type="button" class="btn btn-link btn-sm p-0 me-2 rd-act" data-dialog-trigger="history-{{ $strategy->id }}" aria-label="Revision history for {{ $strategy->name }}" wire:click="showHistory({{ $strategy->id }})">History</button>
                                 @if ($canWriteStrategies)
-                                    <button type="button" class="btn btn-link btn-sm p-0 me-2 rd-act" aria-label="Assign {{ $strategy->name }}" wire:click="openAssign({{ $strategy->id }})">Assign</button>
-                                    <button type="button" class="btn btn-link btn-sm p-0 me-2 rd-act" aria-label="Edit {{ $strategy->name }}" wire:click="edit({{ $strategy->id }})">Edit</button>
-                                    <a href="javascript:void(0);" class="text-danger" aria-label="Delete {{ $strategy->name }}"
+                                    <button type="button" class="btn btn-link btn-sm p-0 me-2 rd-act" data-dialog-trigger="assign-{{ $strategy->id }}" aria-label="Assign {{ $strategy->name }}" wire:click="openAssign({{ $strategy->id }})">Assign</button>
+                                    <button type="button" class="btn btn-link btn-sm p-0 me-2 rd-act" data-dialog-trigger="edit-{{ $strategy->id }}" aria-label="Edit {{ $strategy->name }}" wire:click="edit({{ $strategy->id }})">Edit</button>
+                                    <button type="button" class="btn btn-link btn-sm p-0 text-danger" aria-label="Delete {{ $strategy->name }}"
                                        wire:click="deleteStrategy({{ $strategy->id }})"
-                                       wire:confirm="Delete strategy {{ $strategy->name }}? Devices assigned to it fall back to the default strategy, and the options it pushed are reset to the client defaults on the next heartbeat.">Delete</a>
+                                       wire:confirm="Delete strategy {{ $strategy->name }}? Devices assigned to it fall back to the default strategy, and the options it pushed are reset to the client defaults on the next heartbeat.">Delete</button>
                                 @endif
                             </td>
                         </tr>
@@ -134,7 +136,7 @@
                                     <div class="rd-empty-icon"><i class="ri-settings-3-line"></i></div>
                                     <p class="rd-empty-title">No strategies yet. Click "Add Strategy" to create one.</p>
                                     <p class="rd-empty-text">A strategy is a set of client options the server pushes out — permissions, defaults, whatever you want held steady across a fleet.</p>
-                                    @if ($canWriteStrategies)<button type="button" class="btn btn-sm btn-outline-light" wire:click="create">Add Strategy</button>@endif
+                                    @if ($canWriteStrategies)<button type="button" class="btn btn-sm btn-outline-light" data-dialog-trigger="create" wire:click="create">Add Strategy</button>@endif
                                 </div>
                             </td>
                         </tr>
@@ -186,11 +188,11 @@
                                 @endif
                             </div>
                             <div class="d-flex flex-wrap gap-1 mt-2">
-                                <button type="button" class="btn btn-sm py-0 px-1 bg-success-subtle text-success" aria-label="Confirmed: {{ $summary['confirmed'] }} devices" wire:click="showCompliance({{ $strategy->id }}, 'confirmed')">✓ {{ $summary['confirmed'] }}</button>
-                                <button type="button" class="btn btn-sm py-0 px-1 bg-warning-subtle text-warning" aria-label="Pending: {{ $summary['pending'] }} devices" wire:click="showCompliance({{ $strategy->id }}, 'pending')">◷ {{ $summary['pending'] }}</button>
-                                <button type="button" class="btn btn-sm py-0 px-1 bg-danger-subtle text-danger" aria-label="Stale: {{ $summary['stale'] }} devices" wire:click="showCompliance({{ $strategy->id }}, 'stale')">! {{ $summary['stale'] }}</button>
-                                <button type="button" class="btn btn-sm py-0 px-1 bg-secondary-subtle text-secondary" aria-label="Offline: {{ $summary['offline'] }} devices" wire:click="showCompliance({{ $strategy->id }}, 'offline')">○ {{ $summary['offline'] }}</button>
-                                <button type="button" class="btn btn-sm py-0 px-1 bg-info-subtle text-info" aria-label="Overridden: {{ $summary['overridden'] }} devices" wire:click="showCompliance({{ $strategy->id }}, 'overridden')">↳ {{ $summary['overridden'] }}</button>
+                                <button type="button" class="btn btn-sm py-0 px-1 bg-success-subtle text-success" data-dialog-trigger="compliance-{{ $strategy->id }}-confirmed" aria-label="Confirmed: {{ $summary['confirmed'] }} devices" wire:click="showCompliance({{ $strategy->id }}, 'confirmed')">✓ {{ $summary['confirmed'] }}</button>
+                                <button type="button" class="btn btn-sm py-0 px-1 bg-warning-subtle text-warning" data-dialog-trigger="compliance-{{ $strategy->id }}-pending" aria-label="Pending: {{ $summary['pending'] }} devices" wire:click="showCompliance({{ $strategy->id }}, 'pending')">◷ {{ $summary['pending'] }}</button>
+                                <button type="button" class="btn btn-sm py-0 px-1 bg-danger-subtle text-danger" data-dialog-trigger="compliance-{{ $strategy->id }}-stale" aria-label="Stale: {{ $summary['stale'] }} devices" wire:click="showCompliance({{ $strategy->id }}, 'stale')">! {{ $summary['stale'] }}</button>
+                                <button type="button" class="btn btn-sm py-0 px-1 bg-secondary-subtle text-secondary" data-dialog-trigger="compliance-{{ $strategy->id }}-offline" aria-label="Offline: {{ $summary['offline'] }} devices" wire:click="showCompliance({{ $strategy->id }}, 'offline')">○ {{ $summary['offline'] }}</button>
+                                <button type="button" class="btn btn-sm py-0 px-1 bg-info-subtle text-info" data-dialog-trigger="compliance-{{ $strategy->id }}-overridden" aria-label="Overridden: {{ $summary['overridden'] }} devices" wire:click="showCompliance({{ $strategy->id }}, 'overridden')">↳ {{ $summary['overridden'] }}</button>
                             </div>
                             <div class="rd-mini-foot">
                                 <span class="rd-mini-sub text-nowrap">
@@ -199,16 +201,16 @@
                                     <i class="ri-folder-line ms-2 me-1"></i>{{ $strategy->device_groups_count }}
                                 </span>
                                 <div class="rd-mini-acts">
-                                    <button type="button" class="rd-iconbtn border-0" title="Revision history" aria-label="Revision history for {{ $strategy->name }}"
+                                    <button type="button" class="rd-iconbtn border-0" data-dialog-trigger="history-{{ $strategy->id }}" title="Revision history" aria-label="Revision history for {{ $strategy->name }}"
                                             wire:click="showHistory({{ $strategy->id }})"><i class="ri-history-line"></i></button>
                                     @if ($canWriteStrategies)
-                                        <a href="javascript:void(0);" class="rd-iconbtn" title="Assign" aria-label="Assign {{ $strategy->name }}"
-                                           wire:click="openAssign({{ $strategy->id }})"><i class="ri-links-line"></i></a>
-                                        <a href="javascript:void(0);" class="rd-iconbtn" title="Edit" aria-label="Edit {{ $strategy->name }}"
-                                           wire:click="edit({{ $strategy->id }})"><i class="ri-pencil-line"></i></a>
-                                        <a href="javascript:void(0);" class="rd-iconbtn text-danger" title="Delete" aria-label="Delete {{ $strategy->name }}"
+                                        <button type="button" class="rd-iconbtn border-0" data-dialog-trigger="assign-{{ $strategy->id }}" title="Assign" aria-label="Assign {{ $strategy->name }}"
+                                           wire:click="openAssign({{ $strategy->id }})"><i class="ri-links-line"></i></button>
+                                        <button type="button" class="rd-iconbtn border-0" data-dialog-trigger="edit-{{ $strategy->id }}" title="Edit" aria-label="Edit {{ $strategy->name }}"
+                                           wire:click="edit({{ $strategy->id }})"><i class="ri-pencil-line"></i></button>
+                                        <button type="button" class="rd-iconbtn border-0 text-danger" title="Delete" aria-label="Delete {{ $strategy->name }}"
                                            wire:click="deleteStrategy({{ $strategy->id }})"
-                                           wire:confirm="Delete strategy {{ $strategy->name }}? Devices assigned to it fall back to the default strategy."><i class="ri-delete-bin-line"></i></a>
+                                           wire:confirm="Delete strategy {{ $strategy->name }}? Devices assigned to it fall back to the default strategy."><i class="ri-delete-bin-line"></i></button>
                                     @endif
                                 </div>
                             </div>
@@ -217,24 +219,25 @@
                     <div class="rd-empty">
                         <div class="rd-empty-icon"><i class="ri-settings-3-line"></i></div>
                         <p class="rd-empty-title">No strategies yet. Tap "Add Strategy" to create one.</p>
-                        @if ($canWriteStrategies)<button type="button" class="btn btn-sm btn-outline-light" wire:click="create">Add Strategy</button>@endif
+                        @if ($canWriteStrategies)<button type="button" class="btn btn-sm btn-outline-light" data-dialog-trigger="create" wire:click="create">Add Strategy</button>@endif
                     </div>
                 @endforelse
             </div>
     </div>
 
     {{-- Create / edit modal --}}
-    @if ($editingId !== null)
+    @if ($editingId !== null && ! $previewing)
         <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true"
              aria-labelledby="strategy-editor-title"
-             wire:keydown.escape.window="{{ $previewing ? 'closePreview' : 'closeModal' }}"
+             x-data x-trap.noscroll="true" x-init="$nextTick(() => $refs.initial.focus())"
+             wire:keydown.escape.window="closeModal"
              style="background: rgba(0,0,0,.6);" wire:key="strategy-editor">
             <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
                 <div class="modal-content">
                     <form wire:submit="previewSave">
                         <div class="modal-header">
                             <h5 class="modal-title" id="strategy-editor-title">{{ $editingId === 0 ? 'Add Strategy' : 'Edit Strategy' }}</h5>
-                            <button type="button" class="btn-close" wire:click="closeModal" aria-label="Close"></button>
+                            <button type="button" class="btn-close" x-ref="initial" wire:click="closeModal" aria-label="Close"></button>
                         </div>
                         <div class="modal-body">
                             <div class="row">
@@ -345,7 +348,8 @@
     {{-- Impact preview and rollout choice --}}
     @if ($previewing && $editingId !== null)
         <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true"
-             aria-labelledby="strategy-impact-title" style="background: rgba(0,0,0,.72); z-index: 1080;" wire:key="strategy-impact-preview">
+             aria-labelledby="strategy-impact-title" x-data x-trap.noscroll="true" x-init="$nextTick(() => $refs.initial.focus())"
+             wire:keydown.escape.window="closePreview" style="background: rgba(0,0,0,.72); z-index: 1080;" wire:key="strategy-impact-preview">
             <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
                 <div class="modal-content">
                     <div class="modal-header">
@@ -353,11 +357,11 @@
                             <h5 class="modal-title" id="strategy-impact-title">Review strategy impact</h5>
                             <small class="text-muted">Nothing has been changed yet.</small>
                         </div>
-                        <button type="button" class="btn-close" wire:click="closePreview" aria-label="Back to editor"></button>
+                        <button type="button" class="btn-close" x-ref="initial" wire:click="closePreview" aria-label="Back to editor"></button>
                     </div>
                     <div class="modal-body">
-                        @error('preview') <div class="alert alert-danger">{{ $message }}</div> @enderror
-                        @error('rollout') <div class="alert alert-danger">{{ $message }}</div> @enderror
+                        @error('preview') <div class="alert alert-danger" role="alert">{{ $message }}</div> @enderror
+                        @error('rollout') <div class="alert alert-danger" role="alert">{{ $message }}</div> @enderror
 
                         <div class="alert alert-info d-flex align-items-center gap-2">
                             <i class="ri-computer-line fs-4"></i>
@@ -425,7 +429,7 @@
                             <label class="form-label" for="strategy-revision-note">Revision note</label>
                             <input id="strategy-revision-note" type="text" class="form-control @error('revisionNote') is-invalid @enderror"
                                    wire:model="revisionNote" maxlength="500" placeholder="Why is this changing?">
-                            @error('revisionNote') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                            @error('revisionNote') <div class="invalid-feedback" role="alert">{{ $message }}</div> @enderror
                         </div>
 
                         @if ($editingId !== 0)
@@ -471,14 +475,15 @@
     @endif
 
     {{-- Assignment modal --}}
-    @if ($assigning)
+    @if ($assigning && ! $assignPreviewing)
         <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true"
-             aria-labelledby="strategy-assignment-title" wire:keydown.escape.window="{{ $assignPreviewing ? 'closeAssignPreview' : 'closeAssign' }}" style="background: rgba(0,0,0,.6);" wire:key="strategy-assign">
+             aria-labelledby="strategy-assignment-title" x-data x-trap.noscroll="true" x-init="$nextTick(() => $refs.initial.focus())"
+             wire:keydown.escape.window="closeAssign" style="background: rgba(0,0,0,.6);" wire:key="strategy-assign">
             <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
                 <div class="modal-content">
                     <div class="modal-header">
                         <h5 class="modal-title" id="strategy-assignment-title">Assign "{{ $assigning->name }}"</h5>
-                        <button type="button" class="btn-close" wire:click="closeAssign" aria-label="Close"></button>
+                        <button type="button" class="btn-close" x-ref="initial" wire:click="closeAssign" aria-label="Close"></button>
                     </div>
                     <div class="modal-body">
                         <p class="text-muted fs-13">
@@ -486,31 +491,37 @@
                             Checking a target that already belongs to another strategy moves it here.
                         </p>
 
-                        <ul class="nav nav-tabs nav-bordered mb-3">
+                        <ul class="nav nav-tabs nav-bordered mb-3" role="tablist" aria-label="Assignment target type"
+                            @keydown.right.prevent="tabs = [...$el.querySelectorAll('[role=tab]')]; tabs[(tabs.indexOf($event.target) + 1) % tabs.length].focus()"
+                            @keydown.left.prevent="tabs = [...$el.querySelectorAll('[role=tab]')]; tabs[(tabs.indexOf($event.target) - 1 + tabs.length) % tabs.length].focus()">
                             <li class="nav-item">
-                                <a href="javascript:void(0);" class="nav-link {{ $assignTab === 'devices' ? 'active' : '' }}"
-                                   wire:click="setAssignTab('devices')">
+                                <button type="button" id="assign-devices-tab" role="tab" aria-controls="assign-devices-panel"
+                                   aria-selected="{{ $assignTab === 'devices' ? 'true' : 'false' }}" tabindex="{{ $assignTab === 'devices' ? '0' : '-1' }}"
+                                   class="nav-link {{ $assignTab === 'devices' ? 'active' : '' }}" wire:click="setAssignTab('devices')">
                                     <i class="ri-computer-line me-1"></i>Devices
                                     <span class="badge bg-secondary-subtle text-secondary ms-1">{{ count($assignDeviceIds) }}</span>
-                                </a>
+                                </button>
                             </li>
                             <li class="nav-item">
-                                <a href="javascript:void(0);" class="nav-link {{ $assignTab === 'users' ? 'active' : '' }}"
-                                   wire:click="setAssignTab('users')">
+                                <button type="button" id="assign-users-tab" role="tab" aria-controls="assign-users-panel"
+                                   aria-selected="{{ $assignTab === 'users' ? 'true' : 'false' }}" tabindex="{{ $assignTab === 'users' ? '0' : '-1' }}"
+                                   class="nav-link {{ $assignTab === 'users' ? 'active' : '' }}" wire:click="setAssignTab('users')">
                                     <i class="ri-user-line me-1"></i>Users
                                     <span class="badge bg-secondary-subtle text-secondary ms-1">{{ count($assignUserIds) }}</span>
-                                </a>
+                                </button>
                             </li>
                             <li class="nav-item">
-                                <a href="javascript:void(0);" class="nav-link {{ $assignTab === 'groups' ? 'active' : '' }}"
-                                   wire:click="setAssignTab('groups')">
+                                <button type="button" id="assign-groups-tab" role="tab" aria-controls="assign-groups-panel"
+                                   aria-selected="{{ $assignTab === 'groups' ? 'true' : 'false' }}" tabindex="{{ $assignTab === 'groups' ? '0' : '-1' }}"
+                                   class="nav-link {{ $assignTab === 'groups' ? 'active' : '' }}" wire:click="setAssignTab('groups')">
                                     <i class="ri-folder-line me-1"></i>Device groups
                                     <span class="badge bg-secondary-subtle text-secondary ms-1">{{ count($assignGroupIds) }}</span>
-                                </a>
+                                </button>
                             </li>
                         </ul>
 
                         @if ($assignTab === 'devices')
+                            <div id="assign-devices-panel" role="tabpanel" aria-labelledby="assign-devices-tab" tabindex="0">
                             <input type="search" class="form-control mb-2" placeholder="Search ID, alias, hostname…"
                                    wire:model.live.debounce.300ms="assignSearch">
                             <div class="rd-scrollbox" style="max-height: 340px; overflow-y: auto;">
@@ -549,7 +560,9 @@
                                 {{ count($assignDeviceIds) }} selected
                                 @if ($assignDevices->count() >= 200) · showing first 200, refine with search @endif
                             </small>
+                            </div>
                         @elseif ($assignTab === 'users')
+                            <div id="assign-users-panel" role="tabpanel" aria-labelledby="assign-users-tab" tabindex="0">
                             <div class="rd-scrollbox" style="max-height: 340px; overflow-y: auto;">
                                 <table class="table table-sm table-hover mb-0">
                                     <tbody>
@@ -581,7 +594,9 @@
                                 </table>
                             </div>
                             <small class="text-muted">Applies to every device owned by the checked users.</small>
+                            </div>
                         @else
+                            <div id="assign-groups-panel" role="tabpanel" aria-labelledby="assign-groups-tab" tabindex="0">
                             <div class="rd-scrollbox" style="max-height: 340px; overflow-y: auto;">
                                 <table class="table table-sm table-hover mb-0">
                                     <tbody>
@@ -610,6 +625,7 @@
                                 </table>
                             </div>
                             <small class="text-muted">Applies to every device in the checked groups that has no closer assignment.</small>
+                            </div>
                         @endif
                     </div>
                     <div class="modal-footer">
@@ -628,7 +644,8 @@
     {{-- Assignment impact preview --}}
     @if ($assignPreviewing && $assigning)
         <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="assignment-impact-title"
-             style="background: rgba(0,0,0,.72); z-index: 1080;" wire:key="assignment-impact-preview">
+             x-data x-trap.noscroll="true" x-init="$nextTick(() => $refs.initial.focus())"
+             wire:keydown.escape.window="closeAssignPreview" style="background: rgba(0,0,0,.72); z-index: 1080;" wire:key="assignment-impact-preview">
             <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
                 <div class="modal-content">
                     <div class="modal-header">
@@ -636,10 +653,10 @@
                             <h5 class="modal-title" id="assignment-impact-title">Review assignment impact</h5>
                             <small class="text-muted">Nothing has been reassigned yet.</small>
                         </div>
-                        <button type="button" class="btn-close" wire:click="closeAssignPreview" aria-label="Back to assignments"></button>
+                        <button type="button" class="btn-close" x-ref="initial" wire:click="closeAssignPreview" aria-label="Back to assignments"></button>
                     </div>
                     <div class="modal-body">
-                        @error('assignment') <div class="alert alert-danger">{{ $message }}</div> @enderror
+                        @error('assignment') <div class="alert alert-danger" role="alert">{{ $message }}</div> @enderror
                         <div class="alert alert-info"><strong>{{ $assignmentImpact['affected_count'] ?? 0 }} device(s)</strong> will resolve to a different strategy.</div>
                         <div class="row g-2 mb-3">
                             @foreach (['device' => 'Direct devices', 'user' => 'Users', 'device_group' => 'Device groups'] as $level => $label)
@@ -686,6 +703,7 @@
     {{-- Immutable revision history and comparison --}}
     @if ($historyStrategy)
         <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="strategy-history-title" wire:keydown.escape.window="closeHistory"
+             x-data x-trap.noscroll="true" x-init="$nextTick(() => $refs.initial.focus())"
              style="background: rgba(0,0,0,.65);" wire:key="strategy-history">
             <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
                 <div class="modal-content">
@@ -694,10 +712,10 @@
                             <h5 class="modal-title" id="strategy-history-title">{{ $historyStrategy->name }} revision history</h5>
                             <small class="text-muted">Restoring creates a new revision; existing history is never rewritten.</small>
                         </div>
-                        <button type="button" class="btn-close" wire:click="closeHistory" aria-label="Close history"></button>
+                        <button type="button" class="btn-close" x-ref="initial" wire:click="closeHistory" aria-label="Close history"></button>
                     </div>
                     <div class="modal-body">
-                        @error('history') <div class="alert alert-danger">{{ $message }}</div> @enderror
+                        @error('history') <div class="alert alert-danger" role="alert">{{ $message }}</div> @enderror
                         @if ($revisionHistory->isNotEmpty())
                             <div class="row g-2 align-items-end mb-3">
                                 <div class="col-12 col-md-5">
@@ -782,6 +800,7 @@
     @if ($complianceStrategyId && $complianceSummary)
         @php($complianceStrategy = $strategies->firstWhere('id', $complianceStrategyId))
         <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="strategy-compliance-title" wire:keydown.escape.window="closeCompliance"
+             x-data x-trap.noscroll="true" x-init="$nextTick(() => $refs.initial.focus())"
              style="background: rgba(0,0,0,.65);" wire:key="strategy-compliance">
             <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
                 <div class="modal-content">
@@ -790,7 +809,7 @@
                             <h5 class="modal-title" id="strategy-compliance-title">{{ $complianceStrategy?->name }} confirmation</h5>
                             <small class="text-muted">Live acknowledgement state for the currently desired policy.</small>
                         </div>
-                        <button type="button" class="btn-close" wire:click="closeCompliance" aria-label="Close confirmation details"></button>
+                        <button type="button" class="btn-close" x-ref="initial" wire:click="closeCompliance" aria-label="Close confirmation details"></button>
                     </div>
                     <div class="modal-body">
                         <div class="d-flex flex-wrap gap-2 mb-3" role="group" aria-label="Filter confirmation state">

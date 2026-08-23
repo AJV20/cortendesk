@@ -15,6 +15,8 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 /**
  * RustDesk client `--assign` support (PLAN B2).
@@ -150,39 +152,52 @@ class DeviceCliController extends Controller
         if ($isNew) {
             $device = new Device(['rustdesk_id' => $id]);
         }
-        $device->uuid = $uuid;
 
-        // A deploy/assign carrying a Device rw token is an authenticated,
-        // pre-approved registration (PLAN B3): it registers active regardless of
-        // the approval gate, and approves any device the gate had quarantined.
-        $device->status = Device::STATUS_ACTIVE;
-
+        $attributes = [
+            'uuid' => $uuid,
+            // A deploy/assign carrying a Device rw token is an authenticated,
+            // pre-approved registration (PLAN B3).
+            'status' => Device::STATUS_ACTIVE,
+        ];
         if ($userChange !== null) {
-            $device->user_id = $userChange;
+            $attributes['user_id'] = $userChange;
         }
         if ($groupChange !== null) {
-            $device->device_group_id = $groupChange;
+            $attributes['device_group_id'] = $groupChange;
         }
         if ($request->filled('note')) {
-            $device->note = (string) $request->input('note');
+            $attributes['note'] = (string) $request->input('note');
         }
-        // Display overrides (NOT identifiers).
         if ($request->filled('device_name')) {
-            $device->hostname = (string) $request->input('device_name');
+            $attributes['hostname'] = (string) $request->input('device_name');
         }
         if ($request->filled('device_username')) {
-            $device->username = (string) $request->input('device_username');
+            $attributes['username'] = (string) $request->input('device_username');
         }
 
-        $device->save();
+        $contextAttributes = array_intersect_key($attributes, array_flip(['user_id', 'device_group_id']));
+        if ($contextAttributes !== []
+            && Device::strategyResolutionWouldChange($device, $contextAttributes)
+            && ! $this->tokenAllows($request, 'strategy')) {
+            return $this->message("Token lacks 'rw' permission on 'strategy'.", 403);
+        }
+
+        try {
+            $device = DB::transaction(function () use ($device, $attributes, $strategyChange): Device {
+                $device = Device::updateWithStrategyContext($device, $attributes);
+                if ($strategyChange !== null) {
+                    Strategy::assignTo(Strategy::LEVEL_DEVICE, (int) $device->id, $strategyChange);
+                }
+
+                return $device;
+            });
+        } catch (ValidationException $exception) {
+            return $this->message($exception->getMessage(), 409);
+        }
 
         // Add / update the address-book entry for this device.
         if ($book !== null) {
             $this->applyAddressBook($request, $book, $device);
-        }
-
-        if ($strategyChange !== null) {
-            Strategy::assignTo(Strategy::LEVEL_DEVICE, (int) $device->id, $strategyChange);
         }
 
         ConsoleAudit::record(

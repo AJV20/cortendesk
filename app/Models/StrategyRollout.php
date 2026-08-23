@@ -91,7 +91,8 @@ class StrategyRollout extends Model
         $rollout = DB::transaction(function () use (
             $strategy, $revision, $deviceIds, $startsAt, $batchSize, $intervalMinutes, $userId,
         ): self {
-            $strategy = Strategy::query()->lockForUpdate()->findOrFail($strategy->id);
+            Strategy::query()->orderBy('id')->lockForUpdate()->get(['id']);
+            $strategy = Strategy::findOrFail($strategy->id);
             $open = static::query()
                 ->where('strategy_id', $strategy->id)
                 ->whereIn('status', [self::STATUS_SCHEDULED, self::STATUS_ACTIVE, self::STATUS_PAUSED])

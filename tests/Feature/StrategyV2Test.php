@@ -1,6 +1,7 @@
 <?php
 
 use App\Livewire\StrategyList;
+use App\Models\ApiToken;
 use App\Models\ConsoleAudit;
 use App\Models\Device;
 use App\Models\DeviceGroup;
@@ -24,6 +25,14 @@ function v2Device(string $id, array $attributes = []): Device
         'uuid' => 'strategy-v2-'.$id,
         'hostname' => 'host-'.$id,
     ], $attributes));
+}
+
+function v2CliHeaders(array $permissions): array
+{
+    $creator = User::factory()->admin()->create();
+    [, $plain] = ApiToken::issue($creator, 'strategy-v2-cli-'.uniqid(), $permissions);
+
+    return ['Authorization' => "Bearer {$plain}", 'Accept' => 'application/json'];
 }
 
 it('installs durable strategy revision and rollout storage', function () {
@@ -252,6 +261,32 @@ it('does not allow the legacy save action to bypass impact review', function () 
         ->assertSet('previewing', true);
 
     expect(Strategy::where('name', 'Must review')->exists())->toBeFalse();
+});
+
+it('revalidates an immediate save against the locked assignment source', function () {
+    $admin = User::factory()->admin()->create();
+    $reviewed = Strategy::create([
+        'name' => 'Reviewed source',
+        'enabled' => true,
+        'options' => ['enable-audio' => 'N'],
+    ]);
+    $replacement = Strategy::create(['name' => 'Replacement source', 'enabled' => true]);
+    $device = v2Device('981000015');
+    Strategy::assignTo(Strategy::LEVEL_DEVICE, $device->id, $reviewed->id);
+
+    $component = Livewire::actingAs($admin)
+        ->test(StrategyList::class)
+        ->call('edit', $reviewed->id)
+        ->set('formOptions.enable-audio', 'Y')
+        ->call('previewSave')
+        ->assertSet('previewing', true);
+
+    Strategy::assignTo(Strategy::LEVEL_DEVICE, $device->id, $replacement->id);
+
+    $component->call('confirmSave')->assertHasErrors('preview');
+
+    expect($reviewed->fresh()->optionMap())->toBe(['enable-audio' => 'N'])
+        ->and(StrategyRevision::where('strategy_id', $reviewed->id)->count())->toBe(0);
 });
 
 it('records zero affected devices for metadata-only revisions', function () {
@@ -825,4 +860,103 @@ it('backfills an active baseline revision for strategies that predate v2', funct
         ->and($revision->change_note)->toBe('Baseline created during Strategies V2 upgrade')
         ->and($revision->snapshot['options'])->toBe(['enable-audio' => 'N'])
         ->and($revision->snapshot['enforce'])->toBeTrue();
+});
+
+it('fails baseline backfill before writing evidence when legacy options json is malformed', function () {
+    $migration = require database_path('migrations/2026_08_22_000010_create_strategy_revision_and_rollout_tables.php');
+    $migration->down();
+
+    $strategyId = DB::table('strategies')->insertGetId([
+        'name' => 'Malformed legacy policy',
+        'note' => null,
+        'enabled' => true,
+        'is_default' => false,
+        'enforce' => false,
+        'options' => '{not-json',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    try {
+        $migration->up();
+        $this->fail('The migration accepted malformed legacy strategy options.');
+    } catch (RuntimeException $exception) {
+        expect($exception->getMessage())->toContain("strategy {$strategyId}")
+            ->and(DB::table('strategy_revisions')->count())->toBe(0)
+            ->and(DB::table('strategies')->where('id', $strategyId)->value('active_revision_id'))->toBeNull();
+    }
+});
+
+it('blocks device owner and group resolution changes while a rollout is open', function () {
+    $admin = User::factory()->admin()->create();
+    $fallback = Strategy::create(['name' => 'Context fallback', 'enabled' => true, 'is_default' => true]);
+    $ownerPolicy = Strategy::create(['name' => 'Owner context', 'enabled' => true]);
+    $owner = User::factory()->create(['username' => 'context-owner']);
+    Strategy::assignTo(Strategy::LEVEL_USER, $owner->id, $ownerPolicy->id);
+    $device = v2Device('983000099', ['note' => 'unchanged']);
+    $candidate = StrategyRevision::captureSnapshot($fallback, [
+        ...$fallback->snapshot(),
+        'options' => ['enable-audio' => 'N'],
+    ], $admin->id, 'Context lock candidate');
+    StrategyRollout::schedule($fallback, $candidate, [$device->id], now()->addHour(), 1, 5, $admin->id);
+
+    expect(fn () => Device::updateWithStrategyContext($device, [
+        'user_id' => $owner->id,
+        'note' => 'must roll back',
+    ]))->toThrow(ValidationException::class);
+
+    expect($device->fresh()->user_id)->toBeNull()
+        ->and($device->fresh()->note)->toBe('unchanged')
+        ->and($device->fresh()->strategy_id_resolved)->toBe($fallback->id);
+});
+
+it('requires strategy permission for cli owner changes that alter resolution', function () {
+    $fallback = Strategy::create(['name' => 'CLI fallback', 'enabled' => true, 'is_default' => true]);
+    $ownerPolicy = Strategy::create(['name' => 'CLI owner policy', 'enabled' => true]);
+    $owner = User::factory()->create(['username' => 'cli-context-owner']);
+    Strategy::assignTo(Strategy::LEVEL_USER, $owner->id, $ownerPolicy->id);
+    $device = v2Device('983000098');
+
+    test()->postJson('/api/devices/cli', [
+        'id' => $device->rustdesk_id,
+        'uuid' => $device->uuid,
+        'user_name' => $owner->username,
+    ], v2CliHeaders(['device' => 'rw', 'strategy' => 'none']))->assertForbidden();
+
+    expect($device->fresh()->user_id)->toBeNull()
+        ->and($device->fresh()->strategy_id_resolved)->toBe($fallback->id);
+
+    test()->postJson('/api/devices/cli', [
+        'id' => $device->rustdesk_id,
+        'uuid' => $device->uuid,
+        'user_name' => $owner->username,
+    ], v2CliHeaders(['device' => 'rw', 'strategy' => 'rw']))->assertOk();
+
+    expect($device->fresh()->user_id)->toBe($owner->id)
+        ->and($device->fresh()->strategy_id_resolved)->toBe($ownerPolicy->id);
+});
+
+it('rolls back cli metadata when an open rollout blocks an owner change', function () {
+    $admin = User::factory()->admin()->create();
+    $fallback = Strategy::create(['name' => 'CLI rollout fallback', 'enabled' => true, 'is_default' => true]);
+    $ownerPolicy = Strategy::create(['name' => 'CLI rollout owner', 'enabled' => true]);
+    $owner = User::factory()->create(['username' => 'cli-rollout-owner']);
+    Strategy::assignTo(Strategy::LEVEL_USER, $owner->id, $ownerPolicy->id);
+    $device = v2Device('983000097', ['note' => 'before']);
+    $candidate = StrategyRevision::captureSnapshot($fallback, [
+        ...$fallback->snapshot(),
+        'options' => ['enable-audio' => 'N'],
+    ], $admin->id, 'CLI lock candidate');
+    StrategyRollout::schedule($fallback, $candidate, [$device->id], now()->addHour(), 1, 5, $admin->id);
+
+    test()->postJson('/api/devices/cli', [
+        'id' => $device->rustdesk_id,
+        'uuid' => $device->uuid,
+        'user_name' => $owner->username,
+        'note' => 'must roll back',
+    ], v2CliHeaders(['device' => 'rw', 'strategy' => 'rw']))->assertStatus(409);
+
+    expect($device->fresh()->user_id)->toBeNull()
+        ->and($device->fresh()->note)->toBe('before')
+        ->and($device->fresh()->strategy_id_resolved)->toBe($fallback->id);
 });

@@ -10,6 +10,7 @@ use App\Models\Device;
 use App\Models\DeviceGroup;
 use App\Models\Strategy;
 use App\Models\User;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Livewire\Attributes\Url;
 use Livewire\Component;
@@ -522,10 +523,11 @@ class DeviceList extends Component
             ConsoleAudit::record('device.create', 'Created device '.$data['formRustdeskId'], 'device', $data['formRustdeskId']);
         } else {
             $device = $this->scopedDevice($this->editingId);
-            $device->update($attributes);
+            DB::transaction(function () use (&$device, $attributes, $data): void {
+                $device = Device::updateWithStrategyContext($device, $attributes);
+                $this->saveStrategyAssignment($device, (int) $data['formStrategyId']);
+            });
             ConsoleAudit::record('device.update', 'Updated device '.$device->rustdesk_id, 'device', $device->rustdesk_id);
-
-            $this->saveStrategyAssignment($device, (int) $data['formStrategyId']);
         }
 
         $this->editingId = null;

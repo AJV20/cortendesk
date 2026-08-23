@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\AdminApi;
 
 use App\Models\ConsoleAudit;
+use App\Models\Device;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -113,8 +114,10 @@ class UsersController extends AdminApiController
         }
 
         $username = $user->username;
-        $user->devices()->update(['user_id' => null]);
-        $user->delete();
+        DB::transaction(function () use ($user): void {
+            Device::bulkUpdateStrategyContext($user->devices()->pluck('devices.id')->all(), ['user_id' => null]);
+            $user->delete();
+        });
 
         ConsoleAudit::record('user.delete', 'Deleted user '.$username.' (API)', 'user', $username);
 

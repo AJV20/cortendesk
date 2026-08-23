@@ -295,6 +295,38 @@ it('assigns devices, users and device groups, and changes what resolves', functi
         ->toBeTrue();
 });
 
+it('renders one focus-managed strategy dialog with semantic assignment tabs', function () {
+    $admin = uiAdmin();
+    $strategy = Strategy::create(['name' => 'Accessible policy', 'enabled' => true]);
+
+    $component = Livewire::actingAs($admin)
+        ->test(StrategyList::class)
+        ->call('edit', $strategy->id);
+
+    expect($component->html())
+        ->toContain('id="strategy-editor-title"')
+        ->toContain('x-trap.noscroll="true"')
+        ->toContain('x-ref="initial"')
+        ->not->toContain('javascript:void(0)');
+
+    $component->call('previewSave')->assertHasNoErrors();
+    expect($component->html())
+        ->toContain('id="strategy-impact-title"')
+        ->not->toContain('id="strategy-editor-title"');
+
+    $component->call('closePreview')->call('closeModal')->call('openAssign', $strategy->id);
+    expect($component->html())
+        ->toContain('role="tablist"')
+        ->toContain('role="tab"')
+        ->toContain('role="tabpanel"')
+        ->not->toContain('javascript:void(0)');
+
+    $component->call('previewAssign')->assertHasNoErrors();
+    expect($component->html())
+        ->toContain('id="assignment-impact-title"')
+        ->not->toContain('id="strategy-assignment-title"');
+});
+
 it('lists a strategy with its assignment counts on both layouts', function () {
     $strategy = Strategy::create(['name' => 'Counted', 'enabled' => true, 'is_default' => true, 'enforce' => true]);
     $device = uiDevice();

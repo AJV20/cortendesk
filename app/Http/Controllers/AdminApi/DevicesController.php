@@ -137,7 +137,7 @@ class DevicesController extends AdminApiController
             return $this->fail('Nothing to assign; provide user_(id|name) or device_group_(id|name).', 422);
         }
 
-        $device->update($changes);
+        $device = Device::updateWithStrategyContext($device, $changes);
 
         ConsoleAudit::record('device.assign', 'Reassigned device '.$device->rustdesk_id.' (API)', 'device', $device->rustdesk_id);
 

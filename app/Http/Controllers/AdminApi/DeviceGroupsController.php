@@ -7,6 +7,7 @@ use App\Models\Device;
 use App\Models\DeviceGroup;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
 class DeviceGroupsController extends AdminApiController
@@ -60,10 +61,12 @@ class DeviceGroupsController extends AdminApiController
     public function destroy(DeviceGroup $deviceGroup): JsonResponse
     {
         $name = $deviceGroup->name;
-        // Detach devices (keep them), then remove the folder.
-        $deviceGroup->devices()->update(['device_group_id' => null]);
-        $deviceGroup->userGroups()->detach();
-        $deviceGroup->delete();
+        DB::transaction(function () use ($deviceGroup): void {
+            // Detach devices (keep them), then remove the folder.
+            Device::bulkUpdateStrategyContext($deviceGroup->devices()->pluck('devices.id')->all(), ['device_group_id' => null]);
+            $deviceGroup->userGroups()->detach();
+            $deviceGroup->delete();
+        });
 
         ConsoleAudit::record('group.delete', 'Deleted device group '.$name.' (API)', 'group', $name);
 
@@ -78,7 +81,7 @@ class DeviceGroupsController extends AdminApiController
             return $this->fail('Device not found.', 404);
         }
 
-        $device->update(['device_group_id' => $deviceGroup->id]);
+        $device = Device::updateWithStrategyContext($device, ['device_group_id' => $deviceGroup->id]);
 
         ConsoleAudit::record('group.update', 'Added device '.$device->rustdesk_id.' to '.$deviceGroup->name.' (API)', 'group', $deviceGroup->name);
 
@@ -94,7 +97,7 @@ class DeviceGroupsController extends AdminApiController
         }
 
         if ($device->device_group_id === $deviceGroup->id) {
-            $device->update(['device_group_id' => null]);
+            $device = Device::updateWithStrategyContext($device, ['device_group_id' => null]);
         }
 
         ConsoleAudit::record('group.update', 'Removed device '.$device->rustdesk_id.' from '.$deviceGroup->name.' (API)', 'group', $deviceGroup->name);

@@ -386,6 +386,12 @@ class Strategy extends Model
     {
         DB::transaction(function () use ($level, $targetId, $strategyId): void {
             [$table, $column] = self::pivot($level);
+            static::query()->orderBy('id')->lockForUpdate()->get(['id']);
+            match ($level) {
+                self::LEVEL_DEVICE => Device::query()->whereKey($targetId)->lockForUpdate()->firstOrFail(),
+                self::LEVEL_USER => User::query()->whereKey($targetId)->lockForUpdate()->firstOrFail(),
+                self::LEVEL_DEVICE_GROUP => DeviceGroup::query()->whereKey($targetId)->lockForUpdate()->firstOrFail(),
+            };
             $current = DB::table($table)->where($column, $targetId)->value('strategy_id');
             self::guardAssignmentChanges([$current, $strategyId]);
 

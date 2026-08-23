@@ -6,6 +6,8 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 class Device extends Model
 {
@@ -86,6 +88,108 @@ class Device extends Model
                 Strategy::syncResolvedFor($device);
             }
         });
+    }
+
+    /**
+     * Update a device through the strategy-resolution boundary. Existing device
+     * owner/group changes are serialized with rollout scheduling and rejected
+     * while any fleet rollout is open, so a target cannot silently switch policy
+     * halfway through a frozen rollout.
+     *
+     * @param  array<string,mixed>  $attributes
+     */
+    public static function updateWithStrategyContext(Device $device, array $attributes): Device
+    {
+        $touchesContext = array_key_exists('user_id', $attributes)
+            || array_key_exists('device_group_id', $attributes);
+
+        return DB::transaction(function () use ($device, $attributes, $touchesContext): Device {
+            if ($touchesContext) {
+                Strategy::query()->orderBy('id')->lockForUpdate()->get(['id']);
+            }
+
+            $locked = $device->exists
+                ? static::query()->whereKey($device->getKey())->lockForUpdate()->firstOrFail()
+                : $device;
+            $locked->fill($attributes);
+
+            if ($locked->exists
+                && $touchesContext
+                && $locked->isDirty(['user_id', 'device_group_id'])) {
+                self::rejectOpenRolloutContextChange();
+            }
+
+            $locked->save();
+
+            return $locked;
+        });
+    }
+
+    /**
+     * Apply one owner/group change to a bounded set of existing devices while
+     * preserving the same rollout lock invariant as updateWithStrategyContext().
+     *
+     * @param  array<int,int|string>  $deviceIds
+     * @param  array{user_id?:?int,device_group_id?:?int}  $attributes
+     */
+    public static function bulkUpdateStrategyContext(array $deviceIds, array $attributes): int
+    {
+        $ids = collect($deviceIds)->map(fn ($id) => (int) $id)->filter()->unique()->sort()->values()->all();
+        if ($ids === []) {
+            return 0;
+        }
+
+        return DB::transaction(function () use ($ids, $attributes): int {
+            Strategy::query()->orderBy('id')->lockForUpdate()->get(['id']);
+            $devices = static::query()->whereKey($ids)->orderBy('id')->lockForUpdate()->get();
+            $changedIds = $devices
+                ->filter(function (Device $device) use ($attributes): bool {
+                    $device->fill($attributes);
+
+                    return $device->isDirty(['user_id', 'device_group_id']);
+                })
+                ->pluck('id')->all();
+
+            if ($changedIds === []) {
+                return 0;
+            }
+
+            self::rejectOpenRolloutContextChange();
+            static::query()->whereKey($changedIds)->update($attributes);
+            static::query()->whereKey($changedIds)->orderBy('id')->eachById(
+                fn (Device $changed) => Strategy::syncResolvedFor($changed),
+                500,
+            );
+
+            return count($changedIds);
+        });
+    }
+
+    /** @param array<string,mixed> $attributes */
+    public static function strategyResolutionWouldChange(Device $device, array $attributes): bool
+    {
+        $candidate = clone $device;
+        $candidate->fill($attributes);
+
+        return Strategy::resolve($device) !== Strategy::resolve($candidate);
+    }
+
+    private static function rejectOpenRolloutContextChange(): void
+    {
+        $open = StrategyRollout::query()
+            ->whereIn('status', [
+                StrategyRollout::STATUS_SCHEDULED,
+                StrategyRollout::STATUS_ACTIVE,
+                StrategyRollout::STATUS_PAUSED,
+            ])
+            ->lockForUpdate()
+            ->exists();
+
+        if ($open) {
+            throw ValidationException::withMessages([
+                'assignment' => 'Cancel open strategy rollouts before changing device owners or groups.',
+            ]);
+        }
     }
 
     public function user(): BelongsTo
