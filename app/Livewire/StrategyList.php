@@ -9,6 +9,8 @@ use App\Models\DeviceGroup;
 use App\Models\Strategy;
 use App\Models\StrategyRevision;
 use App\Models\User;
+use App\Services\StrategyAssignmentImpact;
+use App\Services\StrategyImpact;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Livewire\Component;
@@ -32,6 +34,8 @@ use Livewire\Component;
 class StrategyList extends Component
 {
     use AuthorizesConsole;
+
+    private const MAX_EDITOR_ASSIGNMENTS = 5000;
 
     /** Editor state: null = closed, 0 = creating, >0 = editing that strategy. */
     public ?int $editingId = null;
@@ -57,6 +61,17 @@ class StrategyList extends Component
 
     public ?int $compareToRevisionId = null;
 
+    public bool $previewing = false;
+
+    /** @var array<string,mixed> */
+    public array $impactPreview = [];
+
+    public ?string $previewFingerprint = null;
+
+    public ?int $pendingDeleteId = null;
+
+    public ?int $restoreRevisionId = null;
+
     /** Assignment editor state: strategy id, or null when closed. */
     public ?int $assigningId = null;
 
@@ -72,6 +87,13 @@ class StrategyList extends Component
 
     /** @var array<int,int|string> */
     public array $assignGroupIds = [];
+
+    public bool $assignPreviewing = false;
+
+    /** @var array<string,mixed> */
+    public array $assignmentImpact = [];
+
+    public ?string $assignmentFingerprint = null;
 
     /** Section titles + the apply-timing caveat that belongs to each group. */
     private const GROUP_META = [
@@ -220,67 +242,82 @@ class StrategyList extends Component
         }
     }
 
+    /** Existing Livewire callers enter the same mandatory review flow. */
     public function save(): void
     {
+        $this->previewSave();
+    }
+
+    public function previewSave(): void
+    {
         $this->authorizeConsole('strategy', 'rw');
-
-        $this->validate([
-            'formName' => [
-                'required', 'string', 'max:255',
-                Rule::unique('strategies', 'name')->ignore($this->editingId ?: 0),
-            ],
-            'formNote' => ['nullable', 'string', 'max:500'],
-        ], [], ['formName' => 'name', 'formNote' => 'note']);
-
-        // Range-check the numeric options here rather than letting
-        // sanitizeOptions() drop them silently — a value that vanishes without
-        // a word is how an operator ends up believing a policy is in force.
-        $options = [];
-        foreach ($this->formOptions as $key => $value) {
-            $spec = Strategy::OPTION_KEYS[$key] ?? null;
-            $value = is_string($value) ? trim($value) : '';
-
-            if ($spec === null || $value === '') {
-                continue; // unknown key, or "not managed by this strategy"
-            }
-
-            if ($spec['type'] === 'int' && ! (ctype_digit($value)
-                && (int) $value >= ($spec['min'] ?? 0)
-                && (int) $value <= ($spec['max'] ?? PHP_INT_MAX))) {
-                $this->addError('formOptions.'.$key, 'Enter a whole number between '
-                    .($spec['min'] ?? 0).' and '.($spec['max'] ?? PHP_INT_MAX).'.');
-
-                continue;
-            }
-
-            $options[$key] = $value;
-        }
-
-        if ($this->getErrorBag()->isNotEmpty()) {
+        $snapshot = $this->validatedFormSnapshot();
+        if ($snapshot === null) {
             return;
         }
 
-        $this->validate(['revisionNote' => ['nullable', 'string', 'max:500']]);
+        $strategy = $this->editingId ? Strategy::findOrFail($this->editingId) : null;
+        $this->impactPreview = StrategyImpact::preview(
+            $strategy,
+            $this->reviewedSnapshot($snapshot),
+            auth()->user()?->is_admin === true,
+        );
+        $this->previewFingerprint = $this->impactPreview['fingerprint'];
+        $this->previewing = true;
+    }
 
-        [$strategy, $creating] = DB::transaction(function () use ($options): array {
-            // A new default can displace another strategy. Serialize strategy
-            // writes and revision allocation in one stable lock order.
-            Strategy::query()->orderBy('id')->lockForUpdate()->get(['id']);
-            $strategy = $this->editingId
-                ? Strategy::query()->lockForUpdate()->findOrFail($this->editingId)
-                : new Strategy;
-            $displacedDefault = $this->formIsDefault
+    public function confirmSave(): void
+    {
+        $this->authorizeConsole('strategy', 'rw');
+        $snapshot = $this->validatedFormSnapshot();
+        if ($snapshot === null) {
+            return;
+        }
+        if (! $this->previewing || $this->previewFingerprint === null) {
+            $this->addError('preview', 'The strategy changed after the preview. Review the impact again.');
+
+            return;
+        }
+
+        $result = DB::transaction(function () use ($snapshot): ?array {
+            // The fingerprint covers every active-device routing input. Lock those
+            // rows before recomputing it, then mutate only if it still matches.
+            $this->lockImpactSource();
+            $strategy = $this->editingId ? Strategy::findOrFail($this->editingId) : new Strategy;
+            $impact = StrategyImpact::preview(
+                $strategy->exists ? $strategy : null,
+                $this->reviewedSnapshot($snapshot),
+                auth()->user()?->is_admin === true,
+            );
+            if (! hash_equals($this->previewFingerprint, $impact['fingerprint'])) {
+                $this->addError('preview', 'The strategy changed after the preview. Review the impact again.');
+
+                return null;
+            }
+
+            if ($this->pendingDeleteId !== null) {
+                if (! $strategy->exists || $strategy->id !== $this->pendingDeleteId) {
+                    $this->addError('preview', 'The deletion target changed after the preview. Review the impact again.');
+
+                    return null;
+                }
+                $strategy->delete(); // assignments are released by the model hook
+
+                return [$strategy, false, 'delete'];
+            }
+
+            $displacedDefault = $snapshot['is_default']
                 ? Strategy::query()->whereKeyNot($strategy->id ?: 0)->where('is_default', true)->lockForUpdate()->first()
                 : null;
 
             $strategy->fill([
-                'name' => $this->formName,
-                'note' => $this->formNote !== '' ? $this->formNote : null,
-                'enabled' => $this->formEnabled,
-                'is_default' => $this->formIsDefault,
-                'enforce' => $this->formEnforce,
+                'name' => $snapshot['name'],
+                'note' => $snapshot['note'],
+                'enabled' => $snapshot['enabled'],
+                'is_default' => $snapshot['is_default'],
+                'enforce' => $snapshot['enforce'],
             ]);
-            $strategy->setOptions($options);
+            $strategy->setOptions($snapshot['options']);
             $creating = ! $strategy->exists;
             $strategy->save();
 
@@ -301,18 +338,39 @@ class StrategyList extends Component
                 $displacedDefault->forceFill(['active_revision_id' => $displacedRevision->id])->saveQuietly();
             }
 
-            return [$strategy, $creating];
+            return [$strategy, $creating, $this->restoreRevisionId !== null ? 'restore' : 'save'];
         });
 
+        if ($result === null) {
+            return;
+        }
+
+        [$strategy, $creating, $action] = $result;
+        if ($action === 'delete') {
+            ConsoleAudit::record('strategy.delete', 'Deleted strategy '.$strategy->name, 'strategy', $strategy->name);
+            $this->closeModal();
+
+            return;
+        }
         ConsoleAudit::record(
-            $creating ? 'strategy.create' : 'strategy.update',
-            ($creating ? 'Created' : 'Updated').' strategy '.$strategy->name
+            $action === 'restore' ? 'strategy.rollback' : ($creating ? 'strategy.create' : 'strategy.update'),
+            ($action === 'restore' ? 'Restored' : ($creating ? 'Created' : 'Updated')).' strategy '.$strategy->name
                 .' ('.count($strategy->optionMap()).' option(s))',
             'strategy',
             $strategy->name,
         );
-
         $this->closeModal();
+    }
+
+    public function closePreview(): void
+    {
+        if ($this->pendingDeleteId !== null) {
+            $this->closeModal();
+
+            return;
+        }
+        $this->reset('previewing', 'impactPreview', 'previewFingerprint');
+        $this->resetValidation('preview');
     }
 
     public function closeModal(): void
@@ -325,33 +383,23 @@ class StrategyList extends Component
     {
         $this->authorizeConsole('strategy', 'rw');
 
-        $strategy = DB::transaction(function () use ($id): Strategy {
-            Strategy::query()->orderBy('id')->lockForUpdate()->get(['id']);
-            $strategy = Strategy::query()->lockForUpdate()->findOrFail($id);
-            $strategy->update(['enabled' => ! $strategy->enabled]);
-            $revision = StrategyRevision::capture($strategy, auth()->id(), 'Toggled enabled state');
-            $strategy->forceFill(['active_revision_id' => $revision->id])->saveQuietly();
-
-            return $strategy;
-        });
-
-        ConsoleAudit::record(
-            'strategy.toggle',
-            ($strategy->enabled ? 'Enabled' : 'Disabled').' strategy '.$strategy->name,
-            'strategy',
-            $strategy->name,
-        );
+        $strategy = Strategy::findOrFail($id);
+        $this->edit($strategy->id);
+        $this->formEnabled = ! $strategy->enabled;
+        if (! $this->formEnabled) {
+            $this->formIsDefault = false;
+        }
+        $this->previewSave();
     }
 
     public function deleteStrategy(int $id): void
     {
         $this->authorizeConsole('strategy', 'rw');
-
-        $strategy = Strategy::findOrFail($id);
-        $name = $strategy->name;
-        $strategy->delete(); // pivots cascade; the model hook re-resolves the fleet
-
-        ConsoleAudit::record('strategy.delete', 'Deleted strategy '.$name, 'strategy', $name);
+        $this->edit($id);
+        $this->pendingDeleteId = $id;
+        $this->formEnabled = false;
+        $this->formIsDefault = false;
+        $this->previewSave();
     }
 
     // -------------------------------------------------------------- history ---
@@ -376,44 +424,26 @@ class StrategyList extends Component
     {
         $this->authorizeConsole('strategy', 'rw');
 
-        $strategy = DB::transaction(function () use ($revisionId): Strategy {
-            $revision = StrategyRevision::query()->findOrFail($revisionId);
-            Strategy::query()->orderBy('id')->lockForUpdate()->get(['id']);
-            $strategy = Strategy::query()->lockForUpdate()->findOrFail($revision->strategy_id);
-            $revision = StrategyRevision::query()->lockForUpdate()->findOrFail($revisionId);
-            $snapshot = is_array($revision->snapshot) ? $revision->snapshot : [];
-            $displacedDefault = (bool) ($snapshot['is_default'] ?? false)
-                ? Strategy::query()->whereKeyNot($strategy->id)->where('is_default', true)->lockForUpdate()->first()
-                : null;
+        $revision = StrategyRevision::query()->findOrFail($revisionId);
+        $strategy = Strategy::findOrFail($revision->strategy_id);
+        $snapshot = is_array($revision->snapshot) ? $revision->snapshot : [];
 
-            // Names are durable identities. Restore policy state, never a name
-            // which may now be used by another strategy.
-            $strategy->fill([
-                'note' => $snapshot['note'] ?? null,
-                'enabled' => (bool) ($snapshot['enabled'] ?? true),
-                'is_default' => (bool) ($snapshot['is_default'] ?? false),
-                'enforce' => (bool) ($snapshot['enforce'] ?? false),
-            ]);
-            $strategy->setOptions(is_array($snapshot['options'] ?? null) ? $snapshot['options'] : []);
-            $strategy->save();
-
-            $newRevision = StrategyRevision::capture($strategy, auth()->id(), 'Restored revision '.$revision->revision);
-            $strategy->forceFill(['active_revision_id' => $newRevision->id])->saveQuietly();
-
-            if ($displacedDefault !== null) {
-                $displacedDefault->refresh();
-                $displacedRevision = StrategyRevision::capture(
-                    $displacedDefault,
-                    auth()->id(),
-                    'Default status moved to '.$strategy->name.' by rollback',
-                );
-                $displacedDefault->forceFill(['active_revision_id' => $displacedRevision->id])->saveQuietly();
+        $this->closeHistory();
+        $this->edit($strategy->id);
+        $this->restoreRevisionId = $revision->id;
+        $this->revisionNote = 'Restored revision '.$revision->revision;
+        // Names are durable identities. Review restoring policy state only.
+        $this->formNote = (string) ($snapshot['note'] ?? '');
+        $this->formEnabled = (bool) ($snapshot['enabled'] ?? true);
+        $this->formIsDefault = (bool) ($snapshot['is_default'] ?? false);
+        $this->formEnforce = (bool) ($snapshot['enforce'] ?? false);
+        $this->formOptions = array_fill_keys(array_keys($this->formOptions), '');
+        foreach ((array) ($snapshot['options'] ?? []) as $key => $value) {
+            if (array_key_exists($key, $this->formOptions)) {
+                $this->formOptions[$key] = (string) $value;
             }
-
-            return $strategy;
-        });
-
-        ConsoleAudit::record('strategy.rollback', 'Restored an earlier revision of strategy '.$strategy->name, 'strategy', $strategy->name);
+        }
+        $this->previewSave();
     }
 
     public function getHistoryStrategyProperty(): ?Strategy
@@ -448,10 +478,12 @@ class StrategyList extends Component
     public function openAssign(int $id): void
     {
         $this->authorizeConsole('strategy', 'rw');
+        $this->authorizeFleetAssignments();
 
         $strategy = Strategy::findOrFail($id);
 
         $this->assigningId = $strategy->id;
+        $this->reset('assignPreviewing', 'assignmentImpact', 'assignmentFingerprint');
         $this->assignTab = 'devices';
         $this->assignSearch = '';
         $this->assignDeviceIds = $strategy->devices()->pluck('devices.id')->all();
@@ -461,31 +493,109 @@ class StrategyList extends Component
 
     public function setAssignTab(string $tab): void
     {
+        $this->authorizeConsole('strategy', 'rw');
+        $this->authorizeFleetAssignments();
+
         if (in_array($tab, ['devices', 'users', 'groups'], true)) {
             $this->assignTab = $tab;
             $this->assignSearch = '';
         }
     }
 
+    /** Existing Livewire callers enter the same mandatory review flow. */
     public function saveAssign(): void
     {
+        $this->authorizeFleetAssignments();
+        $this->previewAssign();
+    }
+
+    public function previewAssign(): void
+    {
         $this->authorizeConsole('strategy', 'rw');
-
+        $this->authorizeFleetAssignments();
         $strategy = Strategy::findOrFail($this->assigningId);
+        if (! $this->validateAssignmentIds()) {
+            return;
+        }
 
-        $this->validate([
-            'assignDeviceIds.*' => [Rule::exists('devices', 'id')],
-            'assignUserIds.*' => [Rule::exists('users', 'id')],
-            'assignGroupIds.*' => [Rule::exists('device_groups', 'id')],
-        ]);
+        $this->assignmentImpact = StrategyAssignmentImpact::preview(
+            $strategy,
+            $this->assignDeviceIds,
+            $this->assignUserIds,
+            $this->assignGroupIds,
+        );
+        $this->assignmentFingerprint = $this->assignmentImpact['fingerprint'];
+        $this->assignPreviewing = true;
+    }
 
-        $changed = 0;
-        $changed += $this->syncLevel($strategy, Strategy::LEVEL_DEVICE,
-            $strategy->devices()->pluck('devices.id')->all(), $this->assignDeviceIds);
-        $changed += $this->syncLevel($strategy, Strategy::LEVEL_USER,
-            $strategy->users()->pluck('users.id')->all(), $this->assignUserIds);
-        $changed += $this->syncLevel($strategy, Strategy::LEVEL_DEVICE_GROUP,
-            $strategy->deviceGroups()->pluck('device_groups.id')->all(), $this->assignGroupIds);
+    public function confirmAssign(): void
+    {
+        $this->authorizeConsole('strategy', 'rw');
+        $this->authorizeFleetAssignments();
+        $strategy = Strategy::findOrFail($this->assigningId);
+        if (! $this->validateAssignmentIds()) {
+            return;
+        }
+        if (! $this->assignPreviewing || $this->assignmentFingerprint === null) {
+            $this->addError('assignment', 'Assignments changed after the preview. Review the impact again.');
+
+            return;
+        }
+
+        $changed = DB::transaction(function () use ($strategy): ?int {
+            // Assignment writers lock the strategy set first, then only the
+            // current and desired targets in stable order.
+            Strategy::query()->orderBy('id')->lockForUpdate()->get(['id']);
+            $currentAssignments = [
+                Strategy::LEVEL_DEVICE => DB::table('device_strategy')->where('strategy_id', $strategy->id)->pluck('device_id')->map(fn ($id) => (int) $id)->all(),
+                Strategy::LEVEL_USER => DB::table('strategy_user')->where('strategy_id', $strategy->id)->pluck('user_id')->map(fn ($id) => (int) $id)->all(),
+                Strategy::LEVEL_DEVICE_GROUP => DB::table('device_group_strategy')->where('strategy_id', $strategy->id)->pluck('device_group_id')->map(fn ($id) => (int) $id)->all(),
+            ];
+            $desiredAssignments = [
+                Strategy::LEVEL_DEVICE => array_map('intval', $this->assignDeviceIds),
+                Strategy::LEVEL_USER => array_map('intval', $this->assignUserIds),
+                Strategy::LEVEL_DEVICE_GROUP => array_map('intval', $this->assignGroupIds),
+            ];
+            Device::withTrashed()->whereIn('id', array_values(array_unique([
+                ...$currentAssignments[Strategy::LEVEL_DEVICE],
+                ...$desiredAssignments[Strategy::LEVEL_DEVICE],
+            ])))->orderBy('id')->lockForUpdate()->get(['id']);
+            User::query()->whereIn('id', array_values(array_unique([
+                ...$currentAssignments[Strategy::LEVEL_USER],
+                ...$desiredAssignments[Strategy::LEVEL_USER],
+            ])))->orderBy('id')->lockForUpdate()->get(['id']);
+            DeviceGroup::query()->whereIn('id', array_values(array_unique([
+                ...$currentAssignments[Strategy::LEVEL_DEVICE_GROUP],
+                ...$desiredAssignments[Strategy::LEVEL_DEVICE_GROUP],
+            ])))->orderBy('id')->lockForUpdate()->get(['id']);
+
+            $strategy = Strategy::findOrFail($strategy->id);
+            $impact = StrategyAssignmentImpact::preview(
+                $strategy,
+                $this->assignDeviceIds,
+                $this->assignUserIds,
+                $this->assignGroupIds,
+            );
+            if (! hash_equals($this->assignmentFingerprint, $impact['fingerprint'])) {
+                $this->addError('assignment', 'Assignments changed after the preview. Review the impact again.');
+
+                return null;
+            }
+
+            $changed = 0;
+            $changed += $this->syncLevel($strategy, Strategy::LEVEL_DEVICE,
+                $currentAssignments[Strategy::LEVEL_DEVICE], $this->assignDeviceIds);
+            $changed += $this->syncLevel($strategy, Strategy::LEVEL_USER,
+                $currentAssignments[Strategy::LEVEL_USER], $this->assignUserIds);
+            $changed += $this->syncLevel($strategy, Strategy::LEVEL_DEVICE_GROUP,
+                $currentAssignments[Strategy::LEVEL_DEVICE_GROUP], $this->assignGroupIds);
+
+            return $changed;
+        });
+
+        if ($changed === null) {
+            return;
+        }
 
         ConsoleAudit::record(
             'strategy.assign',
@@ -497,8 +607,33 @@ class StrategyList extends Component
             'strategy',
             $strategy->name,
         );
-
         $this->closeAssign();
+    }
+
+    public function closeAssignPreview(): void
+    {
+        $this->reset('assignPreviewing', 'assignmentImpact', 'assignmentFingerprint');
+        $this->resetValidation('assignment');
+    }
+
+    private function validateAssignmentIds(): bool
+    {
+        $this->validate([
+            'assignDeviceIds' => ['array', 'max:'.self::MAX_EDITOR_ASSIGNMENTS],
+            'assignDeviceIds.*' => [Rule::exists('devices', 'id')],
+            'assignUserIds' => ['array', 'max:'.self::MAX_EDITOR_ASSIGNMENTS],
+            'assignUserIds.*' => [Rule::exists('users', 'id')],
+            'assignGroupIds' => ['array', 'max:'.self::MAX_EDITOR_ASSIGNMENTS],
+            'assignGroupIds.*' => [Rule::exists('device_groups', 'id')],
+        ]);
+
+        if (count($this->assignDeviceIds) + count($this->assignUserIds) + count($this->assignGroupIds) > self::MAX_EDITOR_ASSIGNMENTS) {
+            $this->addError('assignment', 'Keep the interactive assignment set at 5,000 targets or fewer.');
+
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -533,16 +668,101 @@ class StrategyList extends Component
     public function closeAssign(): void
     {
         $this->assigningId = null;
-        $this->reset('assignTab', 'assignSearch', 'assignDeviceIds', 'assignUserIds', 'assignGroupIds');
+        $this->reset(
+            'assignTab', 'assignSearch', 'assignDeviceIds', 'assignUserIds', 'assignGroupIds',
+            'assignPreviewing', 'assignmentImpact', 'assignmentFingerprint',
+        );
+        $this->resetValidation(['assignDeviceIds', 'assignUserIds', 'assignGroupIds', 'assignment']);
     }
 
     // -------------------------------------------------------------- render ---
 
     private function resetForm(): void
     {
-        $this->reset('formName', 'formNote', 'formEnabled', 'formIsDefault', 'formEnforce');
+        $this->reset(
+            'formName', 'formNote', 'formEnabled', 'formIsDefault', 'formEnforce', 'revisionNote',
+            'previewing', 'impactPreview', 'previewFingerprint', 'pendingDeleteId', 'restoreRevisionId',
+        );
         $this->resetValidation();
         $this->formOptions = array_fill_keys(array_keys(Strategy::OPTION_KEYS), '');
+    }
+
+    /** Bind the reviewed action itself into the stale-confirmation fingerprint. */
+    private function reviewedSnapshot(array $snapshot): array
+    {
+        return $snapshot + [
+            'operation' => $this->pendingDeleteId !== null ? 'delete' : ($this->restoreRevisionId !== null ? 'restore' : 'save'),
+            'restore_revision_id' => $this->restoreRevisionId,
+        ];
+    }
+
+    /** @return array{name:string,note:?string,enabled:bool,is_default:bool,enforce:bool,options:array<string,string>}|null */
+    private function validatedFormSnapshot(): ?array
+    {
+        $this->validate([
+            'formName' => [
+                'required', 'string', 'max:255',
+                Rule::unique('strategies', 'name')->ignore($this->editingId ?: 0),
+            ],
+            'formNote' => ['nullable', 'string', 'max:500'],
+            'revisionNote' => ['nullable', 'string', 'max:500'],
+        ], [], ['formName' => 'name', 'formNote' => 'note']);
+
+        if ($this->formIsDefault && ! $this->formEnabled) {
+            $this->addError('formIsDefault', 'The default strategy must be enabled.');
+        }
+
+        $options = [];
+        foreach ($this->formOptions as $key => $value) {
+            $spec = Strategy::OPTION_KEYS[$key] ?? null;
+            $value = is_string($value) ? trim($value) : '';
+            if ($spec === null || $value === '') {
+                continue;
+            }
+            if ($spec['type'] === 'bool' && ! in_array($value, ['Y', 'N'], true)) {
+                $this->addError('formOptions.'.$key, 'Choose Enabled, Disabled, or Not managed.');
+
+                continue;
+            }
+            if ($spec['type'] === 'enum' && ! in_array($value, $spec['values'] ?? [], true)) {
+                $this->addError('formOptions.'.$key, 'Choose one of the supported values.');
+
+                continue;
+            }
+            if ($spec['type'] === 'string' && mb_strlen($value) > 4096) {
+                $this->addError('formOptions.'.$key, 'Keep this setting under 4,096 characters.');
+
+                continue;
+            }
+            if ($spec['type'] === 'int' && ! (ctype_digit($value)
+                && (int) $value >= ($spec['min'] ?? 0)
+                && (int) $value <= ($spec['max'] ?? PHP_INT_MAX))) {
+                $this->addError('formOptions.'.$key, 'Enter a whole number between '
+                    .($spec['min'] ?? 0).' and '.($spec['max'] ?? PHP_INT_MAX).'.');
+
+                continue;
+            }
+            $options[$key] = $value;
+        }
+
+        if ($this->getErrorBag()->isNotEmpty()) {
+            return null;
+        }
+
+        return [
+            'name' => $this->formName,
+            'note' => $this->formNote !== '' ? $this->formNote : null,
+            'enabled' => $this->formEnabled,
+            'is_default' => $this->formIsDefault,
+            'enforce' => $this->formEnforce,
+            'options' => $options,
+        ];
+    }
+
+    /** Serialize confirm-time recomputation with every fleet-policy writer. */
+    private function lockImpactSource(): void
+    {
+        Strategy::query()->orderBy('id')->lockForUpdate()->get(['id']);
     }
 
     /**
@@ -596,7 +816,10 @@ class StrategyList extends Component
         return view('livewire.strategy-list', [
             'strategies' => $strategies,
             'catalog' => self::catalog(),
-            'assigning' => $this->assigningId ? $strategies->firstWhere('id', $this->assigningId) : null,
+            'canAssignFleet' => auth()->user()?->is_admin === true,
+            'assigning' => auth()->user()?->is_admin === true && $this->assigningId
+                ? $strategies->firstWhere('id', $this->assigningId)
+                : null,
             'historyStrategy' => $this->historyStrategy,
             'revisionHistory' => $this->revisionHistory,
             'revisionComparison' => $this->revisionComparison,
@@ -617,7 +840,7 @@ class StrategyList extends Component
     {
         $empty = ['assignDevices' => collect(), 'assignUsers' => collect(), 'assignGroups' => collect(), 'assignTaken' => []];
 
-        if ($this->assigningId === null) {
+        if (auth()->user()?->is_admin !== true || $this->assigningId === null) {
             return $empty;
         }
 
@@ -664,5 +887,11 @@ class StrategyList extends Component
             ->whereIn($table.'.'.$column, $ids)
             ->pluck('strategies.name', $table.'.'.$column)
             ->all();
+    }
+
+    /** Fleet-wide assignment intentionally remains a super-admin operation. */
+    private function authorizeFleetAssignments(): void
+    {
+        abort_unless(auth()->user()?->is_admin === true, 403);
     }
 }

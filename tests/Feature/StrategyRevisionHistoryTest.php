@@ -56,6 +56,8 @@ it('creates a revision whenever the editor saves a strategy', function () {
         ->set('formName', 'Editor policy')
         ->set('formOptions.enable-file-transfer', 'N')
         ->call('save')
+        ->assertSet('previewing', true)
+        ->call('confirmSave')
         ->assertHasNoErrors();
 
     $strategy = Strategy::query()->where('name', 'Editor policy')->firstOrFail();
@@ -82,7 +84,13 @@ it('compares revisions and restores a historical snapshot as a new revision', fu
         'key' => 'options.enable-file-transfer', 'before' => 'N', 'after' => 'Y',
     ]);
 
-    $component->call('restoreRevision', $first->id)->assertHasNoErrors();
+    $component->call('restoreRevision', $first->id)
+        ->assertSet('previewing', true)
+        ->assertHasNoErrors();
+
+    expect($strategy->fresh()->optionMap())->toBe(['enable-file-transfer' => 'Y']);
+
+    $component->call('confirmSave')->assertHasNoErrors();
 
     expect($strategy->fresh()->optionMap())->toBe(['enable-file-transfer' => 'N'])
         ->and($strategy->revisions()->pluck('revision')->all())->toBe([3, 2, 1]);
@@ -130,6 +138,8 @@ it('records the strategy displaced when a restore takes back default status', fu
 
     Livewire::actingAs($admin)->test(StrategyList::class)
         ->call('restoreRevision', $historicalRevision->id)
+        ->assertSet('previewing', true)
+        ->call('confirmSave')
         ->assertHasNoErrors();
 
     expect($historical->fresh()->is_default)->toBeTrue()
