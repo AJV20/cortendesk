@@ -74,7 +74,12 @@ ENV CORTENDESK_SERVER_VERSION=${SERVER_VERSION}
 EXPOSE 8080 21115 21116 21116/udp 21117 21118 21119
 VOLUME /data
 
+# Liveness, not readiness: /health/ready probes the ID server and relay, and
+# with the embedded server that is this same container — but with external
+# servers a relay outage would mark the console unhealthy and restart-loop it.
+# The container check answers "is the app up"; point monitoring at
+# /health/ready for the full dependency picture.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s \
-    CMD wget -q -O /dev/null http://127.0.0.1:8080/login || exit 1
+    CMD wget -q -O /dev/null http://127.0.0.1:8080/health/live || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]

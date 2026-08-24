@@ -3,65 +3,102 @@
 namespace App\Console\Commands;
 
 use App\Models\Device;
+use App\Models\DevicePresenceNotificationState;
+use App\Models\DevicePresenceSnooze;
+use App\Models\NotificationDelivery;
+use App\Models\Setting;
 use App\Services\AppriseNotifications;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Carbon;
 
-/**
- * Tracks presence transitions for notifications. Device rows intentionally do
- * not carry notification state: cache keys expire after a bounded retention,
- * preserve existing schema semantics, and make disabling/re-enabling alerts
- * innocuous. The online endpoint also clears an offline marker immediately,
- * which means recovery is prompt rather than waiting for this minute sweep.
- */
+/** Detect device presence transitions for Apprise notifications. */
 class CheckDeviceNotifications extends Command
 {
-    public const OFFLINE_MARKER_PREFIX = 'apprise:device-offline:';
-
-    private const MARKER_TTL_DAYS = 30;
-
     protected $signature = 'cortendesk:check-device-notifications';
 
     protected $description = 'Detect device offline/recovery transitions for Apprise notifications';
 
     public function handle(AppriseNotifications $notifications): int
     {
+        DevicePresenceSnooze::pruneForSweep();
+
         if (! $notifications->isEnabledFor('device.offline') && ! $notifications->isEnabledFor('device.online')) {
             $this->info('Device presence notifications are disabled.');
 
             return self::SUCCESS;
         }
 
+        // These inputs are deliberately loaded once. The sweep must not turn
+        // grace/state/snooze checks into a query per device.
+        $graceMinutes = $this->offlineGraceMinutes();
+        $snoozedTargets = DevicePresenceSnooze::activeTargets();
+        $states = DevicePresenceNotificationState::query()->get()->keyBy('device_id');
         $offline = 0;
         $recovered = 0;
 
-        Device::query()->approved()->orderBy('id')->each(function (Device $device) use ($notifications, &$offline, &$recovered): void {
-            $marker = self::marker($device->rustdesk_id);
+        Device::query()->approved()->orderBy('id')->each(function (Device $device) use ($notifications, $graceMinutes, $snoozedTargets, $states, &$offline, &$recovered): void {
+            $state = $states->get($device->id);
+            $snoozed = isset($snoozedTargets[DevicePresenceSnooze::TARGET_DEVICE][$device->id])
+                || ($device->device_group_id !== null && isset($snoozedTargets[DevicePresenceSnooze::TARGET_GROUP][$device->device_group_id]));
 
-            if (! $device->isOnline()) {
-                if (Cache::add($marker, true, now()->addDays(self::MARKER_TTL_DAYS))) {
-                    $notifications->send(
-                        'device.offline',
-                        'Device offline',
-                        self::deviceLabel($device).' stopped heartbeating.',
-                        'device:'.$device->rustdesk_id,
-                        $device,
-                    );
-                    $offline++;
+            if ($device->isOnline()) {
+                if (self::consumeRecoveryFor($device)) {
+                    // Recovery is at-most-once: consumeRecoveryFor removes the
+                    // marker before transport, so a failed recovery is never
+                    // retried and concurrent commands cannot duplicate it.
+                    if (! $snoozed) {
+                        $notifications->send(
+                            'device.online',
+                            'Device recovered',
+                            self::deviceLabel($device).' is online again.',
+                            'device:'.$device->rustdesk_id,
+                            $device,
+                        );
+                        $recovered++;
+                    }
                 }
 
                 return;
             }
 
-            if (Cache::pull($marker)) {
-                $notifications->send(
-                    'device.online',
-                    'Device recovered',
-                    self::deviceLabel($device).' is online again.',
-                    'device:'.$device->rustdesk_id,
-                    $device,
-                );
-                $recovered++;
+            if ($state?->offline_notified_at !== null || $snoozed || ! $this->pastOfflineGrace($device, $graceMinutes)) {
+                return;
+            }
+
+            // The legacy marker belongs to exactly one contender. A sweep
+            // winner consumes it before materializing delivered state; an
+            // online recovery winner consumes it for its sole recovery.
+            $legacyClaim = DevicePresenceNotificationState::claimLegacyMarkerFor($device);
+            if ($legacyClaim === null) {
+                return;
+            }
+
+            if (is_string($legacyClaim)) {
+                DevicePresenceNotificationState::convertClaimedLegacyMarkerFor($device, $legacyClaim);
+
+                return;
+            }
+
+            // Insert/reclaim a unique durable pending row before calling the
+            // external service. Only its owner may complete or release it.
+            $claim = DevicePresenceNotificationState::claimOfflineFor($device);
+            if ($claim === null) {
+                return;
+            }
+
+            $delivery = $notifications->send(
+                'device.offline',
+                'Device offline',
+                self::deviceLabel($device).' stopped heartbeating.',
+                'device:'.$device->rustdesk_id,
+                $device,
+            );
+
+            if ($delivery?->status === NotificationDelivery::STATUS_SENT
+                && DevicePresenceNotificationState::markDelivered($device, $claim)) {
+                $offline++;
+            } else {
+                DevicePresenceNotificationState::releaseClaim($device, $claim);
             }
         });
 
@@ -70,27 +107,24 @@ class CheckDeviceNotifications extends Command
         return self::SUCCESS;
     }
 
-    /** Notify recovery on the first heartbeat after the scheduled sweep marked a device offline. */
+    /** Notify recovery on the first heartbeat after a confirmed offline delivery. */
     public static function reportOnline(Device $device, AppriseNotifications $notifications): void
     {
-        if ($device->status !== Device::STATUS_ACTIVE || ! Cache::pull(self::marker($device->rustdesk_id))) {
+        if ($device->status !== Device::STATUS_ACTIVE || ! self::consumeRecoveryFor($device)) {
             return;
         }
 
-        // Called from the heartbeat and sysinfo endpoints, so this must not
-        // hold the response open while an unreachable endpoint times out.
-        $notifications->sendAfterResponse(
-            'device.online',
-            'Device recovered',
-            self::deviceLabel($device).' is online again.',
-            'device:'.$device->rustdesk_id,
-            $device,
-        );
-    }
-
-    public static function marker(string $rustdeskId): string
-    {
-        return self::OFFLINE_MARKER_PREFIX.sha1($rustdeskId);
+        // A snooze closes the outage without emitting either side. Recovery is
+        // at-most-once because the marker was atomically consumed above.
+        if (! DevicePresenceSnooze::isActiveFor($device)) {
+            $notifications->sendAfterResponse(
+                'device.online',
+                'Device recovered',
+                self::deviceLabel($device).' is online again.',
+                'device:'.$device->rustdesk_id,
+                $device,
+            );
+        }
     }
 
     public static function deviceLabel(Device $device): string
@@ -98,5 +132,50 @@ class CheckDeviceNotifications extends Command
         $name = trim((string) ($device->alias ?: $device->hostname));
 
         return $name === '' ? 'Device '.$device->rustdesk_id : $name.' ('.$device->rustdesk_id.')';
+    }
+
+    /** Consume a durable marker or the shared legacy claim exactly once. */
+    private static function consumeRecoveryFor(Device $device): bool
+    {
+        // Fast path: no legacy marker and no durable state means nothing to
+        // recover, which is every heartbeat of a device that never went
+        // offline. Two cheap reads instead of lock traffic; a marker created
+        // between this check and the next tick is picked up then.
+        if (! DevicePresenceNotificationState::hasAnyRecoverableStateFor($device)) {
+            return false;
+        }
+
+        $legacyClaim = DevicePresenceNotificationState::claimLegacyMarkerFor($device);
+
+        // A claimant may be converting the marker into durable state. Let that
+        // winner finish rather than deleting state it is about to materialize.
+        if ($legacyClaim === null) {
+            return false;
+        }
+
+        if ($legacyClaim === false) {
+            return DevicePresenceNotificationState::consumeFor($device);
+        }
+
+        // Keep the legacy lock through both deletions. This also cleans up old
+        // upgrades that had durable state plus the original cache marker.
+        $durableRecovery = DevicePresenceNotificationState::consumeFor($device);
+        $legacyRecovery = DevicePresenceNotificationState::consumeClaimedLegacyMarkerFor($device, $legacyClaim);
+
+        return $durableRecovery || $legacyRecovery;
+    }
+
+    private function pastOfflineGrace(Device $device, int $graceMinutes): bool
+    {
+        $offlineSince = $device->last_online_at?->copy()->addSeconds(Device::onlineWindow())
+            ?? $device->created_at;
+
+        return $offlineSince instanceof Carbon
+            && $offlineSince->addMinutes($graceMinutes)->lte(now());
+    }
+
+    private function offlineGraceMinutes(): int
+    {
+        return max(0, min(1440, (int) Setting::get('apprise_offline_grace_minutes', '0')));
     }
 }

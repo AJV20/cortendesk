@@ -13,14 +13,23 @@ class FleetDiagnostics
 {
     public function __construct(private TcpProbe $tcp) {}
 
+    public function readiness(): array
+    {
+        $database = $this->databaseIsAvailable();
+        $idServer = $database && $this->configuredServerIsAvailable('id_server', 21116);
+        $relayServer = $database && $this->relayPoolIsAvailable();
+
+        return [
+            'ready' => $database && $idServer && $relayServer,
+            'database' => $database,
+            'id_server' => $idServer,
+            'relay_server' => $relayServer,
+        ];
+    }
+
     public function report(): array
     {
-        $database = true;
-        try {
-            DB::select('select 1');
-        } catch (Throwable) {
-            $database = false;
-        }
+        $database = $this->databaseIsAvailable();
 
         $versions = Device::query()->approved()
             ->selectRaw("COALESCE(NULLIF(version, ''), 'unknown') as version, COUNT(*) as count")
@@ -105,6 +114,41 @@ class FleetDiagnostics
         }
 
         return $report;
+    }
+
+    private function databaseIsAvailable(): bool
+    {
+        try {
+            DB::select('select 1');
+
+            return true;
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    private function configuredServerIsAvailable(string $key, int $defaultPort): bool
+    {
+        $server = $this->serverProbe($key, $defaultPort);
+
+        return ! $server['configured'] || $server['ok'];
+    }
+
+    /**
+     * Every configured relay in the active pool is required; an empty pool is
+     * intentionally not a readiness dependency.
+     */
+    private function relayPoolIsAvailable(): bool
+    {
+        foreach (Setting::relayServers() as $relay) {
+            [$host, $port] = $this->parseServer($relay['address'], 21117);
+
+            if ($host !== '' && ! $this->tcp->check($host, $port, 1.0)['ok']) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function serverProbe(string $key, int $defaultPort): array

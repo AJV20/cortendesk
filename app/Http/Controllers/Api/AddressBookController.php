@@ -368,12 +368,16 @@ class AddressBookController extends Controller
      */
     private function accessibleSharedBooks(User $user)
     {
+        $groupIds = $user->is_admin
+            ? []
+            : $user->groups()->pluck('user_groups.id')->all();
+
         return AddressBook::query()
             ->where('is_personal', false)
             ->with(['owner', 'rules'])
             ->get()
-            ->map(function (AddressBook $book) use ($user) {
-                return ['book' => $book, 'rule' => $this->ruleFor($book, $user)];
+            ->map(function (AddressBook $book) use ($user, $groupIds) {
+                return ['book' => $book, 'rule' => $this->ruleFor($book, $user, $groupIds)];
             })
             ->filter(fn (array $row) => $row['rule'] > 0)
             ->sortBy(fn (array $row) => $row['book']->name)
@@ -385,9 +389,9 @@ class AddressBookController extends Controller
      * Delegates to AddressBook::permissionFor so the console and the client API
      * share one ro / rw / full authority (PLAN B4).
      */
-    private function ruleFor(AddressBook $book, User $user): int
+    private function ruleFor(AddressBook $book, User $user, ?array $groupIds = null): int
     {
-        return $book->permissionFor($user);
+        return $book->permissionFor($user, $groupIds);
     }
 
     /** Resolve a book by guid and enforce the required permission level. */

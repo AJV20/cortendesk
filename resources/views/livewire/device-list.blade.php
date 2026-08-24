@@ -151,15 +151,21 @@
             </div>
         @endunless
 
-        {{-- Bulk actions bar (issue #15) — appears when rows are selected. --}}
+        {{-- Bulk actions bar (issues #15, #47) — appears when rows are selected,
+             on phones too now that the cards carry checkboxes. --}}
         @if (! $trashed && ($selected !== [] || $bulkResult !== ''))
-            <div class="rd-toolbar d-none d-md-flex">
+            <div class="rd-toolbar d-flex flex-wrap gap-2 align-items-center">
                 @if ($selected !== [])
                     <span class="fs-13 fw-semibold">{{ count($selected) }} selected</span>
-                    <button type="button" class="btn btn-sm btn-light" wire:click="openAbPicker">
-                        <i class="ri-contacts-book-2-line me-1"></i>Add to Address Book…
-                    </button>
+                    @if (auth()->user()?->consoleAllows('address_book', 'rw'))
+                        <button type="button" class="btn btn-sm btn-light" wire:click="openAbPicker">
+                            <i class="ri-contacts-book-2-line me-1"></i>Add to Address Book…
+                        </button>
+                    @endif
                     @if (auth()->user()?->consoleAllows('device', 'rw'))
+                        <button type="button" class="btn btn-sm btn-light" wire:click="openGroupPicker">
+                            <i class="ri-folder-transfer-line me-1"></i>Move to Group…
+                        </button>
                         <button type="button" class="btn btn-sm btn-outline-danger" wire:click="bulkDelete"
                                 wire:confirm="Move {{ count($selected) }} selected device(s) to the recycle bin?">
                             <i class="ri-delete-bin-line me-1"></i>Delete
@@ -265,7 +271,7 @@
                         @endif
                         @if ($cols['os'])<td class="rd-nowrap" title="{{ $device->os }}">{{ $device->os ? \Illuminate\Support\Str::limit($device->osDescription(), 34) : '—' }}</td>@endif
                         @if ($cols['username'])<td>{{ $device->username ?: '—' }}</td>@endif
-                        @if ($cols['ip'])<td class="rd-mono fs-13">{{ $device->last_online_ip ?: '—' }}</td>@endif
+                        @if ($cols['ip'])<td class="rd-mono fs-13 rd-nowrap">{{ $device->last_online_ip ?: '—' }}</td>@endif
                         @if ($cols['cpu'])
                             <td><span class="fs-13" title="{{ $device->cpu }}">{{ $device->cpu ? \Illuminate\Support\Str::limit($device->cpu, 24) : '—' }}</span></td>
                         @endif
@@ -367,6 +373,10 @@
                                 <span class="rd-mini-sub text-truncate">{{ $device->alias ?: $device->hostname }}</span>
                             </div>
                         </div>
+                        @unless ($trashed)
+                            <input type="checkbox" class="form-check-input flex-shrink-0" value="{{ $device->id }}"
+                                   wire:model.live="selected" aria-label="Select device {{ $device->rustdesk_id }}">
+                        @endunless
                         @if ($trashed)
                             <span class="badge bg-warning-subtle text-warning flex-shrink-0">Deleted</span>
                         @elseif ($device->isOnline())
@@ -591,6 +601,38 @@
                         <div class="modal-footer">
                             <button type="button" class="btn btn-light" wire:click="closeModal">Cancel</button>
                             <button type="submit" class="btn btn-primary">{{ $editingId === 0 ? 'Add Device' : 'Save Changes' }}</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    @endif
+
+    {{-- "Move to Group" picker (issue #47) --}}
+    @if ($groupPickerOpen)
+        <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="move-group-title" style="background: rgba(0,0,0,.6);" wire:keydown.escape="closeGroupPicker">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <form wire:submit="moveSelectedToGroup">
+                        <div class="modal-header">
+                            <h5 id="move-group-title" class="modal-title">Move {{ count($selected) }} {{ Str::plural('device', count($selected)) }} to a group</h5>
+                            <button type="button" class="btn-close" aria-label="Close move to group dialog" wire:click="closeGroupPicker"></button>
+                        </div>
+                        <div class="modal-body">
+                            <label class="form-label" for="move-group-id">Device group</label>
+                            <select id="move-group-id" class="form-select @error('moveGroupId') is-invalid @enderror" wire:model="moveGroupId">
+                                <option value="-1">Choose…</option>
+                                <option value="0">No group</option>
+                                @foreach ($groups as $group)
+                                    <option value="{{ $group->id }}">{{ $group->name }}</option>
+                                @endforeach
+                            </select>
+                            @error('moveGroupId') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                            <div class="form-text">Only device groups you can access are listed.</div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-light" wire:click="closeGroupPicker">Cancel</button>
+                            <button type="submit" class="btn btn-primary">Move</button>
                         </div>
                     </form>
                 </div>

@@ -642,6 +642,7 @@
                                                        placeholder="{{ $appriseUrlsSet ? 'Stored — leave blank to keep' : 'One Apprise URL per line' }}"></textarea><div class="form-text">Write-only and encrypted at rest.</div></div>
                                 @endif
                                 <div class="mb-3"><label class="form-label">Cooldown (minutes)</label><input type="number" class="form-control" style="max-width: 140px" min="0" max="1440" wire:model="appriseCooldownMinutes"></div>
+                                <div class="mb-3"><label class="form-label">Offline alert grace (minutes)</label><input type="number" class="form-control @error('appriseOfflineGraceMinutes') is-invalid @enderror" style="max-width: 140px" min="0" max="1440" wire:model="appriseOfflineGraceMinutes"><div class="form-text">Wait this long after a device becomes offline before sending its Apprise alert.</div>@error('appriseOfflineGraceMinutes')<div class="invalid-feedback">{{ $message }}</div>@enderror</div>
                                 <div class="row">
                                     @foreach ($appriseEventLabels as $event => $label)
                                         @php $eventKey = str_replace('.', '_', $event); @endphp
@@ -673,6 +674,29 @@
                             </form>
                         </div>
                     </div>
+                    @if (auth()->user()?->is_admin)
+                        <div class="card">
+                            <div class="card-header"><h5 class="card-title mb-0">Presence alert maintenance</h5></div>
+                        <div class="card-body">
+                            <p class="text-muted fs-13">Temporarily suppress offline and recovery notifications for one device or an entire group. Security and login alerts are not affected.</p>
+                            <form wire:submit="createPresenceSnooze" class="row g-2 align-items-end">
+                                <div class="col-md-3"><label class="form-label">Apply to</label><select class="form-select" wire:model.live="presenceSnoozeTargetType"><option value="device">Device</option><option value="group">Device group</option></select></div>
+                                <div class="col-md-5"><label class="form-label">Target</label><select class="form-select @error('presenceSnoozeTargetId') is-invalid @enderror" wire:model="presenceSnoozeTargetId"><option value="0">Choose a target</option>@if($presenceSnoozeTargetType === 'group')@foreach($presenceSnoozeGroups as $group)<option value="{{ $group->id }}">{{ $group->name }}</option>@endforeach @else @foreach($presenceSnoozeDevices as $device)<option value="{{ $device->id }}">{{ $device->alias ?: ($device->hostname ?: $device->rustdesk_id) }}</option>@endforeach @endif</select></div>
+                                <div class="col-md-2"><label class="form-label">Minutes</label><input type="number" class="form-control @error('presenceSnoozeMinutes') is-invalid @enderror" min="15" max="10080" wire:model="presenceSnoozeMinutes"></div>
+                                <div class="col-md-2"><button class="btn btn-outline-warning w-100" type="submit" @disabled(! $canManageSettings)>Snooze alerts</button></div>
+                            </form>
+                            @error('presenceSnoozeTargetId')<div class="text-danger fs-13 mt-2">{{ $message }}</div>@enderror @error('presenceSnoozeMinutes')<div class="text-danger fs-13 mt-2">{{ $message }}</div>@enderror
+                            <div class="mt-3">
+                                @forelse($presenceSnoozes as $snooze)
+                                    @php $target = $snooze->target_type === 'group' ? $presenceSnoozeGroups->firstWhere('id', $snooze->target_id) : $presenceSnoozeDevices->firstWhere('id', $snooze->target_id); @endphp
+                                    <div class="d-flex justify-content-between align-items-center border-top py-2"><div><strong>{{ $snooze->target_type === 'group' ? 'Group' : 'Device' }}: {{ $target?->name ?: $target?->alias ?: $target?->hostname ?: $target?->rustdesk_id ?: 'Deleted target' }}</strong><div class="text-muted fs-13">Alerts muted until {{ $snooze->expires_at->toDayDateTimeString() }} ({{ $snooze->expires_at->diffForHumans() }})</div></div><button type="button" class="btn btn-sm btn-outline-secondary" wire:click="clearPresenceSnooze({{ $snooze->id }})" @disabled(! $canManageSettings)>End now</button></div>
+                                @empty
+                                    <div class="text-muted fs-13">No active presence-alert maintenance windows.</div>
+                                @endforelse
+                            </div>
+                        </div>
+                        </div>
+                    @endif
                     <div class="card">
                         <div class="card-header"><h5 class="card-title mb-0">Recent deliveries</h5></div>
                         <div class="card-body">

@@ -80,6 +80,7 @@ import {
 } from './display-controls';
 import { RemoteAudioPlayback, type RemoteAudioContext } from '../media/remote-audio';
 import { LocalSessionRecorder, type RecordingSurface } from '../media/session-recorder';
+import { remoteInputAllowed, type RemoteInputChannel } from './view-only-policy';
 
 // Back-compat: everything that used to live here is re-exported for tests and
 // external importers.
@@ -566,7 +567,12 @@ export class RdApp {
     this.el.btnViewOnly.setAttribute('aria-pressed', String(this.viewOnly));
     this.el.btnViewOnly.classList.toggle('rd-on', this.viewOnly);
     // Latched modifiers make no sense with input off; drop them quietly.
-    if (this.viewOnly) this.setLatches(false, false);
+    if (this.viewOnly) {
+      this.setLatches(false, false);
+      this.terminalPanel?.destroy();
+      this.terminalPanel = undefined;
+      this.removeClipboardSyncOffer();
+    }
     this.toast(this.viewOnly ? 'View only — input is not sent' : 'Input enabled');
   }
 
@@ -798,13 +804,18 @@ export class RdApp {
   }
 
   private openTerminalPanel(): void {
+    if (!remoteInputAllowed(this.viewOnly, 'terminal')) {
+      this.toast('Remote terminal is unavailable in view-only mode');
+      return;
+    }
     if (!this.terminalPanel) {
       this.terminalPanel = new TerminalPanel({
         root: this.el.root,
         workerUrl: this.workerUrl,
         toast: (message) => this.toast(message),
         getConfig: () => {
-          if (!this.cfg || this.state !== 'streaming' || !this.terminalSupported) return null;
+          if (!this.cfg || this.state !== 'streaming' || !this.terminalSupported
+              || !remoteInputAllowed(this.viewOnly, 'terminal')) return null;
           return buildSessionConfig(this.cfg, this.peerId, '', this.sessionHashHex, 'terminal');
         },
       });
@@ -1055,7 +1066,7 @@ export class RdApp {
         ? '<div class="rd-pop-sep"></div><div class="rd-pop-title">Remote controls</div>'
           + security.map((item) => this.menuItem(null, item.label, item.checked, undefined, item.id)).join('')
         : '';
-      const canTerminal = this.terminalSupported;
+      const canTerminal = this.terminalSupported && remoteInputAllowed(this.viewOnly, 'terminal');
       const canCamera = this.cameraSupported;
       const tools =
         canTerminal || canCamera
@@ -1069,6 +1080,7 @@ export class RdApp {
       ).join('');
       const canAudio = !!this.audioPlayback && this.permissions.Audio !== false;
       const canClipboard = this.permissions.Clipboard !== false;
+      const canSendClipboard = canClipboard && remoteInputAllowed(this.viewOnly, 'clipboard');
       const canRecord = this.permissions.Recording !== false && typeof MediaRecorder !== 'undefined';
       const volumePercent = Math.round(this.audioVolume * 100);
       const mediaHtml =
@@ -1082,7 +1094,7 @@ export class RdApp {
               : '') +
             (canClipboard
               ? this.menuItem(null, 'Text clipboard', this.clipboardEnabled, 'clipboardToggle') +
-                this.menuItem(null, 'Sync local clipboard now', false, 'clipboardSync')
+                (canSendClipboard ? this.menuItem(null, 'Sync local clipboard now', false, 'clipboardSync') : '')
               : '') +
             (canRecord
               ? this.menuItem(null, this.recording ? 'Stop local recording' : 'Start local recording', this.recording, 'recording')
@@ -1729,6 +1741,13 @@ export class RdApp {
   private lastDbgMouseMs = 0;
 
   private post(cmd: UiCommand): void {
+    const inputChannel: RemoteInputChannel | null = cmd.c === 'mouse'
+      ? 'pointer'
+      : cmd.c === 'key' || cmd.c === 'ctrlAltDel'
+        ? 'keyboard'
+        : cmd.c === 'clipboardText'
+          ? 'clipboard'
+          : null;
     const sendsRemoteInput = cmd.c === 'mouse' || cmd.c === 'key' || cmd.c === 'ctrlAltDel';
     if (sendsRemoteInput && this.displays[this.current]?.online !== true) return;
     if (cmd.c === 'mouse') {
@@ -1748,7 +1767,7 @@ export class RdApp {
         });
       }
     }
-    if (this.viewOnly && (cmd.c === 'mouse' || cmd.c === 'key' || cmd.c === 'ctrlAltDel')) return;
+    if (inputChannel && !remoteInputAllowed(this.viewOnly, inputChannel)) return;
     if ((this.latchCtrl || this.latchAlt) && (cmd.c === 'mouse' || cmd.c === 'key')) {
       const extra: number[] = [];
       if (this.latchCtrl) extra.push(ControlKey.Control);
@@ -2349,7 +2368,9 @@ export class RdApp {
   }
 
   private canSendClipboard(): boolean {
-    return this.clipboardEnabled && this.permissions.Clipboard !== false;
+    return remoteInputAllowed(this.viewOnly, 'clipboard')
+      && this.clipboardEnabled
+      && this.permissions.Clipboard !== false;
   }
 
   private async toggleRecording(): Promise<void> {

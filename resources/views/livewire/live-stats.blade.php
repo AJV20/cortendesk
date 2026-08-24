@@ -66,6 +66,8 @@
         </a>
     @endif
 
+    @if ($canAudit)
+    {{-- Audit-derived tiles ------------------------------------------------- --}}
     {{-- Active sessions ----------------------------------------------------- --}}
     <a href="{{ route('logs.connections') }}" class="card text-reset card-hover" title="View connection log">
         <div class="card-body">
@@ -137,4 +139,5 @@
             </div>
         </div>
     </a>
+    @endif
 </div>

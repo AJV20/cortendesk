@@ -6,6 +6,7 @@ use App\Livewire\Concerns\AuthorizesConsole;
 use App\Models\ConsoleAudit;
 use App\Models\Device;
 use App\Models\DeviceGroup;
+use App\Models\DevicePresenceSnooze;
 use App\Models\NotificationDelivery;
 use App\Models\Setting;
 use App\Models\UserGroup;
@@ -143,6 +144,16 @@ class SettingsPage extends Component
 
     public int $appriseCooldownMinutes = 15;
 
+    /** Extra minutes a device must remain offline before an alert is sent. */
+    public int $appriseOfflineGraceMinutes = 0;
+
+    /** Device or group selected for a bounded presence-alert maintenance window. */
+    public string $presenceSnoozeTargetType = DevicePresenceSnooze::TARGET_DEVICE;
+
+    public int $presenceSnoozeTargetId = 0;
+
+    public int $presenceSnoozeMinutes = 60;
+
     /** @var array<string, bool> */
     public array $appriseEvents = [];
 
@@ -219,6 +230,7 @@ class SettingsPage extends Component
         $this->appriseConfigKeySet = trim((string) Setting::get('apprise_config_key', '')) !== '';
         $this->appriseUrlsSet = trim((string) Setting::get('apprise_urls', '')) !== '';
         $this->appriseCooldownMinutes = (int) (Setting::get('apprise_cooldown_minutes', '15') ?: 15);
+        $this->appriseOfflineGraceMinutes = (int) (Setting::get('apprise_offline_grace_minutes', '0') ?: 0);
         foreach (AppriseNotifications::EVENTS as $event => $_label) {
             $suffix = str_replace('.', '_', $event);
             $this->appriseEvents[$suffix] = Setting::get('apprise_event_'.$suffix, '0') === '1';
@@ -309,6 +321,7 @@ class SettingsPage extends Component
                 'appriseConfigKey' => 'nullable|string|max:255',
                 'appriseUrls' => 'nullable|string|max:10000',
                 'appriseCooldownMinutes' => 'required|integer|min:0|max:1440',
+                'appriseOfflineGraceMinutes' => 'required|integer|min:0|max:1440',
             ]);
         } catch (ValidationException $e) {
             $this->tab = self::tabForField((string) array_key_first($e->errors())) ?? $this->tab;
@@ -396,6 +409,7 @@ class SettingsPage extends Component
         Setting::put('apprise_enabled', $this->appriseEnabled ? '1' : '0');
         Setting::put('apprise_delivery_mode', $this->appriseMode);
         Setting::put('apprise_cooldown_minutes', (string) $this->appriseCooldownMinutes);
+        Setting::put('apprise_offline_grace_minutes', (string) $this->appriseOfflineGraceMinutes);
         foreach (AppriseNotifications::EVENTS as $event => $_label) {
             $suffix = str_replace('.', '_', $event);
             Setting::put('apprise_event_'.$suffix, ! empty($this->appriseEvents[$suffix]) ? '1' : '0');
@@ -511,6 +525,35 @@ class SettingsPage extends Component
         ConsoleAudit::record('settings.mail-test', 'Sent a test email to '.$to, 'settings', null);
     }
 
+    public function createPresenceSnooze(): void
+    {
+        $this->authorizePresenceMaintenance();
+        $this->validate([
+            'presenceSnoozeTargetType' => 'required|in:device,group',
+            'presenceSnoozeTargetId' => 'required|integer|min:1',
+            'presenceSnoozeMinutes' => 'required|integer|min:15|max:10080',
+        ]);
+
+        $expiresAt = now()->addMinutes($this->presenceSnoozeMinutes);
+        if ($this->presenceSnoozeTargetType === DevicePresenceSnooze::TARGET_DEVICE) {
+            $target = Device::query()->approved()->findOrFail($this->presenceSnoozeTargetId);
+            DevicePresenceSnooze::snoozeDevice($target, $expiresAt);
+        } else {
+            $target = DeviceGroup::query()->findOrFail($this->presenceSnoozeTargetId);
+            DevicePresenceSnooze::snoozeGroup($target, $expiresAt);
+        }
+
+        ConsoleAudit::record('settings.presence-snooze', 'Snoozed device presence alerts until '.$expiresAt->toDateTimeString(), 'settings', null);
+        $this->presenceSnoozeTargetId = 0;
+    }
+
+    public function clearPresenceSnooze(int $id): void
+    {
+        $this->authorizePresenceMaintenance();
+        DevicePresenceSnooze::query()->whereKey($id)->delete();
+        ConsoleAudit::record('settings.presence-snooze-clear', 'Cleared a device presence alert snooze', 'settings', null);
+    }
+
     public function sendTestNotification(): void
     {
         $this->authorizeConsole('setting', 'rw');
@@ -522,8 +565,15 @@ class SettingsPage extends Component
         ConsoleAudit::record('settings.notification-test', 'Sent an Apprise test notification', 'settings', null);
     }
 
+    private function authorizePresenceMaintenance(): void
+    {
+        abort_unless(auth()->user()?->is_admin, 403);
+    }
+
     public function render()
     {
+        $isAdmin = (bool) auth()->user()?->is_admin;
+
         return view('livewire.settings-page', [
             'apiUrl' => rtrim(config('app.url'), '/'),
             'userGroups' => UserGroup::query()->orderBy('name')->get(['id', 'name']),
@@ -534,6 +584,9 @@ class SettingsPage extends Component
             'appriseDeviceGroups' => DeviceGroup::query()->orderBy('name')->get(['id', 'name']),
             'appriseDevices' => Device::query()->approved()->orderByRaw("COALESCE(NULLIF(alias, ''), NULLIF(hostname, ''), rustdesk_id)")->get(['id', 'rustdesk_id', 'alias', 'hostname']),
             'notificationDeliveries' => NotificationDelivery::query()->latest()->limit(10)->get(),
+            'presenceSnoozes' => $isAdmin ? DevicePresenceSnooze::query()->active()->orderBy('expires_at')->get() : collect(),
+            'presenceSnoozeGroups' => $isAdmin ? DeviceGroup::query()->orderBy('name')->get(['id', 'name']) : collect(),
+            'presenceSnoozeDevices' => $isAdmin ? Device::query()->approved()->orderByRaw("COALESCE(NULLIF(alias, ''), NULLIF(hostname, ''), rustdesk_id)")->get(['id', 'rustdesk_id', 'alias', 'hostname']) : collect(),
         ]);
     }
 }
