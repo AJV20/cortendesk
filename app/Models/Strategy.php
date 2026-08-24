@@ -4,7 +4,10 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -30,6 +33,8 @@ use Illuminate\Support\Facades\DB;
 #[Fillable(['name', 'note', 'enabled', 'is_default', 'enforce', 'options'])]
 class Strategy extends Model
 {
+    use SoftDeletes;
+
     /** @var array<string,string> Assignment levels, highest precedence first. */
     public const LEVEL_DEVICE = 'device';
 
@@ -171,8 +176,21 @@ class Strategy extends Model
 
         static::deleted(function (Strategy $strategy) {
             self::$anyEnabledCache = null;
-            // Pivot rows cascade at the DB level; the cached column does not.
             static::recomputeAll();
+        });
+
+        static::deleting(function (Strategy $strategy) {
+            // Revision history holds a restricted foreign key to the strategy,
+            // so delete live routing state while retaining the historical owner.
+            foreach (self::PIVOTS as [$table]) {
+                DB::table($table)->where('strategy_id', $strategy->id)->delete();
+            }
+        });
+
+        static::restoring(function (Strategy $strategy) {
+            if ($strategy->is_default && static::query()->where('is_default', true)->exists()) {
+                $strategy->is_default = false;
+            }
         });
     }
 
@@ -260,6 +278,29 @@ class Strategy extends Model
     public function setOptions(array $options): void
     {
         $this->options = self::sanitizeOptions($options);
+    }
+
+    /** @return array{name:string,note:?string,enabled:bool,is_default:bool,enforce:bool,options:array<string,string>} */
+    public function snapshot(): array
+    {
+        return [
+            'name' => $this->name,
+            'note' => $this->note,
+            'enabled' => (bool) $this->enabled,
+            'is_default' => (bool) $this->is_default,
+            'enforce' => (bool) $this->enforce,
+            'options' => $this->optionMap(),
+        ];
+    }
+
+    public function revisions(): HasMany
+    {
+        return $this->hasMany(StrategyRevision::class)->orderByDesc('revision');
+    }
+
+    public function activeRevision(): BelongsTo
+    {
+        return $this->belongsTo(StrategyRevision::class, 'active_revision_id');
     }
 
     /** @return array<string,array<string,array{group:string,type:string,values?:array<int,string>,min?:int,max?:int}>> */
