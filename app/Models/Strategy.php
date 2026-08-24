@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 /**
  * A named client-option policy (PLAN C2/C3).
@@ -30,7 +31,7 @@ use Illuminate\Support\Facades\DB;
  * A strategy cannot LOCK a setting in the client UI — only push it. The user
  * can change it back and nothing re-pushes until we send the policy again.
  */
-#[Fillable(['name', 'note', 'enabled', 'is_default', 'enforce', 'options'])]
+#[Fillable(['name', 'note', 'enabled', 'is_default', 'enforce', 'options', 'confirmation_timeout_minutes'])]
 class Strategy extends Model
 {
     use SoftDeletes;
@@ -148,6 +149,7 @@ class Strategy extends Model
             'is_default' => 'boolean',
             'enforce' => 'boolean',
             'options' => 'array',
+            'confirmation_timeout_minutes' => 'integer',
         ];
     }
 
@@ -280,7 +282,7 @@ class Strategy extends Model
         $this->options = self::sanitizeOptions($options);
     }
 
-    /** @return array{name:string,note:?string,enabled:bool,is_default:bool,enforce:bool,options:array<string,string>} */
+    /** @return array{name:string,note:?string,enabled:bool,is_default:bool,enforce:bool,confirmation_timeout_minutes:int,options:array<string,string>} */
     public function snapshot(): array
     {
         return [
@@ -289,6 +291,7 @@ class Strategy extends Model
             'enabled' => (bool) $this->enabled,
             'is_default' => (bool) $this->is_default,
             'enforce' => (bool) $this->enforce,
+            'confirmation_timeout_minutes' => (int) ($this->confirmation_timeout_minutes ?: 15),
             'options' => $this->optionMap(),
         ];
     }
@@ -301,6 +304,34 @@ class Strategy extends Model
     public function activeRevision(): BelongsTo
     {
         return $this->belongsTo(StrategyRevision::class, 'active_revision_id');
+    }
+
+    public function rollouts(): HasMany
+    {
+        return $this->hasMany(StrategyRollout::class)->orderByDesc('id');
+    }
+
+    /** @return array{options:array<string,string>,enforce:bool,rollout_target_id:?int,rollout_delivered_version:?int} */
+    public function desiredPolicyFor(Device $device): array
+    {
+        $rollout = StrategyRollout::releasedPolicyFor($this->id, $device->id);
+        if ($rollout === null) {
+            return ['options' => $this->configOptions(), 'enforce' => (bool) $this->enforce, 'rollout_target_id' => null, 'rollout_delivered_version' => null];
+        }
+        $snapshot = $rollout['snapshot'];
+
+        return [
+            'options' => ($snapshot['enabled'] ?? true) ? self::sanitizeOptions(is_array($snapshot['options'] ?? null) ? $snapshot['options'] : []) : [],
+            'enforce' => (bool) ($snapshot['enforce'] ?? false),
+            'rollout_target_id' => $rollout['target_id'],
+            'rollout_delivered_version' => $rollout['delivered_version'],
+        ];
+    }
+
+    /** @return array<string,string> */
+    public function desiredOptionsFor(Device $device): array
+    {
+        return $this->desiredPolicyFor($device)['options'];
     }
 
     /** @return array<string,array<string,array{group:string,type:string,values?:array<int,string>,min?:int,max?:int}>> */
@@ -354,6 +385,12 @@ class Strategy extends Model
                 self::LEVEL_DEVICE_GROUP => DeviceGroup::query()->whereKey($targetId)->lockForUpdate()->firstOrFail(),
             };
 
+            $current = DB::table($table)->where($column, $targetId)->value('strategy_id');
+            if (($current === null ? null : (int) $current) === $strategyId) {
+                return;
+            }
+            self::guardAssignmentChanges([$current, $strategyId]);
+
             DB::table($table)->where($column, $targetId)->delete();
             if ($strategyId !== null) {
                 DB::table($table)->insert([$column => $targetId, 'strategy_id' => $strategyId]);
@@ -361,6 +398,41 @@ class Strategy extends Model
 
             self::recomputeForLevel($level, $targetId);
         });
+    }
+
+    /** @param array<int,int|string|null> $strategyIds */
+    public static function guardNoOpenRollouts(array $strategyIds): void
+    {
+        $ids = collect($strategyIds)->filter()->map(fn ($id) => (int) $id)->unique()->sort()->values()->all();
+        if ($ids === []) {
+            return;
+        }
+        static::query()->whereIn('id', $ids)->orderBy('id')->lockForUpdate()->get(['id']);
+        if (StrategyRollout::query()->whereIn('strategy_id', $ids)
+            ->whereIn('status', StrategyRollout::OPEN_STATUSES)->exists()) {
+            throw ValidationException::withMessages(['strategy' => 'Pause or cancel the open rollout before changing assignments or policy.']);
+        }
+    }
+
+    public static function guardNoOpenPolicyChanges(): void
+    {
+        // Any strategy mutation can change effective precedence for a frozen
+        // target, even when a different strategy owns the open rollout.
+        if (StrategyRollout::query()->whereIn('status', StrategyRollout::OPEN_STATUSES)->exists()) {
+            throw ValidationException::withMessages(['strategy' => 'Wait for open strategy rollouts to finish before changing policy.']);
+        }
+    }
+
+    /** @param array<int,int|string|null> $strategyIds */
+    public static function guardAssignmentChanges(array $strategyIds): void
+    {
+        // A user/group/device pivot can change another strategy's effective
+        // fleet through precedence or fallback. Freeze every assignment writer
+        // while any rollout is open rather than attempting an incomplete local
+        // strategy-id check.
+        if (StrategyRollout::query()->whereIn('status', StrategyRollout::OPEN_STATUSES)->exists()) {
+            throw ValidationException::withMessages(['assignment' => 'Wait for open strategy rollouts to finish before changing assignments.']);
+        }
     }
 
     /** The strategy id assigned at one level, ignoring precedence. */
@@ -609,16 +681,27 @@ class Strategy extends Model
             return null;
         }
 
+        if ($device->strategy_rollout_ack_pending) {
+            StrategyRollout::confirmDeliveredToken($device->id, $echoedVersion);
+        }
+
         $strategy = $device->strategy_id_resolved !== null
             ? static::query()->find($device->strategy_id_resolved)
             : null;
+        $policy = $strategy?->desiredPolicyFor($device) ?? [
+            'options' => [], 'enforce' => false, 'rollout_target_id' => null, 'rollout_delivered_version' => null,
+        ];
 
-        $desired = $strategy?->configOptions() ?? [];
+        $desired = $policy['options'];
         $acked = self::stringMap($device->strategy_acked_options);
         $version = $device->strategy_version === null ? null : (int) $device->strategy_version;
 
         // Never had a policy and still does not: say nothing at all.
         if ($desired === [] && $acked === [] && $version === null) {
+            if ($policy['rollout_target_id'] !== null) {
+                StrategyRollout::markNoopTargetConfirmed($policy['rollout_target_id']);
+            }
+
             return null;
         }
 
@@ -669,10 +752,17 @@ class Strategy extends Model
             ])->saveQuietly();
         }
 
+        if ($policy['rollout_target_id'] !== null && $policy['rollout_delivered_version'] !== $version) {
+            StrategyRollout::markDeliveredTarget($policy['rollout_target_id'], $device->id, $version);
+            if ($echoedVersion === $version) {
+                StrategyRollout::confirmDeliveredToken($device->id, $echoedVersion);
+            }
+        }
+
         // The device echoed our current token: it is holding $desired (no bump
         // can have happened above, or the tokens would differ).
         if ($echoedVersion === $version) {
-            if (! ($strategy?->enforce)) {
+            if (! $policy['enforce']) {
                 return null; // up to date; let local edits stand
             }
 

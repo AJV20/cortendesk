@@ -16,6 +16,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 /**
  * RustDesk client `--assign` support (PLAN B2).
@@ -176,6 +177,8 @@ class DeviceCliController extends Controller
             );
         } catch (AuthorizationException $exception) {
             return $this->message($exception->getMessage(), 403);
+        } catch (ValidationException $exception) {
+            return $this->message(collect($exception->errors())->flatten()->first() ?? 'The strategy is locked by an open rollout.', 409);
         }
 
         // Add / update the address-book entry for this device.

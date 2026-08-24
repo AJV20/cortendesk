@@ -46,6 +46,7 @@ class StrategyImpact
             'enabled' => (bool) ($proposed['enabled'] ?? false),
             'is_default' => (bool) ($proposed['is_default'] ?? false),
             'enforce' => (bool) ($proposed['enforce'] ?? false),
+            'confirmation_timeout_minutes' => (int) ($proposed['confirmation_timeout_minutes'] ?? 15),
             'options' => $afterOptions,
             'operation' => (string) ($proposed['operation'] ?? 'save'),
             'restore_revision_id' => isset($proposed['restore_revision_id']) ? (int) $proposed['restore_revision_id'] : null,
@@ -64,7 +65,7 @@ class StrategyImpact
                 ->keys()->values()->all(),
             'affected_count' => $scan['count'],
             'affected_devices' => $scan['sample'],
-            'metadata_changes' => collect(['name', 'note', 'enabled', 'is_default', 'enforce'])
+            'metadata_changes' => collect(['name', 'note', 'enabled', 'is_default', 'enforce', 'confirmation_timeout_minutes'])
                 ->filter(fn (string $key) => $before[$key] !== $snapshot[$key])
                 ->mapWithKeys(fn (string $key) => [$key => [
                     'before' => $before[$key],
@@ -74,7 +75,70 @@ class StrategyImpact
         ];
     }
 
-    /** @return array{name:?string,note:?string,enabled:bool,is_default:bool,enforce:bool,options:array<string,string>} */
+    /**
+     * Stream the exact frozen target set for a reviewed rollout without holding
+     * the fleet in memory. Callers must hold the shared strategy lock first.
+     *
+     * @param  array<string,mixed>  $proposed
+     * @return \Generator<int,int>
+     */
+    public static function affectedDeviceIds(Strategy $strategy, array $proposed): \Generator
+    {
+        $before = self::snapshot($strategy);
+        $afterOptions = Strategy::sanitizeOptions(is_array($proposed['options'] ?? null) ? $proposed['options'] : []);
+        $policyChanged = $before['options'] !== $afterOptions
+            || $before['enabled'] !== (bool) ($proposed['enabled'] ?? false)
+            || $before['is_default'] !== (bool) ($proposed['is_default'] ?? false)
+            || $before['enforce'] !== (bool) ($proposed['enforce'] ?? false);
+        if (! $policyChanged) {
+            return;
+        }
+
+        $targetId = (int) $strategy->id;
+        $strategies = Strategy::query()->orderBy('id')->get(['id', 'enabled', 'is_default']);
+        $enabled = $strategies->mapWithKeys(fn (Strategy $item) => [(int) $item->id => (bool) $item->enabled])->all();
+        $enabled[$targetId] = (bool) ($proposed['enabled'] ?? false);
+        $defaultId = (($proposed['enabled'] ?? false) && ($proposed['is_default'] ?? false))
+            ? $targetId
+            : $strategies->first(fn (Strategy $item) => $item->id !== $targetId && $item->enabled && $item->is_default)?->id;
+
+        $lastId = 0;
+        while (true) {
+            $devices = Device::query()->where('status', Device::STATUS_ACTIVE)
+                ->where('id', '>', $lastId)->orderBy('id')->limit(500)->get();
+            if ($devices->isEmpty()) {
+                break;
+            }
+            $lastId = (int) $devices->last()->id;
+            $deviceIds = $devices->pluck('id')->all();
+            $userIds = $devices->pluck('user_id')->filter()->unique()->all();
+            $groupIds = $devices->pluck('device_group_id')->filter()->unique()->all();
+            $direct = DB::table('device_strategy')->whereIn('device_id', $deviceIds)->pluck('strategy_id', 'device_id')->all();
+            $owners = $userIds === [] ? [] : DB::table('strategy_user')->whereIn('user_id', $userIds)->pluck('strategy_id', 'user_id')->all();
+            $groups = $groupIds === [] ? [] : DB::table('device_group_strategy')->whereIn('device_group_id', $groupIds)->pluck('strategy_id', 'device_group_id')->all();
+
+            foreach ($devices as $device) {
+                $winner = null;
+                foreach ([
+                    $direct[$device->id] ?? null,
+                    $device->user_id === null ? null : ($owners[$device->user_id] ?? null),
+                    $device->device_group_id === null ? null : ($groups[$device->device_group_id] ?? null),
+                    $defaultId,
+                ] as $candidate) {
+                    if ($candidate !== null && ($enabled[(int) $candidate] ?? false)) {
+                        $winner = (int) $candidate;
+                        break;
+                    }
+                }
+                $current = $device->strategy_id_resolved === null ? null : (int) $device->strategy_id_resolved;
+                if ($winner !== $current || $winner === $targetId) {
+                    yield (int) $device->id;
+                }
+            }
+        }
+    }
+
+    /** @return array{name:?string,note:?string,enabled:bool,is_default:bool,enforce:bool,confirmation_timeout_minutes:int,options:array<string,string>} */
     private static function snapshot(?Strategy $strategy): array
     {
         return $strategy === null ? [
@@ -83,6 +147,7 @@ class StrategyImpact
             'enabled' => false,
             'is_default' => false,
             'enforce' => false,
+            'confirmation_timeout_minutes' => 15,
             'options' => [],
         ] : [
             'name' => $strategy->name,
@@ -90,6 +155,7 @@ class StrategyImpact
             'enabled' => (bool) $strategy->enabled,
             'is_default' => (bool) $strategy->is_default,
             'enforce' => (bool) $strategy->enforce,
+            'confirmation_timeout_minutes' => (int) $strategy->confirmation_timeout_minutes,
             'options' => $strategy->optionMap(),
         ];
     }
@@ -104,11 +170,11 @@ class StrategyImpact
         ], JSON_THROW_ON_ERROR));
 
         $targetId = $strategy?->id ?? -1;
-        $strategies = Strategy::query()->orderBy('id')->get(['id', 'name', 'enabled', 'is_default', 'enforce', 'options']);
+        $strategies = Strategy::query()->orderBy('id')->get(['id', 'name', 'enabled', 'is_default', 'enforce', 'confirmation_timeout_minutes', 'options']);
         $enabled = $strategies->mapWithKeys(fn (Strategy $item) => [(int) $item->id => (bool) $item->enabled])->all();
         $enabled[$targetId] = (bool) $proposed['enabled'];
         foreach ($strategies as $item) {
-            hash_update($hash, 'strategy:'.$item->id.':'.$item->name.':'.(int) $item->enabled.':'.(int) $item->is_default.':'.(int) $item->enforce.':'.json_encode($item->optionMap(), JSON_THROW_ON_ERROR).';');
+            hash_update($hash, 'strategy:'.$item->id.':'.$item->name.':'.(int) $item->enabled.':'.(int) $item->is_default.':'.(int) $item->enforce.':'.(int) $item->confirmation_timeout_minutes.':'.json_encode($item->optionMap(), JSON_THROW_ON_ERROR).';');
         }
 
         $defaultId = ($proposed['enabled'] && $proposed['is_default'])

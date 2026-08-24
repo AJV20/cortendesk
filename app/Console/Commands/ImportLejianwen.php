@@ -121,7 +121,8 @@ class ImportLejianwen extends Command
 
         // delete() instead of truncate() so --wipe stays inside the
         // transaction (and rolls back under --dry-run).
-        Strategy::query()->orderBy('id')->lockForUpdate()->get(['id']);
+        $strategyIds = Strategy::query()->orderBy('id')->lockForUpdate()->pluck('id')->all();
+        Strategy::guardNoOpenRollouts($strategyIds);
         Device::withTrashed()->forceDelete();
 
         foreach ([

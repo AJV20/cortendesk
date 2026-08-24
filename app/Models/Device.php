@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 class Device extends Model
 {
@@ -68,6 +69,7 @@ class Device extends Model
             'strategy_options' => 'array',
             'strategy_acked_options' => 'array',
             'strategy_acked_at' => 'datetime',
+            'strategy_rollout_ack_pending' => 'boolean',
         ];
     }
 
@@ -116,6 +118,18 @@ class Device extends Model
             $beforeResolution = $touchesContext ? Strategy::resolve($locked) : null;
             $locked->fill($attributes);
 
+            $activeMembershipChanges = ! $device->exists
+                ? ($locked->status ?? self::STATUS_ACTIVE) === self::STATUS_ACTIVE
+                : $locked->isDirty('status')
+                    && in_array(self::STATUS_ACTIVE, [$locked->getOriginal('status'), $locked->status], true);
+            if ($activeMembershipChanges) {
+                self::rejectOpenRolloutFleetChange('Wait for open strategy rollouts to finish before changing active fleet membership.');
+            }
+
+            if ($device->exists && $locked->isDirty(['user_id', 'device_group_id'])) {
+                self::rejectOpenRolloutFleetChange('Cancel open strategy rollouts before changing device owners or groups.');
+            }
+
             if ($touchesContext
                 && $locked->isDirty(['user_id', 'device_group_id'])
                 && ! $mayChangeResolvedStrategy
@@ -163,6 +177,11 @@ class Device extends Model
                 }
             });
 
+            if (! (clone $changedScope)->exists()) {
+                return 0;
+            }
+            self::rejectOpenRolloutFleetChange('Cancel open strategy rollouts before changing device owners or groups.');
+
             $changedCount = 0;
             $lastId = 0;
             do {
@@ -206,6 +225,9 @@ class Device extends Model
         DB::transaction(function () use ($device, $force): void {
             Strategy::query()->orderBy('id')->lockForUpdate()->get(['id']);
             $locked = static::withTrashed()->whereKey($device->getKey())->lockForUpdate()->firstOrFail();
+            if (! $locked->trashed() && $locked->status === self::STATUS_ACTIVE) {
+                self::rejectOpenRolloutFleetChange('Wait for open strategy rollouts to finish before removing active devices.');
+            }
             $force ? $locked->forceDelete() : $locked->delete();
         });
     }
@@ -216,10 +238,27 @@ class Device extends Model
         return DB::transaction(function () use ($device): Device {
             Strategy::query()->orderBy('id')->lockForUpdate()->get(['id']);
             $locked = static::withTrashed()->whereKey($device->getKey())->lockForUpdate()->firstOrFail();
+            if ($locked->trashed() && $locked->status === self::STATUS_ACTIVE) {
+                self::rejectOpenRolloutFleetChange('Wait for open strategy rollouts to finish before restoring active devices.');
+            }
             $locked->restore();
 
             return $locked;
         });
+    }
+
+    /** Frozen rollout targets cannot silently change fleet membership or precedence. */
+    private static function rejectOpenRolloutFleetChange(string $message): void
+    {
+        if (StrategyRollout::query()->whereIn('status', [
+            StrategyRollout::STATUS_SCHEDULED,
+            StrategyRollout::STATUS_ACTIVE,
+            StrategyRollout::STATUS_PAUSED,
+        ])->exists()) {
+            throw ValidationException::withMessages([
+                'rollout' => $message,
+            ]);
+        }
     }
 
     public function user(): BelongsTo

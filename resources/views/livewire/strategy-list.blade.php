@@ -22,6 +22,44 @@
                 </div>
             @endif
 
+            @if ($rollouts->isNotEmpty())
+                <div class="px-3 pb-3">
+                    <div class="border rounded overflow-hidden">
+                        <div class="d-flex justify-content-between align-items-center px-3 py-2 bg-light">
+                            <strong>Recent staged rollouts</strong>
+                            <small class="text-muted">Frozen targets · immutable revision</small>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle mb-0">
+                                <thead><tr><th>Strategy</th><th>Status</th><th>Released</th><th>Confirmed</th><th>Timed out</th><th>Next batch</th><th class="text-end">Action</th></tr></thead>
+                                <tbody>
+                                @foreach ($rollouts as $rollout)
+                                    <tr wire:key="rollout-{{ $rollout->id }}">
+                                        <td><strong>{{ $rollout->strategy?->name ?? 'Deleted strategy' }}</strong><small class="text-muted d-block">Revision {{ $rollout->revision?->revision ?? '—' }} · {{ $rollout->target_count }} target(s)</small></td>
+                                        <td><span class="badge bg-secondary-subtle text-secondary">{{ ucfirst($rollout->status) }}</span></td>
+                                        <td>{{ $rollout->released_count }} / {{ $rollout->target_count }}</td>
+                                        <td>{{ $rollout->confirmed_count }} / {{ $rollout->target_count }}</td>
+                                        <td>{{ $rollout->timed_out_count }}</td>
+                                        <td>{{ $rollout->next_release_at?->format('M j, Y g:i A') ?? '—' }}</td>
+                                        <td class="text-end text-nowrap">
+                                            @if ($rollout->status === \App\Models\StrategyRollout::STATUS_ACTIVE)
+                                                <button type="button" class="btn btn-sm btn-outline-warning" wire:click="pauseRollout({{ $rollout->id }})">Pause</button>
+                                            @elseif ($rollout->status === \App\Models\StrategyRollout::STATUS_PAUSED)
+                                                <button type="button" class="btn btn-sm btn-outline-primary" wire:click="resumeRollout({{ $rollout->id }})">Resume</button>
+                                            @endif
+                                            @if ($rollout->released_count === 0 && in_array($rollout->status, [\App\Models\StrategyRollout::STATUS_SCHEDULED, \App\Models\StrategyRollout::STATUS_PAUSED], true))
+                                                <button type="button" class="btn btn-sm btn-outline-danger" wire:click="cancelRollout({{ $rollout->id }})" wire:confirm="Cancel this rollout before any devices receive it?">Cancel</button>
+                                            @endif
+                                        </td>
+                                    </tr>
+                                @endforeach
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            @endif
+
             {{-- Desktop table (md and up) --}}
             <div class="table-responsive d-none d-md-block">
                 <table class="table table-hover table-centered mb-0">
@@ -211,6 +249,17 @@
                                 </div>
                             </div>
 
+                            <div class="row mb-3">
+                                <div class="col-12 col-md-6">
+                                    <label class="form-label" for="sl-confirmation-timeout">Confirmation timeout (minutes)</label>
+                                    <input id="sl-confirmation-timeout" type="number" min="1" max="1440"
+                                           class="form-control @error('formConfirmationTimeout') is-invalid @enderror"
+                                           wire:model="formConfirmationTimeout">
+                                    @error('formConfirmationTimeout') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                                    <small class="text-muted">How long a released revision may remain unconfirmed before the batch records a timeout and can advance.</small>
+                                </div>
+                            </div>
+
                             <div class="alert alert-secondary py-2 fs-13 mb-3">
                                 <i class="ri-information-line me-1"></i>Controls left on <strong>Not managed</strong> are not part of this strategy: the device keeps whatever it has. Changing a managed option back to Not managed resets that option to the client's built-in default on the next heartbeat.
                             </div>
@@ -316,9 +365,48 @@
                                 @endforeach
                             </div></details>
                         @endif
+
+                        @if ($canAssignFleet && $editingId > 0 && ! $pendingDeleteId && ! $restoreRevisionId && ($impactPreview['affected_count'] ?? 0) > 0)
+                            @php
+                                $stagedBlocked = array_intersect(
+                                    array_keys($impactPreview['metadata_changes'] ?? []),
+                                    ['name', 'enabled', 'is_default', 'confirmation_timeout_minutes'],
+                                );
+                            @endphp
+                            <div class="border rounded p-3 mt-3">
+                                <h6 class="mb-1">Staged rollout</h6>
+                                <p class="text-muted fs-13">Freeze the reviewed target set, release a bounded batch now or at the selected time, then advance only after that batch confirms or times out.</p>
+                                @error('rollout') <div class="alert alert-danger py-2">{{ $message }}</div> @enderror
+                                @if ($stagedBlocked)
+                                    <div class="alert alert-warning py-2 mb-0">Apply identity, enabled/default, and confirmation-timeout changes now. Staged rollouts accept policy options, note, and enforce changes only.</div>
+                                @else
+                                    <div class="row g-2">
+                                        <div class="col-12 col-md-4">
+                                            <label class="form-label" for="sl-rollout-start">Start at</label>
+                                            <input id="sl-rollout-start" type="datetime-local" class="form-control" wire:model="rolloutStartAt">
+                                            <small class="text-muted">Blank starts now ({{ config('app.timezone') }}).</small>
+                                        </div>
+                                        <div class="col-6 col-md-4">
+                                            <label class="form-label" for="sl-rollout-batch">Batch size</label>
+                                            <input id="sl-rollout-batch" type="number" min="1" max="1000" class="form-control" wire:model="rolloutBatchSize">
+                                        </div>
+                                        <div class="col-6 col-md-4">
+                                            <label class="form-label" for="sl-rollout-interval">Interval (minutes)</label>
+                                            <input id="sl-rollout-interval" type="number" min="1" max="1440" class="form-control" wire:model="rolloutIntervalMinutes">
+                                        </div>
+                                    </div>
+                                @endif
+                            </div>
+                        @endif
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-light me-auto" wire:click="closePreview">Back</button>
+                        @if ($canAssignFleet && $editingId > 0 && ! $pendingDeleteId && ! $restoreRevisionId && ($impactPreview['affected_count'] ?? 0) > 0 && empty($stagedBlocked ?? []))
+                            <button type="button" class="btn btn-outline-primary" wire:click="scheduleRollout">
+                                <span wire:loading.remove wire:target="scheduleRollout">Schedule rollout</span>
+                                <span wire:loading wire:target="scheduleRollout">Scheduling…</span>
+                            </button>
+                        @endif
                         <button type="button" class="btn btn-primary" wire:click="confirmSave">
                             <span wire:loading.remove wire:target="confirmSave">{{ $pendingDeleteId ? 'Delete strategy' : ($restoreRevisionId ? 'Restore revision' : 'Apply strategy') }}</span>
                             <span wire:loading wire:target="confirmSave">Applying…</span>

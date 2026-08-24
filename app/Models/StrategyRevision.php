@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\DB;
 
 #[Fillable(['strategy_id', 'revision', 'snapshot', 'change_note', 'created_by', 'created_by_name', 'affected_devices'])]
@@ -35,6 +36,11 @@ class StrategyRevision extends Model
         return $this->belongsTo(Strategy::class)->withTrashed();
     }
 
+    public function rollouts(): HasMany
+    {
+        return $this->hasMany(StrategyRollout::class, 'strategy_revision_id');
+    }
+
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
@@ -49,7 +55,7 @@ class StrategyRevision extends Model
     {
         $changes = [];
 
-        foreach (['name', 'note', 'enabled', 'is_default', 'enforce'] as $key) {
+        foreach (['name', 'note', 'enabled', 'is_default', 'enforce', 'confirmation_timeout_minutes'] as $key) {
             if (($before[$key] ?? null) !== ($after[$key] ?? null)) {
                 $changes[] = ['key' => $key, 'before' => $before[$key] ?? null, 'after' => $after[$key] ?? null];
             }
@@ -98,6 +104,7 @@ class StrategyRevision extends Model
                 'enabled' => (bool) ($snapshot['enabled'] ?? $strategy->enabled),
                 'is_default' => (bool) ($snapshot['is_default'] ?? $strategy->is_default),
                 'enforce' => (bool) ($snapshot['enforce'] ?? $strategy->enforce),
+                'confirmation_timeout_minutes' => max(1, min(10080, (int) ($snapshot['confirmation_timeout_minutes'] ?? $strategy->confirmation_timeout_minutes ?? 15))),
                 'options' => Strategy::sanitizeOptions(is_array($snapshot['options'] ?? null) ? $snapshot['options'] : []),
             ];
 
