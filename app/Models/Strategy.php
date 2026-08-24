@@ -749,6 +749,7 @@ class Strategy extends Model
             $device->forceFill([
                 'strategy_version' => $version,
                 'strategy_options' => $desired,
+                'strategy_sent_at' => now(),
             ])->saveQuietly();
         }
 
@@ -791,6 +792,13 @@ class Strategy extends Model
             return null;
         }
 
+        // Upgraded rows can already have a delivery token but no sent timestamp.
+        // Start the reporting deadline on the first post-upgrade resend, not on
+        // the strategy's potentially much older updated_at value.
+        if ($device->strategy_sent_at === null) {
+            $device->forceFill(['strategy_sent_at' => now()])->saveQuietly();
+        }
+
         return ['modified_at' => $version, 'strategy' => ['config_options' => $wire]];
     }
 
@@ -801,7 +809,7 @@ class Strategy extends Model
      *
      * @return array<string,string>
      */
-    private static function stringMap(mixed $value): array
+    public static function stringMap(mixed $value): array
     {
         if (! is_array($value)) {
             return [];

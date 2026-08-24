@@ -11,6 +11,7 @@ use App\Models\StrategyRevision;
 use App\Models\StrategyRollout;
 use App\Models\User;
 use App\Services\StrategyAssignmentImpact;
+use App\Services\StrategyCompliance;
 use App\Services\StrategyImpact;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -77,6 +78,10 @@ class StrategyList extends Component
     public int $rolloutIntervalMinutes = 5;
 
     public string $rolloutStartAt = '';
+
+    public ?int $complianceStrategyId = null;
+
+    public string $complianceState = 'all';
 
     public ?int $pendingDeleteId = null;
 
@@ -480,6 +485,29 @@ class StrategyList extends Component
     {
         $this->authorizeConsole('strategy', 'rw');
         $this->authorizeFleetAssignments();
+    }
+
+    public function showCompliance(int $strategyId, string $state = 'all'): void
+    {
+        $this->authorizeConsole('strategy', 'r');
+        $this->authorizeFleetAssignments();
+        Strategy::findOrFail($strategyId);
+        $this->complianceStrategyId = $strategyId;
+        $this->setComplianceState($state);
+    }
+
+    public function setComplianceState(string $state): void
+    {
+        $this->authorizeConsole('strategy', 'r');
+        $this->authorizeFleetAssignments();
+        if (in_array($state, ['all', 'confirmed', 'pending', 'stale', 'offline', 'overridden'], true)) {
+            $this->complianceState = $state;
+        }
+    }
+
+    public function closeCompliance(): void
+    {
+        $this->reset('complianceStrategyId', 'complianceState');
     }
 
     public function closePreview(): void
@@ -937,10 +965,32 @@ class StrategyList extends Component
             ->orderBy('name')
             ->get();
 
+        $complianceStrategy = auth()->user()?->is_admin === true && $this->complianceStrategyId
+            ? $strategies->firstWhere('id', $this->complianceStrategyId)
+            : null;
+        $complianceSummary = null;
+        $complianceDevices = [];
+        if ($complianceStrategy !== null) {
+            $state = in_array($this->complianceState, ['all', 'confirmed', 'pending', 'stale', 'offline', 'overridden'], true)
+                ? $this->complianceState
+                : 'all';
+            $complianceSummary = app(StrategyCompliance::class)->summaries(
+                collect([$complianceStrategy]),
+                $complianceStrategy->id,
+                $state,
+            )[$complianceStrategy->id];
+            $complianceDevices = $state === 'all'
+                ? collect($complianceSummary['devices'])->flatten(1)->sortBy('rustdesk_id')->values()->all()
+                : $complianceSummary['devices'][$state];
+        }
+
         return view('livewire.strategy-list', [
             'strategies' => $strategies,
             'catalog' => self::catalog(),
             'canAssignFleet' => auth()->user()?->is_admin === true,
+            'complianceStrategy' => $complianceStrategy,
+            'complianceSummary' => $complianceSummary,
+            'complianceDevices' => $complianceDevices,
             'rollouts' => auth()->user()?->is_admin === true
                 ? StrategyRollout::query()->with(['strategy', 'revision'])
                     ->withCount([
