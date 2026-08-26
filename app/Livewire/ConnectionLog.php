@@ -17,11 +17,9 @@ class ConnectionLog extends Component
 
     protected string $paginationTheme = 'bootstrap';
 
-    public const TYPES = [
-        0 => 'Remote Control',
-        1 => 'File Transfer',
-        2 => 'Port Forward',
-    ];
+    public const TYPES = AuditConnection::TYPE_LABELS;
+
+    public const REMOTE_DEVICE_LABEL = AuditConnection::REMOTE_DEVICE_LABEL;
 
     #[Url(except: '')]
     public string $search = '';
@@ -100,14 +98,14 @@ class ConnectionLog extends Component
 
         return response()->streamDownload(function () use ($rows) {
             $out = fopen('php://output', 'w');
-            fputcsv($out, ['When', 'Controlled Device', 'From ID', 'From Name', 'Type', 'IP', 'Closed At', 'Duration (s)']);
+            fputcsv($out, ['When', self::REMOTE_DEVICE_LABEL, 'From ID', 'From Name', 'Type', 'IP', 'Closed At', 'Duration (s)']);
             foreach ($rows as $row) {
                 fputcsv($out, [
                     $row->created_at?->toDateTimeString(),
                     $row->rustdesk_id,
                     $row->from_peer,
                     $row->from_name,
-                    self::TYPES[$row->conn_type] ?? $row->conn_type,
+                    AuditConnection::typeLabel((int) $row->conn_type),
                     $row->ip,
                     $row->closed_at?->toDateTimeString() ?? 'active',
                     $row->closed_at ? $row->created_at->diffInSeconds($row->closed_at) : '',

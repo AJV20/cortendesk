@@ -31,7 +31,7 @@
                 <thead>
                 <tr>
                     <th>When</th>
-                    <th>Controlled Device</th>
+                    <th>{{ \App\Models\AuditConnection::REMOTE_DEVICE_LABEL }}</th>
                     <th>From</th>
                     <th>Type</th>
                     <th>IP</th>
@@ -55,7 +55,7 @@
                             @elseif ($conn->conn_type === 2)
                                 <span class="badge bg-warning-subtle text-warning"><i class="ri-swap-line me-1"></i>Port Forward</span>
                             @else
-                                <span class="badge bg-primary-subtle text-primary"><i class="ri-remote-control-line me-1"></i>Remote Control</span>
+                                <span class="badge bg-primary-subtle text-primary"><i class="ri-remote-control-line me-1"></i>{{ \App\Models\AuditConnection::typeLabel((int) $conn->conn_type) }}</span>
                             @endif
                         </td>
                         <td class="rd-mono">{{ $conn->ip ?: '—' }}</td>
@@ -110,7 +110,7 @@
                         @elseif ($conn->conn_type === 2)
                             <span class="badge bg-warning-subtle text-warning">Port Forward</span>
                         @else
-                            <span class="badge bg-primary-subtle text-primary">Remote Control</span>
+                            <span class="badge bg-primary-subtle text-primary">{{ \App\Models\AuditConnection::typeLabel((int) $conn->conn_type) }}</span>
                         @endif
                         <span class="rd-mini-sub text-end">
                             {{ $conn->ip ?: '—' }} · {{ $conn->created_at?->diffForHumans(short: true) }}

@@ -81,6 +81,7 @@ import {
 import { RemoteAudioPlayback, type RemoteAudioContext } from '../media/remote-audio';
 import { LocalSessionRecorder, type RecordingSurface } from '../media/session-recorder';
 import { remoteInputAllowed, type RemoteInputChannel } from './view-only-policy';
+import { clipboardReceiptNotice } from './clipboard-feedback';
 
 // Back-compat: everything that used to live here is re-exported for tests and
 // external importers.
@@ -1880,12 +1881,12 @@ export class RdApp {
         void navigator.clipboard
           ?.writeText(ev.text)
           .then(() => {
-            if (sessionEpoch === this.sessionEpoch) this.toast('Remote clipboard received');
+            const notice = clipboardReceiptNotice(true);
+            if (notice && sessionEpoch === this.sessionEpoch) this.toast(notice);
           })
           .catch(() => {
-            if (sessionEpoch === this.sessionEpoch) {
-              this.toast('Remote clipboard received (press Ctrl+V on this page to sync)');
-            }
+            const notice = clipboardReceiptNotice(false);
+            if (notice && sessionEpoch === this.sessionEpoch) this.toast(notice);
           });
         break;
       }

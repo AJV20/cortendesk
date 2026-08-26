@@ -51,7 +51,7 @@ class DashboardController extends Controller
 
     /**
      * Daily connection counts for the requested window, split by type:
-     * Remote Control (0), File Transfer (1), Other (port forward, camera, terminal).
+     * Remote Desktop (0), File Transfer (1), Other (port forward, camera, terminal).
      *
      * @param  array<int,string>|null  $visibleIds  null = all devices (admin)
      */
@@ -88,7 +88,7 @@ class DashboardController extends Controller
         return [
             'labels' => $labels,
             'series' => [
-                ['name' => 'Remote Control', 'data' => $remote],
+                ['name' => AuditConnection::TYPE_LABELS[0], 'data' => $remote],
                 ['name' => 'File Transfer', 'data' => $file],
                 ['name' => 'Other', 'data' => $other],
             ],

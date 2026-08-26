@@ -8,6 +8,19 @@ use Illuminate\Database\Eloquent\Model;
 #[Fillable(['action', 'conn_id', 'rustdesk_id', 'from_peer', 'from_name', 'ip', 'session_id', 'conn_type', 'uuid', 'closed_at'])]
 class AuditConnection extends Model
 {
+    public const TYPE_LABELS = [
+        0 => 'Remote Desktop',
+        1 => 'File Transfer',
+        2 => 'Port Forward',
+    ];
+
+    public const REMOTE_DEVICE_LABEL = 'Remote Device';
+
+    public static function typeLabel(int $type): string
+    {
+        return self::TYPE_LABELS[$type] ?? 'Other';
+    }
+
     /**
      * How long to wait before re-broadcasting a disconnect the client has not
      * acted on. A heartbeat can be lost; a live session must not be left
@@ -76,7 +89,7 @@ class AuditConnection extends Model
      * rebooted machine's session Active forever.
      *
      * @param  array<int, int>  $liveConnIds
-     * @return int  rows closed
+     * @return int rows closed
      */
     public static function reconcileFor(string $rustdeskId, array $liveConnIds): int
     {
@@ -106,7 +119,7 @@ class AuditConnection extends Model
      * whereNotIn to `1 = 1`, so "no device is heartbeating" correctly means
      * every stale session closes.
      *
-     * @return int  rows closed
+     * @return int rows closed
      */
     public static function closeStaleSessions(): int
     {
