@@ -1294,6 +1294,9 @@
 }
 
 @media (max-width: 640px) {
+  .rd-mi {
+    min-height: 44px;
+  }
   #rd-toolbar {
     grid-template-columns: auto 1fr auto;
     padding: 0 8px;

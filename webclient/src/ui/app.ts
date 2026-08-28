@@ -81,6 +81,7 @@ import {
 import { RemoteAudioPlayback, type RemoteAudioContext } from '../media/remote-audio';
 import { LocalSessionRecorder, type RecordingSurface } from '../media/session-recorder';
 import { remoteInputAllowed, type RemoteInputChannel } from './view-only-policy';
+import { prepareKeyCommandForDispatch } from './key-dispatch-policy';
 
 // Back-compat: everything that used to live here is re-exported for tests and
 // external importers.
@@ -1289,8 +1290,8 @@ export class RdApp {
       return;
     }
     if (id === 'lockScreen') {
-      this.post(buildLockScreenKeyCommand());
-      this.toast('Lock command sent');
+      const sent = this.post(buildLockScreenKeyCommand());
+      this.toast(sent ? 'Lock command sent' : 'Lock command not sent');
       this.closePop();
       return;
     }
@@ -1747,16 +1748,28 @@ export class RdApp {
   /** Throttle for the per-event input log, which would otherwise flood. */
   private lastDbgMouseMs = 0;
 
-  private post(cmd: UiCommand): void {
+  private post(cmd: UiCommand): boolean {
+    if (cmd.c === 'key') {
+      const prepared = prepareKeyCommandForDispatch(cmd, {
+        sessionStreaming: this.state === 'streaming',
+        viewOnly: this.viewOnly,
+        keyboardAllowed: this.permissions.Keyboard !== false,
+        displayOnline: this.displays[this.current]?.online === true,
+        latchCtrl: this.latchCtrl,
+        latchAlt: this.latchAlt,
+      });
+      if (!prepared.ok) return false;
+      cmd = prepared.command;
+    }
     const inputChannel: RemoteInputChannel | null = cmd.c === 'mouse'
       ? 'pointer'
-      : cmd.c === 'key' || cmd.c === 'ctrlAltDel'
+      : cmd.c === 'ctrlAltDel'
         ? 'keyboard'
         : cmd.c === 'clipboardText'
           ? 'clipboard'
           : null;
-    const sendsRemoteInput = cmd.c === 'mouse' || cmd.c === 'key' || cmd.c === 'ctrlAltDel';
-    if (sendsRemoteInput && this.displays[this.current]?.online !== true) return;
+    const sendsRemoteInput = cmd.c === 'mouse' || cmd.c === 'ctrlAltDel';
+    if (sendsRemoteInput && this.displays[this.current]?.online !== true) return false;
     if (cmd.c === 'mouse') {
       const now = Date.now();
       if (now - this.lastDbgMouseMs > 1000) {
@@ -1774,14 +1787,16 @@ export class RdApp {
         });
       }
     }
-    if (inputChannel && !remoteInputAllowed(this.viewOnly, inputChannel)) return;
-    if ((this.latchCtrl || this.latchAlt) && (cmd.c === 'mouse' || cmd.c === 'key')) {
+    if (inputChannel && !remoteInputAllowed(this.viewOnly, inputChannel)) return false;
+    if ((this.latchCtrl || this.latchAlt) && cmd.c === 'mouse') {
       const extra: number[] = [];
       if (this.latchCtrl) extra.push(ControlKey.Control);
       if (this.latchAlt) extra.push(ControlKey.Alt);
       cmd = { ...cmd, modifiers: [...new Set([...cmd.modifiers, ...extra])] };
     }
-    this.worker?.postMessage(cmd);
+    if (!this.worker) return false;
+    this.worker.postMessage(cmd);
+    return true;
   }
 
   private currentRect(): DisplayRect {
