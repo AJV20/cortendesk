@@ -37,7 +37,7 @@ import {
   SupportedDecoding_PreferCodec,
 } from '../gen/message';
 import { RESTART_RECONNECT_TIMEOUT_MS, nextRestartReconnectDelay } from '../core/session-controls';
-import { buildSecurityControlMenu } from './session-controls-menu';
+import { buildLockScreenKeyCommand, buildSecurityControlMenu } from './session-controls-menu';
 import {
   overlayVersion,
   QUALITY,
@@ -1061,6 +1061,7 @@ export class RdApp {
         activePrivacyImplKey: this.activePrivacyImplKey,
         blockInputOn: this.blockInputOn,
         lockAfterSessionEnd: this.lockAfterSessionEnd,
+        viewOnly: this.viewOnly,
       });
       const securityHtml = security.length
         ? '<div class="rd-pop-sep"></div><div class="rd-pop-title">Remote controls</div>'
@@ -1284,6 +1285,12 @@ export class RdApp {
       this.blockInputPending = true;
       this.post({ c: 'blockInput', on });
       this.toast(`${on ? 'Blocking' : 'Restoring'} remote keyboard and mouse…`, true);
+      this.closePop();
+      return;
+    }
+    if (id === 'lockScreen') {
+      this.post(buildLockScreenKeyCommand());
+      this.toast('Lock command sent');
       this.closePop();
       return;
     }
