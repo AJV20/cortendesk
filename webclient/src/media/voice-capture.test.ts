@@ -114,6 +114,33 @@ describe('VoiceCaptureController', () => {
     expect(sent[1]).toEqual(new Uint8Array([1, 2, 3]));
   });
 
+  it('rejects microphone inputs that are neither mono nor stereo', async () => {
+    const pending = deferred<{ done: boolean; value?: { sampleRate: number; numberOfChannels: number; close(): void } }>();
+    const track = { stop: vi.fn() };
+    const data = { sampleRate: 48000, numberOfChannels: 3, close: vi.fn() };
+    const createEncoder = vi.fn();
+    const sendFormat = vi.fn();
+    const onError = vi.fn();
+    const capture = new VoiceCaptureController({
+      available: () => true,
+      supportsOpus: async () => true,
+      getUserMedia: async () => ({ getAudioTracks: () => [track] }),
+      createProcessor: () => ({ readable: { getReader: () => ({ read: () => pending.promise, cancel: vi.fn() }) } }),
+      createEncoder,
+    }, { sendFormat, sendFrame: vi.fn(), onError });
+
+    await capture.prepare();
+    capture.start();
+    pending.resolve({ done: false, value: data });
+    await tick();
+
+    expect(createEncoder).not.toHaveBeenCalled();
+    expect(sendFormat).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith('Only mono or stereo microphone input is supported.');
+    expect(data.close).toHaveBeenCalledOnce();
+    expect(track.stop).toHaveBeenCalledOnce();
+  });
+
   it('stops reader, encoder, tracks and blocks late frames on cleanup', async () => {
     const pending = deferred<{ done: boolean; value?: { sampleRate: number; numberOfChannels: number; close(): void } }>();
     const sendFrame = vi.fn();

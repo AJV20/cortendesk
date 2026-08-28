@@ -149,11 +149,16 @@ export class VoiceCaptureController {
       try {
         if (!this.active || epoch !== this.epoch) continue;
         if (!this.encoder) {
+          const channels = data.numberOfChannels;
+          if (channels !== 1 && channels !== 2) {
+            this.fail('Only mono or stereo microphone input is supported.');
+            return;
+          }
           const config = {
             sampleRate: Number.isFinite(data.sampleRate) && data.sampleRate > 0
               ? Math.round(data.sampleRate)
               : PREFERRED_CONFIG.sampleRate,
-            channels: data.numberOfChannels === 2 ? 2 : 1,
+            channels,
           };
           const supported = await this.deps.supportsOpus(config);
           if (!this.active || epoch !== this.epoch) return;
