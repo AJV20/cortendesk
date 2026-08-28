@@ -608,6 +608,39 @@
 .rd-pane-chat {
   padding: 0;
 }
+.rd-voice-call {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-bottom: 1px solid var(--rd-border);
+}
+.rd-voice-call-btn {
+  min-height: 44px;
+  flex: 0 0 auto;
+  padding: 0 14px;
+  border: 1px solid var(--rd-border);
+  border-radius: 8px;
+  background: var(--rd-surface-2);
+  color: var(--rd-fg);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.rd-voice-call-btn:hover:not(:disabled) {
+  border-color: var(--rd-accent);
+  color: var(--rd-accent);
+}
+.rd-voice-call-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+#rd-voice-call-status {
+  min-width: 0;
+  color: var(--rd-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
 .rd-chat-list {
   flex: 1;
   min-height: 0;

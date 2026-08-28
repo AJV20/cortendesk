@@ -85,6 +85,10 @@ export interface SessionLike {
   setClientRecording(recording: boolean): void;
   sendClipboardText(text: string): void;
   sendChat(text: string): void;
+  startVoiceCall(): void;
+  closeVoiceCall(): void;
+  sendVoiceAudioFormat(sampleRate: number, channels: number): void;
+  sendVoiceAudioFrame(data: Uint8Array): void;
   openTerminal(terminalId: number, rows: number, cols: number): void;
   sendTerminalData(terminalId: number, data: Uint8Array): void;
   resizeTerminal(terminalId: number, rows: number, cols: number): void;
@@ -377,6 +381,18 @@ export class WorkerHost {
       case 'chat':
         this.session?.sendChat(cmd.text);
         return;
+      case 'voiceCallStart':
+        this.session?.startVoiceCall();
+        return;
+      case 'voiceCallClose':
+        this.session?.closeVoiceCall();
+        return;
+      case 'voiceAudioFormat':
+        this.session?.sendVoiceAudioFormat(cmd.sampleRate, cmd.channels);
+        return;
+      case 'voiceAudioFrame':
+        this.session?.sendVoiceAudioFrame(cmd.data);
+        return;
       case 'disconnect':
         this.session?.disconnect(); // emits 'closed' + closeAll -> teardown
         this.teardown();
@@ -438,6 +454,7 @@ export class WorkerHost {
       const session = this.deps.createSession(config, {
         sendSignaling: (b) => this.ws1?.send(b),
         sendRelay: (b) => this.ws2?.send(b),
+        relayBuffered: () => this.ws2?.buffered?.() ?? 0,
         emit: (ev) => {
           // Clear the connect watchdog once we reach a settled state or enter
           // explicit manual-accept waiting; that wait is controlled by the

@@ -34,11 +34,11 @@ Built on Laravel + Livewire with precompiled assets: **there is no frontend buil
 
 **Native web client**
 - A from-scratch TypeScript implementation of the RustDesk wire protocol (rendezvous → relay → NaCl handshake → login), running entirely in the browser over WebSocket relays. Not a WASM port — readable, auditable source.
-- Hardware-accelerated video via WebCodecs (VP8/VP9/H.264/H.265/AV1 as supported), audio, clipboard both ways, multi-monitor switching, Ctrl+Alt+Del, session stats.
+- Hardware-accelerated video via WebCodecs (VP8/VP9/H.264/H.265/AV1 as supported), remote-system audio, two-way voice calls, clipboard both ways, text chat, multi-monitor switching, Ctrl+Alt+Del, and session stats.
 - **File transfer** — an in-session dual-pane manager: browse the remote filesystem, send/receive files and folders with progress, resume-aware digests, conflict prompts, and drag-and-drop. Uses the File System Access API on Chromium; falls back to picker/Downloads elsewhere.
 - Saved passwords (hashed, never plaintext) with auto-login per device.
-- Best experienced in Chrome/Edge; the desktop stream requires WebCodecs.
-- **HTTPS recommended, not required.** This is about video quality, not whether it works: over HTTPS the client uses WebCodecs for hardware-accelerated VP8/VP9/H.264/H.265/AV1, and over plain `http://` it falls back to H.264 through Media Source Extensions, which is not restricted to secure contexts. The fallback is automatic and needs no configuration; it is limited to H.264 and reports no per-frame statistics. `http://localhost` counts as secure. Signalling follows `APP_URL` either way — set it to the address browsers actually use, or override `CORTENDESK_WS_ID_URL` / `CORTENDESK_WS_RELAY_URL` when your WebSocket endpoints live somewhere else.
+- Best experienced in Chrome/Edge; the desktop stream requires WebCodecs, and voice calling additionally requires a secure origin plus microphone permission.
+- **HTTPS strongly recommended.** Desktop video still works over plain `http://` by falling back to H.264 through Media Source Extensions, which is not restricted to secure contexts. That fallback is automatic, needs no configuration, is limited to H.264, and reports no per-frame statistics. Voice calling is different: browser microphone and WebCodecs APIs require HTTPS (or `http://localhost`, which browsers treat as secure). Signalling follows `APP_URL` either way — set it to the address browsers actually use, or override `CORTENDESK_WS_ID_URL` / `CORTENDESK_WS_RELAY_URL` when your WebSocket endpoints live somewhere else.
 
 ## Requirements
 
