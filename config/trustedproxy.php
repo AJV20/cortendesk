@@ -13,17 +13,16 @@ return [
     | a TRUSTED_PROXIES set in .env was quietly ignored. Config files are
     | evaluated while the cache is BUILT, so the value survives.
     |
-    | Deliberately not '*': headers are honoured only when the immediate peer is
-    | a private or loopback address (Docker bridges, same-box nginx). A client
-    | hitting an exposed port directly from a public address therefore cannot
-    | forge X-Forwarded-For into the audit logs. Set TRUSTED_PROXIES (comma
-    | separated CIDRs, or '*') when your proxy reaches the app from a public
-    | address — Cloudflare or an external load balancer.
+    | Deliberately not '*': only loopback proxies are trusted by default. A
+    | reverse proxy on another address must be listed explicitly. This prevents
+    | a client reaching an exposed app port from forging X-Forwarded-Proto to
+    | make plaintext HTTP look secure. Set TRUSTED_PROXIES to the exact proxy
+    | address or narrow CIDR; never use a broad network merely for convenience.
     */
 
     'proxies' => array_values(array_filter(array_map('trim', explode(',', (string) env(
         'TRUSTED_PROXIES',
-        '127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16',
+        '127.0.0.1,::1',
     ))))),
 
 ];

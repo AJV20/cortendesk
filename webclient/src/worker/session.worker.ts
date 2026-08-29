@@ -33,6 +33,7 @@ import { VideoPipeline, mseH264Available, probeSupportedDecoding, type EncodedCa
 import { ForwardingVideoPipeline } from '../media/mse-video';
 import { cursorToDataUrl, decodeClipboardText, initZstd, zstdDecode } from '../input/clipboard-cursor';
 import { decodeTerminalOutput } from './terminal-output';
+import { OsAutoLoginAttempt } from './os-auto-login';
 
 // Decoded audio is outside the frozen SessionEvent union: the main thread
 // feeds it to an AudioWorklet ring buffer and ignores unknown `t` otherwise.
@@ -58,6 +59,7 @@ export interface SessionLike {
   relayOpened(): void;
   setSupportedDecoding(sd: SupportedDecoding): void;
   sendMouse(mask: number, x: number, y: number, modifiers: number[]): void;
+  sendOsPassword(password: string): boolean;
   sendKey(
     down: boolean,
     press: boolean,
@@ -136,6 +138,7 @@ function errMsg(e: unknown): string {
 }
 
 const CONNECT_TIMEOUT_MS = 25000;
+const OS_AUTO_LOGIN_PERMISSION_TIMEOUT_MS = 5000;
 const CONNECT_STAGE: Partial<Record<string, string>> = {
   connecting: 'connecting',
   rendezvous: 'contacting the server',
@@ -156,6 +159,13 @@ export class WorkerHost {
   private connectStarted = false;
   private tornDown = false;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
+  private osAutoLogin: OsAutoLoginAttempt | null = null;
+  private osAutoLoginPassword = '';
+  private keyboardPermission: boolean | undefined;
+  private streaming = false;
+  private viewOnly = false;
+  private osAutoLoginPermissionTimer: ReturnType<typeof setTimeout> | null = null;
+  private activeConfig: SessionConfig | null = null;
 
   constructor(deps: WorkerDeps) {
     this.deps = {
@@ -344,6 +354,10 @@ export class WorkerHost {
       case 'lockAfterSessionEnd':
         this.session?.setLockAfterSessionEnd(cmd.on);
         return;
+      case 'viewOnly':
+        this.viewOnly = cmd.enabled;
+        if (cmd.enabled) this.cancelOsAutoLogin();
+        return;
       case 'displayResolution':
         this.session?.changeDisplayResolution(cmd.display, cmd.width, cmd.height);
         return;
@@ -394,6 +408,13 @@ export class WorkerHost {
       return;
     }
     this.connectStarted = true;
+    this.activeConfig = config;
+    this.keyboardPermission = undefined;
+    this.streaming = false;
+    this.viewOnly = false;
+    const defaultDesktop = !config.connType || config.connType === 'default';
+    this.osAutoLoginPassword = defaultDesktop ? (config.osPassword ?? '') : '';
+    if (!defaultDesktop) config.osPassword = undefined;
     try {
       this.deps.post({ t: 'state', state: 'connecting' });
       await this.deps.ready();
@@ -439,6 +460,20 @@ export class WorkerHost {
         sendSignaling: (b) => this.ws1?.send(b),
         sendRelay: (b) => this.ws2?.send(b),
         emit: (ev) => {
+          if (ev.t === 'permission' && ev.kind === 'Keyboard') {
+            this.keyboardPermission = ev.enabled;
+            if (ev.enabled) this.maybeBeginOsAutoLogin(config);
+            else this.cancelOsAutoLogin();
+          }
+          if (ev.t === 'state' && ev.state === 'streaming') {
+            this.streaming = true;
+            this.maybeBeginOsAutoLogin(config);
+          } else if (
+            ev.t === 'loginError'
+            || (ev.t === 'state' && (ev.state === 'error' || ev.state === 'closed'))
+          ) {
+            this.cancelOsAutoLogin();
+          }
           // Clear the connect watchdog once we reach a settled state or enter
           // explicit manual-accept waiting; that wait is controlled by the
           // remote user and must not be cut off by the transport watchdog.
@@ -506,6 +541,17 @@ export class WorkerHost {
           }),
       });
       this.session = session;
+      if (this.osAutoLoginPassword) {
+        this.osAutoLogin = new OsAutoLoginAttempt({
+          eligible: () =>
+            !this.tornDown
+            && !this.viewOnly
+            && this.keyboardPermission === true
+            && session.currentState === 'streaming',
+          sendMouse: (mask, x, y) => session.sendMouse(mask, x, y, []),
+          sendPassword: (password) => session.sendOsPassword(password),
+        });
+      }
       if (this.probe) session.setSupportedDecoding(this.probe);
 
       ws1.onMessage((b) => session.onSignalingBytes(b));
@@ -713,9 +759,62 @@ export class WorkerHost {
     }
   }
 
+  private maybeBeginOsAutoLogin(config: SessionConfig): void {
+    if (this.viewOnly) {
+      this.cancelOsAutoLogin();
+      return;
+    }
+    if (!this.osAutoLoginPassword || !this.osAutoLogin || !this.streaming) return;
+    if (this.keyboardPermission === false) {
+      this.cancelOsAutoLogin();
+      return;
+    }
+    if (this.keyboardPermission === true) {
+      this.beginOsAutoLogin(config);
+      return;
+    }
+    if (this.osAutoLoginPermissionTimer === null) {
+      this.osAutoLoginPermissionTimer = setTimeout(() => {
+        this.osAutoLoginPermissionTimer = null;
+        this.cancelOsAutoLogin();
+      }, OS_AUTO_LOGIN_PERMISSION_TIMEOUT_MS);
+    }
+  }
+
+  private clearOsAutoLoginPermissionTimer(): void {
+    if (this.osAutoLoginPermissionTimer !== null) {
+      clearTimeout(this.osAutoLoginPermissionTimer);
+      this.osAutoLoginPermissionTimer = null;
+    }
+  }
+
+  private beginOsAutoLogin(config: SessionConfig): void {
+    this.clearOsAutoLoginPermissionTimer();
+    const password = this.osAutoLoginPassword;
+    this.osAutoLoginPassword = '';
+    config.osPassword = undefined;
+    if (!password || !this.osAutoLogin || this.viewOnly || this.keyboardPermission !== true) {
+      this.osAutoLogin?.cancel();
+      return;
+    }
+    void this.osAutoLogin.start(password).catch(() => {
+      this.cancelOsAutoLogin();
+    });
+  }
+
+  private cancelOsAutoLogin(): void {
+    this.clearOsAutoLoginPermissionTimer();
+    this.osAutoLogin?.cancel();
+    this.osAutoLogin = null;
+    this.osAutoLoginPassword = '';
+    if (this.activeConfig) this.activeConfig.osPassword = undefined;
+  }
+
   private teardown(): void {
     if (this.tornDown) return;
     this.tornDown = true;
+    this.cancelOsAutoLogin();
+    this.activeConfig = null;
     this.clearConnectTimer();
     // The host's cursor cache is per-connection and starts empty, so it will
     // resend every bitmap on the next one. Keeping ours would risk answering a

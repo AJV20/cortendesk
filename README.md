@@ -36,7 +36,8 @@ Built on Laravel + Livewire with precompiled assets: **there is no frontend buil
 - A from-scratch TypeScript implementation of the RustDesk wire protocol (rendezvous → relay → NaCl handshake → login), running entirely in the browser over WebSocket relays. Not a WASM port — readable, auditable source.
 - Hardware-accelerated video via WebCodecs (VP8/VP9/H.264/H.265/AV1 as supported), audio, clipboard both ways, multi-monitor switching, Ctrl+Alt+Del, session stats.
 - **File transfer** — an in-session dual-pane manager: browse the remote filesystem, send/receive files and folders with progress, resume-aware digests, conflict prompts, and drag-and-drop. Uses the File System Access API on Chromium; falls back to picker/Downloads elsewhere.
-- Saved passwords (hashed, never plaintext) with auto-login per device.
+- Saved RustDesk connection passwords (challenge hashes, never plaintext) with automatic connection per device.
+- **Remote OS auto-login** — opt in per user and peer from the connect screen. The separate OS password is encrypted at rest by Laravel, retrieved only by the authenticated browser with no-store responses, kept out of browser storage, and sent transiently through RustDesk's native login sequence. Enabling it also forces **Lock after session**, requires Keyboard permission on a default desktop session, and is available only over HTTPS or a browser-trusted loopback context.
 - Best experienced in Chrome/Edge; the desktop stream requires WebCodecs.
 - **HTTPS recommended, not required.** This is about video quality, not whether it works: over HTTPS the client uses WebCodecs for hardware-accelerated VP8/VP9/H.264/H.265/AV1, and over plain `http://` it falls back to H.264 through Media Source Extensions, which is not restricted to secure contexts. The fallback is automatic and needs no configuration; it is limited to H.264 and reports no per-frame statistics. `http://localhost` counts as secure. Signalling follows `APP_URL` either way — set it to the address browsers actually use, or override `CORTENDESK_WS_ID_URL` / `CORTENDESK_WS_RELAY_URL` when your WebSocket endpoints live somewhere else.
 
@@ -147,19 +148,18 @@ Add the Laravel scheduler to cron (log retention and other maintenance run throu
 
 ### Behind a reverse proxy (TLS termination)
 
-CortenDesk honors `X-Forwarded-*` headers, so it works out of the box behind a
-TLS-terminating proxy (Traefik, Caddy, nginx-proxy-manager, Cloudflare, …) that
-forwards to the container/app over plain HTTP. Make sure your proxy passes
-`X-Forwarded-Proto` (all of the above do by default), set `APP_URL` to your
-public https URL, and set `SESSION_SECURE_COOKIE=true` so the session cookie
-carries the Secure flag. No mixed-content issues — assets are generated with
-the correct scheme from the forwarded headers.
+CortenDesk honors `X-Forwarded-*` headers only from configured trusted proxies.
+For a TLS terminator (Traefik, Caddy, nginx-proxy-manager, Cloudflare, …), set
+`APP_URL` to the public HTTPS URL and set `TRUSTED_PROXIES` to the terminator's
+exact address or narrow CIDR. The proxy must send `X-Forwarded-Proto: https`.
+`SESSION_SECURE_COOKIE` defaults to true when `APP_URL` is HTTPS; it can also be
+set explicitly.
 
-Forwarded headers are trusted only from private/loopback addresses (Docker
-networks, a same-host proxy) so that clients reaching the app directly cannot
-forge their IP in the audit logs. If your proxy connects from a public
-address, list it explicitly: `TRUSTED_PROXIES=203.0.113.7` (comma-separated,
-CIDRs allowed).
+Only loopback addresses are trusted by default. Do not use `*` or broad private
+CIDRs when port 8080 is exposed: a client on a trusted range could otherwise
+forge forwarded headers and make plaintext HTTP appear secure. A same-host
+proxy that reaches the app over loopback needs no override; a proxy on a Docker
+bridge or another host must be listed explicitly.
 
 Getting this wrong is worth more than a wrong column in a log: every request
 then appears to come from the proxy, so devices all record the same
