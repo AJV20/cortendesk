@@ -51,10 +51,13 @@ export const CLIENT_VERSION = '1.4.0';
 // Free-run (ack OFF) is smoother but needs decode-queue backpressure to avoid
 // wedging the renderer on a high-bitrate stream; until that's in, keep this ON.
 export const VIDEO_ACK_REQUIRED = true;
+// Drop real-time voice frames before the relay queue can grow without bound.
+export const VOICE_RELAY_BUFFER_LIMIT = 128 * 1024;
 
 export interface SessionSinks {
   sendSignaling(bytes: Uint8Array): void;
   sendRelay(bytes: Uint8Array): void;
+  relayBuffered(): number;
   emit(ev: SessionEvent): void;
   onVideo(frame: VideoFrame): void;
   onAudioFormat(sampleRate: number, channels: number): void;
@@ -118,6 +121,9 @@ export class Session {
   private uuid = '';
   private decoding: SupportedDecoding = baselineDecoding();
   private loginSent = false;
+  /** Only an exact response to this controller-generated timestamp can start capture. */
+  private pendingVoiceCallTimestamp: bigint | null = null;
+  private voiceCallAccepted = false;
 
   constructor(config: SessionConfig, sinks: SessionSinks) {
     this.config = config;
@@ -407,8 +413,37 @@ export class Session {
           link: u.message_box.link,
         });
         return;
+      case 'voice_call_request': {
+        // RustDesk's controlling side does not accept incoming connect calls.
+        // A remote hang-up is the sole inbound voice request we act upon.
+        const hadCall = this.pendingVoiceCallTimestamp !== null || this.voiceCallAccepted;
+        if (!u.voice_call_request.is_connect && hadCall) {
+          this.pendingVoiceCallTimestamp = null;
+          this.voiceCallAccepted = false;
+          this.sinks.emit({ t: 'voiceCall', state: 'closed', detail: 'Remote user ended the call' });
+        }
+        return;
+      }
+      case 'voice_call_response': {
+        // Match RustDesk's replay/attack boundary: consume the outstanding
+        // request on the first response, even when its timestamp is wrong.
+        const pending = this.pendingVoiceCallTimestamp;
+        this.pendingVoiceCallTimestamp = null;
+        if (pending === null) return;
+        if (u.voice_call_response.req_timestamp !== pending) {
+          this.sinks.emit({
+            t: 'voiceCall',
+            state: 'closed',
+            detail: 'Voice call response could not be verified',
+          });
+          return;
+        }
+        this.voiceCallAccepted = u.voice_call_response.accepted;
+        this.sinks.emit({ t: 'voiceCall', state: u.voice_call_response.accepted ? 'accepted' : 'rejected' });
+        return;
+      }
       default:
-        return; // TODO: file_*, voice_call, switch_sides — out of scope for core
+        return; // TODO: file_*, switch_sides — out of scope for core
     }
   }
 
@@ -773,6 +808,40 @@ export class Session {
     this.sendMisc({ $case: 'chat_message', chat_message: ChatMessage.fromPartial({ text }) });
   }
 
+  startVoiceCall(): void {
+    if (this.pendingVoiceCallTimestamp !== null) return;
+    // Milliseconds since epoch is a positive signed 64-bit value through 2262.
+    const reqTimestamp = BigInt(Math.max(1, Date.now()));
+    this.pendingVoiceCallTimestamp = reqTimestamp;
+    this.sendMessage({
+      $case: 'voice_call_request',
+      voice_call_request: { is_connect: true, req_timestamp: reqTimestamp },
+    });
+    this.sinks.emit({ t: 'voiceCall', state: 'waiting' });
+  }
+
+  closeVoiceCall(): void {
+    this.pendingVoiceCallTimestamp = null;
+    this.voiceCallAccepted = false;
+    const reqTimestamp = BigInt(Math.max(1, Date.now()));
+    this.sendMessage({
+      $case: 'voice_call_request',
+      voice_call_request: { is_connect: false, req_timestamp: reqTimestamp },
+    });
+    this.sinks.emit({ t: 'voiceCall', state: 'closed' });
+  }
+
+  sendVoiceAudioFormat(sampleRate: number, channels: number): void {
+    if (!this.voiceCallAccepted) return;
+    this.sendMisc({ $case: 'audio_format', audio_format: { sample_rate: sampleRate, channels } });
+  }
+
+  sendVoiceAudioFrame(data: Uint8Array): void {
+    if (!this.voiceCallAccepted) return;
+    if (this.sinks.relayBuffered() >= VOICE_RELAY_BUFFER_LIMIT) return;
+    this.sendMessage({ $case: 'audio_frame', audio_frame: { data } });
+  }
+
   openTerminal(terminalId: number, rows: number, cols: number): void {
     this.sendMessage({
       $case: 'terminal_action',
@@ -837,6 +906,10 @@ export class Session {
 
   private setState(state: SessionState, detail?: string, peerInitiated = false): void {
     this.state = state;
+    if (state === 'closed' || state === 'error') {
+      this.pendingVoiceCallTimestamp = null;
+      this.voiceCallAccepted = false;
+    }
     const event: SessionEvent = detail === undefined ? { t: 'state', state } : { t: 'state', state, detail };
     if (peerInitiated && event.t === 'state') event.peerInitiated = true;
     this.sinks.emit(event);

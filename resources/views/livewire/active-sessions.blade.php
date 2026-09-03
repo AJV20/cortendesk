@@ -62,7 +62,7 @@
                                     @switch((int) $s->conn_type)
                                         @case(1)<span class="badge bg-primary-subtle text-primary">File</span>@break
                                         @case(2)<span class="badge bg-warning-subtle text-warning">Port Fwd</span>@break
-                                        @default<span class="badge bg-info-subtle text-info">Remote</span>
+                                        @default<span class="badge bg-info-subtle text-info">{{ \App\Models\AuditConnection::typeLabel((int) $s->conn_type) }}</span>
                                     @endswitch
                                 </td>
                                 <td>
@@ -109,7 +109,7 @@
                                 @switch((int) $s->conn_type)
                                     @case(1)<span class="badge bg-primary-subtle text-primary">File</span>@break
                                     @case(2)<span class="badge bg-warning-subtle text-warning">Port Fwd</span>@break
-                                    @default<span class="badge bg-info-subtle text-info">Remote</span>
+                                    @default<span class="badge bg-info-subtle text-info">{{ \App\Models\AuditConnection::typeLabel((int) $s->conn_type) }}</span>
                                 @endswitch
                             </div>
                             @if ($canDisconnect)

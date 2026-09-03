@@ -88,7 +88,7 @@ class DashboardController extends Controller
         return [
             'labels' => $labels,
             'series' => [
-                ['name' => 'Remote Control', 'data' => $remote],
+                ['name' => AuditConnection::TYPE_LABELS[0], 'data' => $remote],
                 ['name' => 'File Transfer', 'data' => $file],
                 ['name' => 'Other', 'data' => $other],
             ],

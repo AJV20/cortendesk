@@ -1,3 +1,6 @@
+import type { UiCommand } from '../core/contracts';
+import { ControlKey } from '../gen/message';
+
 export type PrivacyModeMenuImpl = { key: string; label: string };
 export type SecurityControlMenuItem = { id: string; label: string; checked: boolean };
 
@@ -10,12 +13,19 @@ export type SecurityControlMenuInput = {
   activePrivacyImplKey?: string;
   blockInputOn: boolean;
   lockAfterSessionEnd: boolean;
+  viewOnly?: boolean;
 };
+
+export function buildLockScreenKeyCommand(): Extract<UiCommand, { c: 'key' }> {
+  return { c: 'key', down: false, press: true, keyKind: 'control', value: ControlKey.LockScreen, modifiers: [] };
+}
 
 export function buildSecurityControlMenu(input: SecurityControlMenuInput): SecurityControlMenuItem[] {
   const platform = input.platform.toLowerCase();
   const desktop = platform.includes('windows') || platform.includes('linux') || platform.includes('mac');
-  if (!desktop) return [];
+  const canLockScreen = !input.viewOnly && input.permissions.Keyboard !== false;
+  const lockScreenItem = { id: 'lockScreen', label: 'Lock remote screen', checked: false };
+  if (!desktop) return canLockScreen ? [lockScreenItem] : [];
 
   const items: SecurityControlMenuItem[] = [];
   if (input.permissions.Restart !== false) {
@@ -46,6 +56,9 @@ export function buildSecurityControlMenu(input: SecurityControlMenuInput): Secur
       label: 'Block remote keyboard and mouse',
       checked: input.blockInputOn,
     });
+  }
+  if (canLockScreen) {
+    items.push(lockScreenItem);
   }
   if (input.permissions.Keyboard !== false) {
     items.push({

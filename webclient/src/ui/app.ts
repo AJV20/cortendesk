@@ -37,7 +37,7 @@ import {
   SupportedDecoding_PreferCodec,
 } from '../gen/message';
 import { RESTART_RECONNECT_TIMEOUT_MS, nextRestartReconnectDelay } from '../core/session-controls';
-import { buildSecurityControlMenu } from './session-controls-menu';
+import { buildLockScreenKeyCommand, buildSecurityControlMenu } from './session-controls-menu';
 import {
   overlayVersion,
   QUALITY,
@@ -80,6 +80,9 @@ import {
 } from './display-controls';
 import { RemoteAudioPlayback, type RemoteAudioContext } from '../media/remote-audio';
 import { LocalSessionRecorder, type RecordingSurface } from '../media/session-recorder';
+import { VoiceCaptureController, browserVoiceCaptureDeps } from '../media/voice-capture';
+import { voiceCallUiModel } from './voice-call-ui';
+import { VoiceCallAttemptOwner } from './voice-call-attempt';
 import { remoteInputAllowed, type RemoteInputChannel } from './view-only-policy';
 
 // Back-compat: everything that used to live here is re-exported for tests and
@@ -123,6 +126,8 @@ type Els = {
   btnViewOnly: HTMLButtonElement;
   chatList: HTMLElement;
   chatInput: HTMLInputElement;
+  voiceCallButton: HTMLButtonElement;
+  voiceCallStatus: HTMLElement;
   statCodec: HTMLElement;
   statRes: HTMLElement;
   statFps: HTMLElement;
@@ -245,6 +250,11 @@ export class RdApp {
   private sideTab: SideTab = 'files';
   private chatLog: ChatEntry[] = [];
   private chatUnread = 0;
+  private voiceCall: VoiceCaptureController | undefined;
+  private voiceCallState: 'idle'|'preparing'|'waiting'|'connected' = 'idle';
+  private readonly voiceCallAttempts = new VoiceCallAttemptOwner();
+  /** Secure context + getUserMedia + WebCodecs AudioEncoder; decided once per page. */
+  private voiceCallSupported: boolean | undefined;
   private peerWho = ''; // user@host once peerInfo arrives
   private peerPlatform = '';
   private pop: HTMLElement | undefined; // the one open popover
@@ -312,6 +322,7 @@ export class RdApp {
     }, 1000);
 
     window.addEventListener('beforeunload', () => {
+      this.endVoiceCall(true);
       this.releaseRemoteSecurityState();
       this.post({ c: 'disconnect' });
     });
@@ -555,6 +566,7 @@ export class RdApp {
     q<HTMLButtonElement>(t, '#rd-btn-disconnect').addEventListener('click', () => {
       this.setLoggedOutFlag(true); // an explicit logout must not auto-login on reload
       this.clearRestartFlow();
+      this.endVoiceCall(true);
       this.releaseRemoteSecurityState();
       this.destroyAdvancedPanels();
       this.post({ c: 'disconnect' });
@@ -675,6 +687,10 @@ export class RdApp {
       <div class="rd-side-body">
         <section class="rd-pane" data-pane="files" hidden></section>
         <section class="rd-pane rd-pane-chat" data-pane="chat" hidden>
+          <div class="rd-voice-call">
+            <button type="button" class="rd-voice-call-btn" id="rd-voice-call" aria-describedby="rd-voice-call-status">Voice call</button>
+            <span id="rd-voice-call-status" role="status" aria-live="polite">Voice calls are off</span>
+          </div>
           <div class="rd-chat-list" id="rd-chat-list"></div>
           <form class="rd-chat-compose" id="rd-chat-form">
             <input type="text" id="rd-chat-input" autocomplete="off" placeholder="Message the remote user…" maxlength="2000">
@@ -704,6 +720,9 @@ export class RdApp {
     const s = this.el.side;
     this.el.chatList = q(s, '#rd-chat-list');
     this.el.chatInput = q(s, '#rd-chat-input');
+    this.el.voiceCallButton = q(s, '#rd-voice-call');
+    this.el.voiceCallStatus = q(s, '#rd-voice-call-status');
+    this.renderVoiceCall();
     this.el.statDevice = q(s, '#rd-stat-device');
     this.el.statUser = q(s, '#rd-stat-user');
     this.el.statPlatform = q(s, '#rd-stat-platform');
@@ -726,6 +745,7 @@ export class RdApp {
       e.preventDefault();
       this.sendChatFromInput();
     });
+    this.el.voiceCallButton.addEventListener('click', () => { void this.toggleVoiceCall(); });
   }
 
   private get sideOpen(): boolean {
@@ -848,6 +868,103 @@ export class RdApp {
     this.chatLog.push({ who: 'me', text, at: Date.now() });
     this.el.chatInput.value = '';
     this.renderChatList();
+  }
+
+  /** Called directly by the Voice call button so getUserMedia retains its user gesture. */
+  private async toggleVoiceCall(): Promise<void> {
+    if (this.voiceCallState === 'preparing') return;
+    if (this.voiceCallState === 'waiting' || this.voiceCallState === 'connected') {
+      this.endVoiceCall(true);
+      return;
+    }
+    if (this.state !== 'streaming') {
+      this.toast('Voice calls require a connected session');
+      return;
+    }
+    if (this.permissions.Audio === false) {
+      this.toast('This device does not permit audio calls');
+      return;
+    }
+    if (!this.remoteAudioEnabled) {
+      // The peer drops call audio and never opens its mic while we have
+      // remote audio off, so the call would connect and stay silent.
+      this.toast('Turn on "Receive remote audio" before starting a voice call');
+      return;
+    }
+    // Same click that grants the mic also unlocks playback of the peer's voice.
+    void this.resumeAudioFromUserGesture();
+    if (!this.voiceCall) {
+      this.voiceCall = new VoiceCaptureController(browserVoiceCaptureDeps(), {
+        sendFormat: (sampleRate, channels) => this.post({ c: 'voiceAudioFormat', sampleRate, channels }),
+        sendFrame: (data) => this.post({ c: 'voiceAudioFrame', data }),
+        onError: (message) => {
+          this.toast(message);
+          this.endVoiceCall(true);
+        },
+      });
+    }
+    // Calling getUserMedia here, before any protocol packet, preserves the direct-click permission gesture.
+    const sessionEpoch = this.sessionEpoch;
+    const attempt = this.voiceCallAttempts.begin();
+    const voiceCall = this.voiceCall;
+    this.voiceCallState = 'preparing';
+    this.renderVoiceCall();
+    const outcome = await this.voiceCallAttempts.wait(attempt, () => voiceCall.prepare());
+    if (!outcome.owned) return;
+    const prepared = outcome.value;
+    if (sessionEpoch !== this.sessionEpoch || this.voiceCallState !== 'preparing') return;
+    if (!prepared.ok) {
+      this.voiceCallState = 'idle';
+      this.renderVoiceCall();
+      this.toast(prepared.message ?? 'Microphone is unavailable');
+      return;
+    }
+    const currentPermissions = this.permissions as Record<string, boolean | undefined>;
+    if (this.state !== 'streaming' || currentPermissions.Audio === false) {
+      this.endVoiceCall(false);
+      return;
+    }
+    this.voiceCallState = 'waiting';
+    this.renderVoiceCall();
+    this.post({ c: 'voiceCallStart' });
+  }
+
+  private onVoiceCall(state: 'waiting'|'accepted'|'rejected'|'closed', detail?: string): void {
+    if (state === 'accepted') {
+      if (!this.voiceCall?.start()) {
+        this.endVoiceCall(true);
+        return;
+      }
+      this.voiceCallState = 'connected';
+    } else if (state === 'waiting') {
+      this.voiceCallState = 'waiting';
+    } else {
+      this.voiceCallAttempts?.invalidate();
+      this.voiceCall?.stop();
+      this.voiceCallState = 'idle';
+      if (state === 'rejected') this.toast('Voice call was declined');
+      else if (detail) this.toast(detail);
+    }
+    this.renderVoiceCall();
+  }
+
+  private endVoiceCall(sendClose: boolean): void {
+    const hadProtocolCall = this.voiceCallState === 'waiting' || this.voiceCallState === 'connected';
+    this.voiceCallAttempts?.invalidate();
+    this.voiceCall?.stop();
+    this.voiceCallState = 'idle';
+    this.renderVoiceCall();
+    if (sendClose && hadProtocolCall) this.post({ c: 'voiceCallClose' });
+  }
+
+  private renderVoiceCall(): void {
+    if (!this.el?.voiceCallButton) return;
+    this.voiceCallSupported ??= browserVoiceCaptureDeps().available();
+    const model = voiceCallUiModel(this.state, this.permissions.Audio !== false, this.voiceCallState, this.voiceCallSupported);
+    this.el.voiceCallButton.disabled = model.disabled;
+    this.el.voiceCallButton.textContent = model.label;
+    this.el.voiceCallButton.setAttribute('aria-label', model.ariaLabel);
+    this.el.voiceCallStatus.textContent = model.status;
   }
 
   private onChat(text: string): void {
@@ -1061,6 +1178,7 @@ export class RdApp {
         activePrivacyImplKey: this.activePrivacyImplKey,
         blockInputOn: this.blockInputOn,
         lockAfterSessionEnd: this.lockAfterSessionEnd,
+        viewOnly: this.viewOnly,
       });
       const securityHtml = security.length
         ? '<div class="rd-pop-sep"></div><div class="rd-pop-title">Remote controls</div>'
@@ -1284,6 +1402,12 @@ export class RdApp {
       this.blockInputPending = true;
       this.post({ c: 'blockInput', on });
       this.toast(`${on ? 'Blocking' : 'Restoring'} remote keyboard and mouse…`, true);
+      this.closePop();
+      return;
+    }
+    if (id === 'lockScreen') {
+      const sent = this.post(buildLockScreenKeyCommand());
+      this.toast(sent ? 'Lock command sent' : 'Lock command not sent');
       this.closePop();
       return;
     }
@@ -1693,6 +1817,7 @@ export class RdApp {
 
   private teardown(immediateWorkerTermination = false): void {
     this.sessionEpoch += 1;
+    this.endVoiceCall(false);
     this.releaseRemoteSecurityState();
     if (this.recording && this.permissions.Recording !== false) {
       this.post({ c: 'clientRecording', recording: false });
@@ -1740,7 +1865,11 @@ export class RdApp {
   /** Throttle for the per-event input log, which would otherwise flood. */
   private lastDbgMouseMs = 0;
 
-  private post(cmd: UiCommand): void {
+  /** Returns true when the command reached the worker. */
+  private post(cmd: UiCommand): boolean {
+    // Lock screen is a one-shot control key: the peer handles it whether or
+    // not a display is online, and latched Ctrl/Alt must not ride along.
+    const lockScreen = cmd.c === 'key' && cmd.keyKind === 'control' && cmd.value === ControlKey.LockScreen;
     const inputChannel: RemoteInputChannel | null = cmd.c === 'mouse'
       ? 'pointer'
       : cmd.c === 'key' || cmd.c === 'ctrlAltDel'
@@ -1749,7 +1878,7 @@ export class RdApp {
           ? 'clipboard'
           : null;
     const sendsRemoteInput = cmd.c === 'mouse' || cmd.c === 'key' || cmd.c === 'ctrlAltDel';
-    if (sendsRemoteInput && this.displays[this.current]?.online !== true) return;
+    if (sendsRemoteInput && !lockScreen && this.displays[this.current]?.online !== true) return false;
     if (cmd.c === 'mouse') {
       const now = Date.now();
       if (now - this.lastDbgMouseMs > 1000) {
@@ -1767,14 +1896,16 @@ export class RdApp {
         });
       }
     }
-    if (inputChannel && !remoteInputAllowed(this.viewOnly, inputChannel)) return;
-    if ((this.latchCtrl || this.latchAlt) && (cmd.c === 'mouse' || cmd.c === 'key')) {
+    if (inputChannel && !remoteInputAllowed(this.viewOnly, inputChannel)) return false;
+    if ((this.latchCtrl || this.latchAlt) && !lockScreen && (cmd.c === 'mouse' || cmd.c === 'key')) {
       const extra: number[] = [];
       if (this.latchCtrl) extra.push(ControlKey.Control);
       if (this.latchAlt) extra.push(ControlKey.Alt);
       cmd = { ...cmd, modifiers: [...new Set([...cmd.modifiers, ...extra])] };
     }
-    this.worker?.postMessage(cmd);
+    if (!this.worker) return false;
+    this.worker.postMessage(cmd);
+    return true;
   }
 
   private currentRect(): DisplayRect {
@@ -1877,11 +2008,10 @@ export class RdApp {
       case 'clipboard': {
         if (!this.clipboardEnabled || this.permissions.Clipboard === false) break;
         const sessionEpoch = this.sessionEpoch;
+        // A successful sync is silent, like the native client; only the
+        // fallback needs the user's attention.
         void navigator.clipboard
           ?.writeText(ev.text)
-          .then(() => {
-            if (sessionEpoch === this.sessionEpoch) this.toast('Remote clipboard received');
-          })
           .catch(() => {
             if (sessionEpoch === this.sessionEpoch) {
               this.toast('Remote clipboard received (press Ctrl+V on this page to sync)');
@@ -1891,6 +2021,9 @@ export class RdApp {
       }
       case 'chat':
         this.onChat(ev.text);
+        break;
+      case 'voiceCall':
+        this.onVoiceCall(ev.state, ev.detail);
         break;
       case 'h264':
         this.pushMseFrame(ev.data, ev.key);
@@ -1971,6 +2104,7 @@ export class RdApp {
 
   private setState(state: SessionState, detail?: string): void {
     this.state = state;
+    this.renderVoiceCall();
     this.el.root.dataset.state = state;
     this.refreshPeerSub();
     switch (state) {
@@ -2209,7 +2343,13 @@ export class RdApp {
       else this.setState('error', 'Automatic reconnect stopped because restart permission was denied');
     }
 
-    if (kind === 'Audio' && !enabled) this.audioPlayback?.reset();
+    if (kind === 'Audio') {
+      if (!enabled) {
+        this.audioPlayback?.reset();
+        if (this.voiceCallState !== 'idle') this.endVoiceCall(true);
+      }
+      this.renderVoiceCall();
+    }
     if (kind === 'Clipboard' && !enabled) this.removeClipboardSyncOffer();
     if (kind === 'Recording' && !enabled && this.recording) this.recorder?.stop();
 

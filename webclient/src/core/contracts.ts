@@ -34,6 +34,7 @@ export type SessionEvent =                       // worker -> main
   | { t:'blockInput'; state:number; details:string }
   | { t:'elevation'; state:'pending'|'succeeded'|'failed'; detail:string }
   | { t:'chat'; text:string }             // inbound message from the remote peer
+  | { t:'voiceCall'; state:'waiting'|'accepted'|'rejected'|'closed'; detail?:string }
   // Fallback video: raw H.264 Annex B forwarded for main-thread MSE playback.
   // Only emitted when WebCodecs is unavailable (insecure origin).
   | { t:'h264'; data:Uint8Array; key:boolean }
@@ -73,6 +74,8 @@ export type UiCommand =                           // main -> worker
   | { c:'clipboardEnabled'; enabled:boolean }
   | { c:'clientRecording'; recording:boolean }
   | { c:'chat'; text:string }             // outbound message to the remote peer
+  | { c:'voiceCallStart' } | { c:'voiceCallClose' }
+  | { c:'voiceAudioFormat'; sampleRate:number; channels:number } | { c:'voiceAudioFrame'; data:Uint8Array }
   // terminal connections only (no canvas):
   | { c:'connectTerminal'; config:SessionConfig }
   | { c:'terminalOpen'; terminalId:number; rows:number; cols:number }

@@ -17,11 +17,7 @@ class ConnectionLog extends Component
 
     protected string $paginationTheme = 'bootstrap';
 
-    public const TYPES = [
-        0 => 'Remote Control',
-        1 => 'File Transfer',
-        2 => 'Port Forward',
-    ];
+    public const TYPES = AuditConnection::TYPE_LABELS;
 
     #[Url(except: '')]
     public string $search = '';
@@ -107,7 +103,7 @@ class ConnectionLog extends Component
                     $row->rustdesk_id,
                     $row->from_peer,
                     $row->from_name,
-                    self::TYPES[$row->conn_type] ?? $row->conn_type,
+                    AuditConnection::typeLabel((int) $row->conn_type),
                     $row->ip,
                     $row->closed_at?->toDateTimeString() ?? 'active',
                     $row->closed_at ? $row->created_at->diffInSeconds($row->closed_at) : '',

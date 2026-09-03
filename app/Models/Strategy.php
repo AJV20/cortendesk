@@ -4,7 +4,10 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -27,9 +30,11 @@ use Illuminate\Support\Facades\DB;
  * A strategy cannot LOCK a setting in the client UI — only push it. The user
  * can change it back and nothing re-pushes until we send the policy again.
  */
-#[Fillable(['name', 'note', 'enabled', 'is_default', 'enforce', 'options'])]
+#[Fillable(['name', 'note', 'enabled', 'is_default', 'enforce', 'options', 'confirmation_timeout_minutes'])]
 class Strategy extends Model
 {
+    use SoftDeletes;
+
     /** @var array<string,string> Assignment levels, highest precedence first. */
     public const LEVEL_DEVICE = 'device';
 
@@ -143,6 +148,7 @@ class Strategy extends Model
             'is_default' => 'boolean',
             'enforce' => 'boolean',
             'options' => 'array',
+            'confirmation_timeout_minutes' => 'integer',
         ];
     }
 
@@ -171,8 +177,24 @@ class Strategy extends Model
 
         static::deleted(function (Strategy $strategy) {
             self::$anyEnabledCache = null;
-            // Pivot rows cascade at the DB level; the cached column does not.
             static::recomputeAll();
+        });
+
+        static::deleting(function (Strategy $strategy) {
+            // Soft delete: revision history keeps a restricted foreign key to
+            // the strategy, so the row stays. Clear live routing state and
+            // free the name so a new strategy can reuse it; the snapshot keeps
+            // the real name. Flags are cleared so a raw query (or an image
+            // rolled back to a release without soft deletes) never sees a
+            // deleted strategy as enabled or default.
+            foreach (self::PIVOTS as [$table]) {
+                DB::table($table)->where('strategy_id', $strategy->id)->delete();
+            }
+            $strategy->forceFill([
+                'enabled' => false,
+                'is_default' => false,
+                'name' => $strategy->name.' (deleted '.now()->utc()->format('Y-m-d H:i:s').')',
+            ])->saveQuietly();
         });
     }
 
@@ -260,6 +282,29 @@ class Strategy extends Model
     public function setOptions(array $options): void
     {
         $this->options = self::sanitizeOptions($options);
+    }
+
+    /** @return array{name:string,note:?string,enabled:bool,is_default:bool,enforce:bool,options:array<string,string>} */
+    public function snapshot(): array
+    {
+        return [
+            'name' => $this->name,
+            'note' => $this->note,
+            'enabled' => (bool) $this->enabled,
+            'is_default' => (bool) $this->is_default,
+            'enforce' => (bool) $this->enforce,
+            'options' => $this->optionMap(),
+        ];
+    }
+
+    public function revisions(): HasMany
+    {
+        return $this->hasMany(StrategyRevision::class)->orderByDesc('revision');
+    }
+
+    public function activeRevision(): BelongsTo
+    {
+        return $this->belongsTo(StrategyRevision::class, 'active_revision_id');
     }
 
     /** @return array<string,array<string,array{group:string,type:string,values?:array<int,string>,min?:int,max?:int}>> */
@@ -618,6 +663,7 @@ class Strategy extends Model
             $device->forceFill([
                 'strategy_version' => $version,
                 'strategy_options' => $desired,
+                'strategy_sent_at' => now(),
             ])->saveQuietly();
         }
 
@@ -653,6 +699,13 @@ class Strategy extends Model
             return null;
         }
 
+        // Rows from before strategy_sent_at existed carry a token but no sent
+        // time. Start the confirmation clock at this resend, not at whatever
+        // the strategy's updated_at happens to be.
+        if ($device->strategy_sent_at === null) {
+            $device->forceFill(['strategy_sent_at' => now()])->saveQuietly();
+        }
+
         return ['modified_at' => $version, 'strategy' => ['config_options' => $wire]];
     }
 
@@ -663,7 +716,7 @@ class Strategy extends Model
      *
      * @return array<string,string>
      */
-    private static function stringMap(mixed $value): array
+    public static function stringMap(mixed $value): array
     {
         if (! is_array($value)) {
             return [];

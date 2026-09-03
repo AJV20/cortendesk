@@ -77,6 +77,10 @@
                                 </div>
                             </td>
                             <td class="text-end rd-rowact">
+                                <a href="javascript:void(0);" class="rd-act me-2" wire:click="showHistory({{ $strategy->id }})">History</a>
+                                @if ($isAdmin)
+                                    <a href="javascript:void(0);" class="rd-act me-2" wire:click="showCompliance({{ $strategy->id }})">Compliance</a>
+                                @endif
                                 <a href="javascript:void(0);" class="rd-act me-2" wire:click="openAssign({{ $strategy->id }})">Assign</a>
                                 <a href="javascript:void(0);" class="rd-act me-2" wire:click="edit({{ $strategy->id }})">Edit</a>
                                 <a href="javascript:void(0);" class="text-danger"
@@ -133,6 +137,12 @@
                                     <i class="ri-folder-line ms-2 me-1"></i>{{ $strategy->device_groups_count }}
                                 </span>
                                 <div class="rd-mini-acts">
+                                    <a href="javascript:void(0);" class="rd-iconbtn" title="History"
+                                       wire:click="showHistory({{ $strategy->id }})"><i class="ri-history-line"></i></a>
+                                    @if ($isAdmin)
+                                        <a href="javascript:void(0);" class="rd-iconbtn" title="Compliance"
+                                           wire:click="showCompliance({{ $strategy->id }})"><i class="ri-pulse-line"></i></a>
+                                    @endif
                                     <a href="javascript:void(0);" class="rd-iconbtn" title="Assign"
                                        wire:click="openAssign({{ $strategy->id }})"><i class="ri-links-line"></i></a>
                                     <a href="javascript:void(0);" class="rd-iconbtn" title="Edit"
@@ -178,6 +188,12 @@
                                            wire:model="formNote" maxlength="500">
                                     @error('formNote') <div class="invalid-feedback">{{ $message }}</div> @enderror
                                 </div>
+                                <div class="col-12 mb-3">
+                                    <label class="form-label" for="sl-revnote">Change note <span class="text-muted fw-normal">(kept in the revision history)</span></label>
+                                    <input type="text" id="sl-revnote" class="form-control @error('revisionNote') is-invalid @enderror"
+                                           wire:model="revisionNote" maxlength="500" placeholder="What changed and why">
+                                    @error('revisionNote') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                                </div>
                             </div>
 
                             <div class="row g-2 mb-3">
@@ -201,6 +217,16 @@
                                         <label class="form-check-label" for="sl-enforce">Enforce</label>
                                     </div>
                                     <small class="text-muted">Re-push on every heartbeat, so a change made on the device is undone within a minute. Off = push once, then leave the device alone.</small>
+                                </div>
+                            </div>
+
+                            <div class="row g-2 mb-3">
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="sl-timeout">Confirmation timeout (minutes)</label>
+                                    <input type="number" id="sl-timeout" min="1" max="10080" class="form-control @error('formConfirmationTimeout') is-invalid @enderror"
+                                           wire:model="formConfirmationTimeout">
+                                    @error('formConfirmationTimeout') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                                    <small class="text-muted">How long a device may go without confirming a push before Compliance marks it stale or offline.</small>
                                 </div>
                             </div>
 
@@ -405,6 +431,135 @@
                             <span wire:loading wire:target="saveAssign">Saving…</span>
                         </button>
                     </div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-backdrop fade show"></div>
+    @endif
+
+    {{-- Immutable revision history and comparison --}}
+    @if ($historyStrategy)
+        <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true"
+             aria-labelledby="strategy-history-title" wire:keydown.escape.window="closeHistory"
+             style="background: rgba(0,0,0,.65);" wire:key="strategy-history">
+            <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <div>
+                            <h5 class="modal-title" id="strategy-history-title">{{ $historyStrategy->name }} revision history</h5>
+                            <small class="text-muted">Restoring creates a new revision; existing history is never rewritten.</small>
+                        </div>
+                        <button type="button" class="btn-close" wire:click="closeHistory" aria-label="Close history"></button>
+                    </div>
+                    <div class="modal-body">
+                        @error('history') <div class="alert alert-danger" role="alert">{{ $message }}</div> @enderror
+                        @if ($revisionHistory->isNotEmpty())
+                            <div class="row g-2 align-items-end mb-3">
+                                <div class="col-12 col-md-5">
+                                    <label class="form-label" for="compare-from">Compare from</label>
+                                    <select id="compare-from" class="form-select" wire:model.live="compareFromRevisionId">
+                                        <option value="">Choose revision</option>
+                                        @foreach ($revisionHistory->sortBy('revision') as $revision)
+                                            <option value="{{ $revision->id }}">Revision {{ $revision->revision }}</option>
+                                        @endforeach
+                                    </select>
+                                </div>
+                                <div class="col-12 col-md-5">
+                                    <label class="form-label" for="compare-to">Compare to</label>
+                                    <select id="compare-to" class="form-select" wire:model.live="compareToRevisionId">
+                                        <option value="">Choose revision</option>
+                                        @foreach ($revisionHistory->sortBy('revision') as $revision)
+                                            <option value="{{ $revision->id }}">Revision {{ $revision->revision }}</option>
+                                        @endforeach
+                                    </select>
+                                </div>
+                            </div>
+                            @if ($compareFromRevisionId && $compareToRevisionId)
+                                <div class="table-responsive mb-4">
+                                    <table class="table table-sm"><thead><tr><th>Field</th><th>From</th><th>To</th></tr></thead><tbody>
+                                    @forelse ($revisionComparison as $change)
+                                        <tr><td><code>{{ $change['key'] }}</code></td><td>{{ is_bool($change['before']) ? ($change['before'] ? 'Yes' : 'No') : ($change['before'] ?? 'Not managed') }}</td><td>{{ is_bool($change['after']) ? ($change['after'] ? 'Yes' : 'No') : ($change['after'] ?? 'Not managed') }}</td></tr>
+                                    @empty
+                                        <tr><td colspan="3" class="text-muted">These revisions are identical.</td></tr>
+                                    @endforelse
+                                    </tbody></table>
+                                </div>
+                            @endif
+                            <div class="list-group">
+                                @foreach ($revisionHistory as $revision)
+                                    <div class="list-group-item d-flex flex-column flex-md-row justify-content-between gap-2" wire:key="revision-{{ $revision->id }}">
+                                        <div>
+                                            <strong>Revision {{ $revision->revision }}</strong>
+                                            @if ($historyStrategy->active_revision_id === $revision->id)<span class="badge bg-success-subtle text-success ms-1">Active</span>@endif
+                                            <div class="text-muted fs-13">{{ $revision->created_by_name ?? $revision->creator?->username ?? 'System' }} · {{ $revision->created_at->timezone(config('app.timezone'))->format('M j, Y g:i A T') }} · {{ $revision->affected_devices }} affected device(s)</div>
+                                            @if ($revision->change_note)<div class="mt-1">{{ $revision->change_note }}</div>@endif
+                                        </div>
+                                        @if ($historyStrategy->active_revision_id !== $revision->id)
+                                            <button type="button" class="btn btn-sm btn-outline-warning align-self-md-center" wire:click="restoreRevision({{ $revision->id }})" wire:confirm="Restore the options from revision {{ $revision->revision }}? This creates a new revision. Name, enabled and default are not changed.">Restore as new revision</button>
+                                        @endif
+                                    </div>
+                                @endforeach
+                            </div>
+                        @else
+                            <div class="text-muted">No revisions have been captured yet.</div>
+                        @endif
+                    </div>
+                    <div class="modal-footer"><button type="button" class="btn btn-light" wire:click="closeHistory">Close</button></div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-backdrop fade show"></div>
+    @endif
+
+    {{-- Compliance drill-down (admins only) --}}
+    @if ($complianceStrategy && $complianceSummary)
+        <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="strategy-compliance-title"
+             wire:keydown.escape.window="closeCompliance" style="background: rgba(0,0,0,.65);" wire:key="strategy-compliance">
+            <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <div>
+                            <h5 class="modal-title" id="strategy-compliance-title">{{ $complianceStrategy->name }} compliance</h5>
+                            <small class="text-muted">What each device is holding versus what this strategy wants.</small>
+                        </div>
+                        <button type="button" class="btn-close" wire:click="closeCompliance" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="d-flex flex-wrap gap-2 mb-3">
+                            @foreach (['all' => 'All', 'confirmed' => 'Confirmed', 'pending' => 'Pending', 'stale' => 'Stale', 'offline' => 'Offline', 'overridden' => 'Overridden'] as $state => $label)
+                                <button type="button" class="btn btn-sm {{ $complianceState === $state ? 'btn-primary' : 'btn-outline-secondary' }}"
+                                        wire:click="setComplianceState('{{ $state }}')">
+                                    {{ $label }}@if ($state !== 'all') ({{ $complianceSummary['counts'][$state] }})@endif
+                                </button>
+                            @endforeach
+                        </div>
+                        @php($complianceTotal = $complianceState === 'all' ? array_sum($complianceSummary['counts']) : ($complianceSummary['counts'][$complianceState] ?? 0))
+                        @if ($complianceTotal > count($complianceDevices))
+                            <div class="alert alert-info py-2 fs-13">Showing the first {{ count($complianceDevices) }} of {{ $complianceTotal }} devices.</div>
+                        @endif
+                        <div class="table-responsive">
+                            <table class="table table-sm table-hover align-middle mb-0">
+                                <thead><tr><th>Device</th><th>State</th><th>Last online</th><th>Sent</th><th>Confirmed</th></tr></thead>
+                                <tbody>
+                                @forelse ($complianceDevices as $device)
+                                    <tr wire:key="compliance-{{ $device['id'] }}-{{ $device['state'] }}">
+                                        <td><strong>{{ $device['rustdesk_id'] }}</strong><small class="d-block text-muted">{{ $device['label'] }}</small></td>
+                                        <td>
+                                            @php($tone = ['confirmed' => 'success', 'pending' => 'info', 'stale' => 'warning', 'offline' => 'secondary', 'overridden' => 'secondary'][$device['state']])
+                                            <span class="badge bg-{{ $tone }}-subtle text-{{ $tone }} text-capitalize">{{ $device['state'] }}</span>
+                                        </td>
+                                        <td class="text-nowrap">{{ $device['last_online'] }}</td>
+                                        <td class="text-nowrap">{{ $device['sent'] }}</td>
+                                        <td class="text-nowrap">{{ $device['confirmed'] }}</td>
+                                    </tr>
+                                @empty
+                                    <tr><td colspan="5" class="text-center text-muted py-4">No devices in this state.</td></tr>
+                                @endforelse
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="modal-footer"><button type="button" class="btn btn-light" wire:click="closeCompliance">Close</button></div>
                 </div>
             </div>
         </div>
