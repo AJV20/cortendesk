@@ -126,7 +126,7 @@ it('allocates sequential revision numbers and keeps their database identity uniq
         ]))->toThrow(QueryException::class);
 });
 
-it('records the strategy displaced when a restore takes back default status', function () {
+it('keeps routing identity intact when restoring an earlier revision', function () {
     $admin = User::factory()->admin()->create();
     $historical = Strategy::create(['name' => 'Historical default', 'enabled' => true, 'is_default' => true]);
     $historicalRevision = StrategyRevision::capture($historical, $admin->id, 'Was default');
@@ -142,10 +142,10 @@ it('records the strategy displaced when a restore takes back default status', fu
         ->call('confirmSave')
         ->assertHasNoErrors();
 
-    expect($historical->fresh()->is_default)->toBeTrue()
-        ->and($current->fresh()->is_default)->toBeFalse()
-        ->and($current->revisions()->count())->toBe(2)
-        ->and($current->revisions()->first()->snapshot['is_default'])->toBeFalse();
+    expect($historical->fresh()->is_default)->toBeFalse()
+        ->and($current->fresh()->is_default)->toBeTrue()
+        ->and($historical->revisions()->count())->toBe(2)
+        ->and($current->revisions()->count())->toBe(1);
 });
 
 it('backfills valid legacy strategies and rolls the history schema back cleanly', function () {

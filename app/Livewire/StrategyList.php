@@ -10,6 +10,7 @@ use App\Models\Strategy;
 use App\Models\StrategyRevision;
 use App\Models\User;
 use App\Services\StrategyAssignmentImpact;
+use App\Services\StrategyCompliance;
 use App\Services\StrategyImpact;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
@@ -50,6 +51,9 @@ class StrategyList extends Component
 
     public bool $formEnforce = false;
 
+    /** Minutes a device may stay unconfirmed after a push before it is stale. */
+    public int $formConfirmationTimeout = 15;
+
     /** @var array<string,string> option key => form value ('' = not managed) */
     public array $formOptions = [];
 
@@ -71,6 +75,11 @@ class StrategyList extends Component
     public ?int $pendingDeleteId = null;
 
     public ?int $restoreRevisionId = null;
+
+    /** Compliance drill-down state: strategy id, or null when closed. */
+    public ?int $complianceStrategyId = null;
+
+    public string $complianceState = 'all';
 
     /** Assignment editor state: strategy id, or null when closed. */
     public ?int $assigningId = null;
@@ -234,6 +243,7 @@ class StrategyList extends Component
         $this->formEnabled = (bool) $strategy->enabled;
         $this->formIsDefault = (bool) $strategy->is_default;
         $this->formEnforce = (bool) $strategy->enforce;
+        $this->formConfirmationTimeout = (int) ($strategy->confirmation_timeout_minutes ?: 15);
 
         foreach ($strategy->optionMap() as $key => $value) {
             if (array_key_exists($key, $this->formOptions)) {
@@ -316,6 +326,7 @@ class StrategyList extends Component
                 'enabled' => $snapshot['enabled'],
                 'is_default' => $snapshot['is_default'],
                 'enforce' => $snapshot['enforce'],
+                'confirmation_timeout_minutes' => $snapshot['confirmation_timeout_minutes'],
             ]);
             $strategy->setOptions($snapshot['options']);
             $creating = ! $strategy->exists;
@@ -432,10 +443,8 @@ class StrategyList extends Component
         $this->edit($strategy->id);
         $this->restoreRevisionId = $revision->id;
         $this->revisionNote = 'Restored revision '.$revision->revision;
-        // Names are durable identities. Review restoring policy state only.
+        // Routing identity stays current; restore only the historical policy.
         $this->formNote = (string) ($snapshot['note'] ?? '');
-        $this->formEnabled = (bool) ($snapshot['enabled'] ?? true);
-        $this->formIsDefault = (bool) ($snapshot['is_default'] ?? false);
         $this->formEnforce = (bool) ($snapshot['enforce'] ?? false);
         $this->formOptions = array_fill_keys(array_keys($this->formOptions), '');
         foreach ((array) ($snapshot['options'] ?? []) as $key => $value) {
@@ -471,6 +480,32 @@ class StrategyList extends Component
         return $revisions->has($this->compareFromRevisionId) && $revisions->has($this->compareToRevisionId)
             ? StrategyRevision::diffSnapshots($revisions[$this->compareFromRevisionId]->snapshot, $revisions[$this->compareToRevisionId]->snapshot)
             : [];
+    }
+
+    // ----------------------------------------------------------- compliance ---
+
+    /** Fleet-wide state per device; admins only, like the assignment lists. */
+    public function showCompliance(int $strategyId, string $state = 'all'): void
+    {
+        $this->authorizeConsole('strategy', 'r');
+        abort_unless(auth()->user()?->is_admin, 403);
+        Strategy::findOrFail($strategyId);
+        $this->complianceStrategyId = $strategyId;
+        $this->setComplianceState($state);
+    }
+
+    public function setComplianceState(string $state): void
+    {
+        $this->authorizeConsole('strategy', 'r');
+        abort_unless(auth()->user()?->is_admin, 403);
+        if (in_array($state, ['all', ...StrategyCompliance::STATES], true)) {
+            $this->complianceState = $state;
+        }
+    }
+
+    public function closeCompliance(): void
+    {
+        $this->reset('complianceStrategyId', 'complianceState');
     }
 
     // --------------------------------------------------------- assignments ---
@@ -680,7 +715,7 @@ class StrategyList extends Component
     private function resetForm(): void
     {
         $this->reset(
-            'formName', 'formNote', 'formEnabled', 'formIsDefault', 'formEnforce', 'revisionNote',
+            'formName', 'formNote', 'formEnabled', 'formIsDefault', 'formEnforce', 'formConfirmationTimeout', 'revisionNote',
             'previewing', 'impactPreview', 'previewFingerprint', 'pendingDeleteId', 'restoreRevisionId',
         );
         $this->resetValidation();
@@ -705,6 +740,7 @@ class StrategyList extends Component
                 Rule::unique('strategies', 'name')->ignore($this->editingId ?: 0),
             ],
             'formNote' => ['nullable', 'string', 'max:500'],
+            'formConfirmationTimeout' => ['required', 'integer', 'min:1', 'max:10080'],
             'revisionNote' => ['nullable', 'string', 'max:500'],
         ], [], ['formName' => 'name', 'formNote' => 'note']);
 
@@ -755,6 +791,7 @@ class StrategyList extends Component
             'enabled' => $this->formEnabled,
             'is_default' => $this->formIsDefault,
             'enforce' => $this->formEnforce,
+            'confirmation_timeout_minutes' => $this->formConfirmationTimeout,
             'options' => $options,
         ];
     }
@@ -813,13 +850,31 @@ class StrategyList extends Component
             ->orderBy('name')
             ->get();
 
+        $isAdmin = auth()->user()?->is_admin === true;
+        $complianceStrategy = $isAdmin && $this->complianceStrategyId
+            ? $strategies->firstWhere('id', $this->complianceStrategyId)
+            : null;
+        $complianceSummary = null;
+        $complianceDevices = [];
+        if ($complianceStrategy !== null) {
+            $state = in_array($this->complianceState, ['all', ...StrategyCompliance::STATES], true) ? $this->complianceState : 'all';
+            $complianceSummary = app(StrategyCompliance::class)->summary($complianceStrategy, $state);
+            $complianceDevices = $state === 'all'
+                ? collect($complianceSummary['devices'])->flatten(1)->sortBy('rustdesk_id')->values()->all()
+                : $complianceSummary['devices'][$state];
+        }
+
         return view('livewire.strategy-list', [
             'strategies' => $strategies,
             'catalog' => self::catalog(),
-            'canAssignFleet' => auth()->user()?->is_admin === true,
-            'assigning' => auth()->user()?->is_admin === true && $this->assigningId
+            'canAssignFleet' => $isAdmin,
+            'assigning' => $isAdmin && $this->assigningId
                 ? $strategies->firstWhere('id', $this->assigningId)
                 : null,
+            'isAdmin' => $isAdmin,
+            'complianceStrategy' => $complianceStrategy,
+            'complianceSummary' => $complianceSummary,
+            'complianceDevices' => $complianceDevices,
             'historyStrategy' => $this->historyStrategy,
             'revisionHistory' => $this->revisionHistory,
             'revisionComparison' => $this->revisionComparison,

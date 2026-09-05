@@ -9,6 +9,38 @@ use Illuminate\Database\Eloquent\Model;
 class AuditConnection extends Model
 {
     /**
+     * Session type as reported by the client's audit/conn call
+     * (docs/client-api.md): the label every screen and the CSV export use.
+     */
+    public const TYPE_LABELS = [
+        0 => 'Remote Control',
+        1 => 'File Transfer',
+        2 => 'Port Forward',
+        3 => 'View Camera',
+        4 => 'Terminal',
+    ];
+
+    private const TYPE_ICONS = [
+        0 => 'ri-remote-control-line',
+        1 => 'ri-file-transfer-line',
+        2 => 'ri-swap-line',
+        3 => 'ri-camera-line',
+        4 => 'ri-terminal-box-line',
+    ];
+
+    /** Human label for a session type; "Type N" when unknown, so nothing is lost. */
+    public static function typeLabel(int $type): string
+    {
+        return self::TYPE_LABELS[$type] ?? 'Type '.$type;
+    }
+
+    /** Remix icon class for a session type. */
+    public static function typeIcon(int $type): string
+    {
+        return self::TYPE_ICONS[$type] ?? 'ri-question-line';
+    }
+
+    /**
      * How long to wait before re-broadcasting a disconnect the client has not
      * acted on. A heartbeat can be lost; a live session must not be left
      * un-cancellable because of it. Long enough that a client acting normally
@@ -76,7 +108,7 @@ class AuditConnection extends Model
      * rebooted machine's session Active forever.
      *
      * @param  array<int, int>  $liveConnIds
-     * @return int  rows closed
+     * @return int rows closed
      */
     public static function reconcileFor(string $rustdeskId, array $liveConnIds): int
     {
@@ -106,7 +138,7 @@ class AuditConnection extends Model
      * whereNotIn to `1 = 1`, so "no device is heartbeating" correctly means
      * every stale session closes.
      *
-     * @return int  rows closed
+     * @return int rows closed
      */
     public static function closeStaleSessions(): int
     {
